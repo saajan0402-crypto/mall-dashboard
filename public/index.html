@@ -8,85 +8,252 @@
   :root {
     color-scheme: light;
     --bg:#F6F8F7; --surface:#fff; --surface-2:#EFF3F2; --ink:#161F1E; --ink-2:#3B4846;
-    --muted:#66746F; --line:#DCE3E0; --line-strong:#C3CECA; --accent:#145A60;
-    --ok:#2C6A40; --ok-soft:#E3F0E7; --risk:#9E2F26; --risk-soft:#F7E7E4;
-    --mono:"SFMono-Regular",ui-monospace,monospace;
+    --muted:#66746F; --line:#DCE3E0; --line-strong:#C3CECA; --accent:#145A60; --accent-soft:#E2EDEC;
+    --ok:#2C6A40; --ok-soft:#E3F0E7; --warn:#855200; --warn-soft:#F7EEDC;
+    --risk:#9E2F26; --risk-soft:#F7E7E4;
+    --amazon:#8A5A00; --rakuten:#A5232D;
+    --mono:ui-monospace,"SFMono-Regular",monospace;
   }
   @media (prefers-color-scheme:dark){ :root{
     color-scheme: dark;
     --bg:#0F1514; --surface:#161E1D; --surface-2:#1D2726; --ink:#E9EEEC; --ink-2:#C2CCC9;
-    --muted:#8E9C98; --line:#283432; --line-strong:#3A4846; --accent:#5CB9BC;
-    --ok:#77C48C; --ok-soft:#16281C; --risk:#E38477; --risk-soft:#2E1B18; } }
+    --muted:#8E9C98; --line:#283432; --line-strong:#3A4846; --accent:#5CB9BC; --accent-soft:#17302F;
+    --ok:#77C48C; --ok-soft:#16281C; --warn:#D9A648; --warn-soft:#2B2313;
+    --risk:#E38477; --risk-soft:#2E1B18;
+    --amazon:#D8A24A; --rakuten:#E38A8F; } }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
-    font-family:"Hiragino Sans","Yu Gothic UI",system-ui,sans-serif;font-size:15px;line-height:1.8}
-  .shell{max-width:720px;margin:0 auto;padding:48px 20px 72px}
-  h1{font-size:22px;margin:0 0 6px;letter-spacing:.01em}
-  .sub{color:var(--muted);font-size:13px;margin:0 0 28px}
-  .card{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:18px 20px;margin-bottom:16px}
-  h2{font-size:13px;margin:0 0 12px;letter-spacing:.02em}
+    font-family:"Hiragino Sans","Yu Gothic UI",system-ui,sans-serif;font-size:14px;line-height:1.75}
+  header{background:var(--surface);border-bottom:1px solid var(--line)}
+  .bar{max-width:1080px;margin:0 auto;padding:14px 20px 0;display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+  .brand{font-weight:700;font-size:15px;margin-right:auto}
+  .brand span{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-left:10px;font-weight:400}
+  .who{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  nav{max-width:1080px;margin:0 auto;padding:10px 20px 0;display:flex;gap:2px}
+  nav button{background:none;border:none;border-bottom:2px solid transparent;padding:8px 12px;
+    cursor:pointer;color:var(--muted);font:inherit;font-weight:500}
+  nav button[aria-selected=true]{color:var(--accent);border-bottom-color:var(--accent)}
+  main{max-width:1080px;margin:0 auto;padding:24px 20px 72px;display:grid;gap:22px}
+  h2{font-size:14px;margin:0 0 10px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+  h2 .hint{font-family:var(--mono);font-size:10.5px;color:var(--muted);font-weight:400}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:18px 20px}
   .row{display:flex;gap:12px;justify-content:space-between;align-items:baseline;
-    padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
+    padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
   .row:last-child{border-bottom:none}
-  .row .k{color:var(--ink-2)}
   .row .v{font-family:var(--mono);font-size:12.5px}
-  .tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:2px 8px;border-radius:3px}
-  .ok{background:var(--ok-soft);color:var(--ok)}
-  .ng{background:var(--risk-soft);color:var(--risk)}
-  .wait{background:var(--surface-2);color:var(--muted)}
+  .tag{font-family:var(--mono);font-size:10.5px;padding:2px 8px;border-radius:3px;white-space:nowrap}
+  .ok{background:var(--ok-soft);color:var(--ok)} .ng{background:var(--risk-soft);color:var(--risk)}
+  .wait{background:var(--surface-2);color:var(--muted)} .warn{background:var(--warn-soft);color:var(--warn)}
+  .pill-a{background:color-mix(in srgb,var(--amazon) 16%,transparent);color:var(--amazon)}
+  .pill-r{background:color-mix(in srgb,var(--rakuten) 16%,transparent);color:var(--rakuten)}
+  textarea{width:100%;min-height:170px;font-family:var(--mono);font-size:12px;line-height:1.6;
+    padding:11px 13px;border:1px solid var(--line-strong);border-radius:5px;
+    background:var(--surface-2);color:var(--ink);resize:vertical}
+  .btns{display:flex;gap:9px;flex-wrap:wrap;margin-top:11px;align-items:center}
+  button.act{font:inherit;font-size:13px;padding:7px 15px;border-radius:5px;cursor:pointer;
+    border:1px solid var(--line-strong);background:var(--surface-2);color:var(--ink)}
+  button.act:hover{border-color:var(--accent);color:var(--accent)}
+  button.act.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  @media (prefers-color-scheme:dark){ button.act.primary{color:#0F1514} }
+  button.act[disabled]{opacity:.5;cursor:default}
   .note{font-size:12.5px;color:var(--muted);margin:0}
-  ol{margin:0;padding-left:1.3em;font-size:13.5px;color:var(--ink-2)}
-  ol li{margin-bottom:5px}
-  code{font-family:var(--mono);font-size:.86em;background:var(--surface-2);padding:1px 5px;border-radius:3px}
+  .steps{margin:0 0 12px;padding-left:1.3em;font-size:13px;color:var(--ink-2)}
+  .steps li{margin-bottom:4px}
+  .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:5px;background:var(--surface)}
+  table{border-collapse:collapse;width:100%;min-width:760px;font-size:13px}
+  th,td{padding:8px 12px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+  thead th{font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--muted);
+    font-weight:500;background:var(--surface-2)}
+  tbody tr:last-child td{border-bottom:none}
+  td.r{text-align:right;font-family:var(--mono)}
+  .msg{border-radius:5px;padding:11px 14px;font-size:13px;margin-top:12px}
+  .msg.ok{background:var(--ok-soft);color:var(--ok)}
+  .msg.ng{background:var(--risk-soft);color:var(--risk)}
+  .msg ul{margin:7px 0 0;padding-left:1.2em}
+  .empty{color:var(--muted);font-size:13px;padding:14px 0}
+  .hidden{display:none!important}
 </style>
 </head>
 <body>
-<div class="shell">
-  <h1>モール横断ダッシュボード</h1>
-  <p class="sub">ver 0.8 / 接続確認ページ</p>
+<header>
+  <div class="bar">
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.8</span></div>
+    <div class="who" id="who"></div>
+  </div>
+  <nav role="tablist">
+    <button role="tab" id="t-master" aria-selected="true">商品マスタ</button>
+    <button role="tab" id="t-status" aria-selected="false">連携ステータス</button>
+  </nav>
+</header>
 
-  <div class="card">
-    <h2>接続状況</h2>
-    <div id="status">
-      <div class="row"><span class="k">読み込み中…</span><span class="v"></span></div>
+<main>
+  <!-- 商品マスタ -->
+  <section id="p-master">
+    <div>
+      <h2>商品マスタの取り込み<span class="hint">スプレッドシートからコピーして貼り付け</span></h2>
+      <div class="card">
+        <ol class="steps">
+          <li>スプレッドシートの「商品マスタ」シートで、<strong>見出し行を含めて</strong>データ範囲を選択してコピー</li>
+          <li>下の欄に貼り付けて「内容を確認」</li>
+          <li>問題がなければ「取り込む」</li>
+        </ol>
+        <textarea id="paste" placeholder="ここに貼り付けてください（1行目は見出し行）" spellcheck="false"></textarea>
+        <div class="btns">
+          <button class="act" id="btn-check">内容を確認</button>
+          <button class="act primary" id="btn-import" disabled>取り込む</button>
+          <span class="note" id="paste-note"></span>
+        </div>
+        <div id="result"></div>
+      </div>
     </div>
-  </div>
 
-  <div class="card">
-    <h2>次にやること</h2>
-    <ol>
-      <li>D1 を作成し、発行された <code>database_id</code> を <code>wrangler.jsonc</code> に貼る</li>
-      <li>R2 バケット <code>mall-dashboard-files</code> を作成する</li>
-      <li>マイグレーションを適用して、テーブルを作る</li>
-      <li>Cloudflare Access を有効にして、社員4名のメールアドレスを許可する</li>
-      <li>商品マスタを取り込み、画面を実データに差し替える</li>
-    </ol>
-  </div>
+    <div>
+      <h2>登録済みの商品<span class="hint" id="case-summary"></span></h2>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th>案件</th><th>自社SKU</th><th>商品名</th>
+            <th>Amazon SKU</th><th>発送</th>
+            <th>楽天 商品管理番号</th><th>発送</th>
+            <th class="r">原価</th><th>広告方針</th>
+          </tr></thead>
+          <tbody id="products"></tbody>
+        </table>
+      </div>
+      <p class="empty hidden" id="no-products">まだ商品が登録されていません。上の欄から取り込んでください。</p>
+    </div>
+  </section>
 
-  <p class="note">このページは、本番環境でデータベースとファイル保存がつながっているかを確認するためのものです。画面の中身は実データの接続後に差し替えます。</p>
-</div>
+  <!-- 連携ステータス -->
+  <section id="p-status" class="hidden">
+    <div>
+      <h2>接続状況</h2>
+      <div class="card" id="health"></div>
+    </div>
+    <div>
+      <h2>取り込みの履歴<span class="hint">新しい順に50件</span></h2>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>日時</th><th>種類</th><th>モール</th><th class="r">件数</th><th>状態</th><th>備考</th></tr></thead>
+          <tbody id="ingests"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</main>
 
 <script>
-(async function () {
-  const el = document.getElementById("status");
-  const tag = (ok, waiting) =>
-    `<span class="tag ${waiting ? "wait" : ok ? "ok" : "ng"}">${waiting ? "未設定" : ok ? "OK" : "エラー"}</span>`;
-  try {
-    const r = await fetch("/api/health");
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
+  const FFL = { fba: "FBA", own: "自社発送", mcf: "マルチチャネル" };
+  const POLICY = { profit: "利益重視", share: "シェア獲得", nurture: "育成中" };
+
+  const tabs = [["t-master", "p-master"], ["t-status", "p-status"]];
+  tabs.forEach(([t, p]) => $(t).addEventListener("click", () => {
+    tabs.forEach(([t2, p2]) => {
+      $(t2).setAttribute("aria-selected", t2 === t ? "true" : "false");
+      $(p2).classList.toggle("hidden", p2 !== p);
+    });
+    if (p === "p-status") loadStatus();
+  }));
+
+  async function get(path) { const r = await fetch(path); return r.json(); }
+
+  /* ---------- 商品一覧 ---------- */
+  async function loadProducts() {
+    const d = await get("/api/products");
+    const list = d.products || [];
+    $("no-products").classList.toggle("hidden", list.length > 0);
+    $("products").innerHTML = list.map((p) => `<tr>
+      <td>${esc(p.case_name)}</td><td>${esc(p.sku)}</td><td>${esc(p.name)}</td>
+      <td>${p.amazon_sku ? `<span class="tag pill-a">${esc(p.amazon_sku)}</span>` : "—"}</td>
+      <td>${FFL[p.amazon_fulfillment] || "—"}</td>
+      <td>${p.rakuten_id ? `<span class="tag pill-r">${esc(p.rakuten_id)}</span>` : "—"}</td>
+      <td>${FFL[p.rakuten_fulfillment] || "—"}</td>
+      <td class="r">${yen(p.unit_cost)}</td>
+      <td>${POLICY[p.ad_policy] || "—"}</td></tr>`).join("");
+    const cases = await get("/api/cases");
+    $("case-summary").textContent = (cases.cases || [])
+      .map((c) => `${c.name} ${c.products}件`).join(" ／ ");
+  }
+
+  /* ---------- 取り込み ---------- */
+  function renderErrors(errors, skipped, ready, imported) {
+    const parts = [];
+    if (imported != null) {
+      parts.push(`<div class="msg ok"><strong>${imported} 件を取り込みました。</strong>${skipped ? ` 空行・記入例を ${skipped} 行とばしました。` : ""}</div>`);
+    } else if (ready != null) {
+      parts.push(`<div class="msg ${errors.length ? "ng" : "ok"}"><strong>${ready} 件が取り込めます。</strong>${skipped ? ` 空行・記入例を ${skipped} 行とばします。` : ""}</div>`);
+    }
+    if (errors.length) {
+      parts.push(`<div class="msg ng"><strong>${errors.length} 行は取り込めません。</strong><ul>` +
+        errors.map((e) => `<li>${e.line}行目（${esc(e.sku)}）：${e.messages.map(esc).join(" / ")}</li>`).join("") +
+        `</ul></div>`);
+    }
+    $("result").innerHTML = parts.join("");
+  }
+
+  $("btn-check").addEventListener("click", async () => {
+    const text = $("paste").value;
+    if (!text.trim()) { $("paste-note").textContent = "貼り付けてから押してください。"; return; }
+    $("paste-note").textContent = "確認中…";
+    const r = await fetch("/api/import/products", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, dryRun: true })
+    });
     const d = await r.json();
+    renderErrors(d.errors || [], d.skipped, d.ready, null);
+    $("btn-import").disabled = !(d.ready > 0);
+    $("paste-note").textContent = "";
+  });
+
+  $("btn-import").addEventListener("click", async () => {
+    $("btn-import").disabled = true;
+    $("paste-note").textContent = "取り込み中…";
+    const r = await fetch("/api/import/products", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: $("paste").value })
+    });
+    const d = await r.json();
+    renderErrors(d.errors || [], d.skipped, null, d.imported || 0);
+    $("paste-note").textContent = "";
+    await loadProducts();
+  });
+
+  /* ---------- 連携ステータス ---------- */
+  async function loadStatus() {
+    const d = await get("/api/health");
+    const tag = (ok, waiting) =>
+      `<span class="tag ${waiting ? "wait" : ok ? "ok" : "ng"}">${waiting ? "未設定" : ok ? "OK" : "エラー"}</span>`;
     const rows = [
       ["アプリ", tag(d.ok), new Date(d.time).toLocaleString("ja-JP")],
-      ["データベース (D1)", tag(d.db && d.db.ok), d.db && d.db.ok ? `案件 ${d.db.cases} 件` : (d.db && d.db.error) || ""],
-      ["ファイル保存 (R2)", tag(d.r2 && d.r2.ok), d.r2 && d.r2.ok ? "接続済み" : (d.r2 && d.r2.error) || ""],
+      ["データベース (D1)", tag(d.db && d.db.ok), d.db && d.db.ok ? `案件 ${d.db.cases} 件` : esc((d.db || {}).error)],
+      ["ファイル保存 (R2)", tag(d.r2 && d.r2.ok), d.r2 && d.r2.ok ? "接続済み" : esc((d.r2 || {}).error)],
       ["Claude API キー", tag(d.secrets.claude, !d.secrets.claude), ""],
       ["Slack Webhook", tag(d.secrets.slack, !d.secrets.slack), ""],
       ["暗号化キー", tag(d.secrets.encryption, !d.secrets.encryption), ""]
     ];
-    el.innerHTML = rows.map(([k, t, v]) =>
-      `<div class="row"><span class="k">${k}</span><span class="v">${v} ${t}</span></div>`).join("");
-  } catch (e) {
-    el.innerHTML = `<div class="row"><span class="k">接続できませんでした</span><span class="v">${String(e)}</span></div>`;
+    $("health").innerHTML = rows.map(([k, t, v]) =>
+      `<div class="row"><span>${k}</span><span class="v">${v} ${t}</span></div>`).join("");
+
+    const g = await get("/api/ingests");
+    $("ingests").innerHTML = (g.ingests || []).map((x) => `<tr>
+      <td>${esc(x.created_at)}</td><td>${esc(x.kind)}</td><td>${esc(x.mall) || "—"}</td>
+      <td class="r">${x.rows}</td>
+      <td><span class="tag ${x.status === "ok" ? "ok" : "ng"}">${esc(x.status)}</span></td>
+      <td>${esc(x.error) || "—"}</td></tr>`).join("")
+      || `<tr><td colspan="6" style="color:var(--muted)">まだ取り込みの記録がありません。</td></tr>`;
   }
+
+  /* ---------- 起動 ---------- */
+  (async () => {
+    const me = await get("/api/me");
+    $("who").textContent = me.email || "";
+    await loadProducts();
+  })();
 })();
 </script>
 </body>
