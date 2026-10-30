@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>モール横断ダッシュボード</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg:#F6F8F7; --surface:#fff; --surface-2:#EFF3F2; --ink:#161F1E; --ink-2:#3B4846;
+    --muted:#66746F; --line:#DCE3E0; --line-strong:#C3CECA; --accent:#145A60;
+    --ok:#2C6A40; --ok-soft:#E3F0E7; --risk:#9E2F26; --risk-soft:#F7E7E4;
+    --mono:"SFMono-Regular",ui-monospace,monospace;
+  }
+  @media (prefers-color-scheme:dark){ :root{
+    color-scheme: dark;
+    --bg:#0F1514; --surface:#161E1D; --surface-2:#1D2726; --ink:#E9EEEC; --ink-2:#C2CCC9;
+    --muted:#8E9C98; --line:#283432; --line-strong:#3A4846; --accent:#5CB9BC;
+    --ok:#77C48C; --ok-soft:#16281C; --risk:#E38477; --risk-soft:#2E1B18; } }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:"Hiragino Sans","Yu Gothic UI",system-ui,sans-serif;font-size:15px;line-height:1.8}
+  .shell{max-width:720px;margin:0 auto;padding:48px 20px 72px}
+  h1{font-size:22px;margin:0 0 6px;letter-spacing:.01em}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 28px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:18px 20px;margin-bottom:16px}
+  h2{font-size:13px;margin:0 0 12px;letter-spacing:.02em}
+  .row{display:flex;gap:12px;justify-content:space-between;align-items:baseline;
+    padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .row:last-child{border-bottom:none}
+  .row .k{color:var(--ink-2)}
+  .row .v{font-family:var(--mono);font-size:12.5px}
+  .tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:2px 8px;border-radius:3px}
+  .ok{background:var(--ok-soft);color:var(--ok)}
+  .ng{background:var(--risk-soft);color:var(--risk)}
+  .wait{background:var(--surface-2);color:var(--muted)}
+  .note{font-size:12.5px;color:var(--muted);margin:0}
+  ol{margin:0;padding-left:1.3em;font-size:13.5px;color:var(--ink-2)}
+  ol li{margin-bottom:5px}
+  code{font-family:var(--mono);font-size:.86em;background:var(--surface-2);padding:1px 5px;border-radius:3px}
+</style>
+</head>
+<body>
+<div class="shell">
+  <h1>モール横断ダッシュボード</h1>
+  <p class="sub">ver 0.8 / 接続確認ページ</p>
+
+  <div class="card">
+    <h2>接続状況</h2>
+    <div id="status">
+      <div class="row"><span class="k">読み込み中…</span><span class="v"></span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>次にやること</h2>
+    <ol>
+      <li>D1 を作成し、発行された <code>database_id</code> を <code>wrangler.jsonc</code> に貼る</li>
+      <li>R2 バケット <code>mall-dashboard-files</code> を作成する</li>
+      <li>マイグレーションを適用して、テーブルを作る</li>
+      <li>Cloudflare Access を有効にして、社員4名のメールアドレスを許可する</li>
+      <li>商品マスタを取り込み、画面を実データに差し替える</li>
+    </ol>
+  </div>
+
+  <p class="note">このページは、本番環境でデータベースとファイル保存がつながっているかを確認するためのものです。画面の中身は実データの接続後に差し替えます。</p>
+</div>
+
+<script>
+(async function () {
+  const el = document.getElementById("status");
+  const tag = (ok, waiting) =>
+    `<span class="tag ${waiting ? "wait" : ok ? "ok" : "ng"}">${waiting ? "未設定" : ok ? "OK" : "エラー"}</span>`;
+  try {
+    const r = await fetch("/api/health");
+    const d = await r.json();
+    const rows = [
+      ["アプリ", tag(d.ok), new Date(d.time).toLocaleString("ja-JP")],
+      ["データベース (D1)", tag(d.db && d.db.ok), d.db && d.db.ok ? `案件 ${d.db.cases} 件` : (d.db && d.db.error) || ""],
+      ["ファイル保存 (R2)", tag(d.r2 && d.r2.ok), d.r2 && d.r2.ok ? "接続済み" : (d.r2 && d.r2.error) || ""],
+      ["Claude API キー", tag(d.secrets.claude, !d.secrets.claude), ""],
+      ["Slack Webhook", tag(d.secrets.slack, !d.secrets.slack), ""],
+      ["暗号化キー", tag(d.secrets.encryption, !d.secrets.encryption), ""]
+    ];
+    el.innerHTML = rows.map(([k, t, v]) =>
+      `<div class="row"><span class="k">${k}</span><span class="v">${v} ${t}</span></div>`).join("");
+  } catch (e) {
+    el.innerHTML = `<div class="row"><span class="k">接続できませんでした</span><span class="v">${String(e)}</span></div>`;
+  }
+})();
+</script>
+</body>
+</html>

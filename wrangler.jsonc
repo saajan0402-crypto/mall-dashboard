@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mall-dashboard",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // 画面（静的ファイル）
+  "assets": { "directory": "./public", "binding": "ASSETS" },
+
+  // データベース（明細・設定）
+  // database_id は Cloudflare ダッシュボードで D1 を作成すると発行されます。
+  // 秘密情報ではないので、そのまま貼り付けて問題ありません。
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mall-dashboard",
+      "database_id": "ef5c1072-423b-45ae-9f2e-d1a018596b95",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // ファイル保存（生データ・レポート・スクリーンショット）
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "mall-dashboard-files" }
+  ],
+
+  // 毎朝6時（JST）に日次バッチ。cron は UTC で書くため 21:00 UTC = 翌 6:00 JST
+  "triggers": { "crons": ["0 21 * * *"] },
+
+  "observability": { "enabled": true }
+}
