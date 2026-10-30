@@ -291,8 +291,10 @@
             <div class="btns">
               <button class="act primary" data-save="${c.id}:${m}">保存</button>
               <button class="act" data-test="${c.id}:${m}" ${s.configured ? "" : "disabled"}>接続テスト</button>
+              <button class="act" data-diag="${c.id}:${m}" ${s.configured ? "" : "disabled"}>APIを一通り試す</button>
               <span class="note" data-msg="${c.id}:${m}"></span>
             </div>
+            <div data-diagout="${c.id}:${m}"></div>
           </div>`;
         }).join("")}
       </div>`).join("")
@@ -302,8 +304,10 @@
   document.addEventListener("click", async (ev) => {
     const save = ev.target.closest && ev.target.closest("[data-save]");
     const test = ev.target.closest && ev.target.closest("[data-test]");
-    if (!save && !test) return;
-    const [caseId, mall] = (save || test).dataset[save ? "save" : "test"].split(":");
+    const diag = ev.target.closest && ev.target.closest("[data-diag]");
+    if (!save && !test && !diag) return;
+    const which = save ? "save" : test ? "test" : "diag";
+    const [caseId, mall] = (save || test || diag).dataset[which].split(":");
     const msg = document.querySelector(`[data-msg="${caseId}:${mall}"]`);
 
     if (save) {
@@ -321,6 +325,37 @@
       document.querySelectorAll(`input[data-case="${caseId}"][data-mall="${mall}"][data-key]`)
         .forEach((el) => { el.value = ""; });
       await loadConnections();
+      return;
+    }
+
+    if (diag) {
+      const out = document.querySelector(`[data-diagout="${caseId}:${mall}"]`);
+      diag.disabled = true;
+      msg.textContent = "試行中…（10〜30秒かかります）";
+      out.innerHTML = "";
+      try {
+        const r = await fetch("/api/connections/diagnose", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ caseId, mall })
+        });
+        const d = await r.json();
+        const res = (d.results || [])[0];
+        if (!res) { msg.textContent = `失敗：${d.error || "結果が返りませんでした"}`; return; }
+        msg.innerHTML = `<span class="tag ${res.probes.every(p => p.ok) ? "ok" : "warn"}">${esc(res.summary)}</span>`;
+        out.innerHTML = `<div class="tablewrap" style="margin-top:10px">
+          <table><thead><tr>
+            <th>API</th><th>結果</th><th>必要なロール・申請</th><th>これで何ができるか</th>
+          </tr></thead><tbody>${res.probes.map(p => `
+            <tr>
+              <td>${esc(p.label)}</td>
+              <td><span class="tag ${p.ok ? "ok" : "ng"}">${p.ok ? "OK" : (p.status || "—")}</span>
+                  <div class="note" style="margin-top:3px">${esc(p.message)}</div></td>
+              <td class="note">${esc(p.need)}</td>
+              <td class="note">${esc(p.unlocks)}</td>
+            </tr>`).join("")}</tbody></table></div>`;
+      } finally {
+        diag.disabled = false;
+      }
       return;
     }
 

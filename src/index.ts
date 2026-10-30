@@ -9,6 +9,7 @@
 
 import { parseProductSheet, importProducts } from "./importProducts";
 import { ensureAdmin, addAdmin, listConnections, saveConnection, testConnection, FIELDS, type Mall } from "./connections";
+import { diagnose } from "./diagnose";
 
 export interface Env {
   DB: D1Database;
@@ -159,6 +160,28 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       if (!isAdmin) return json({ error: "forbidden" }, 403);
       const b = (await req.json()) as { caseId: string; mall: Mall };
       return json(await testConnection(env, b.caseId, b.mall));
+    }
+
+    // APIの疎通確認。どのロールが足りていないかをここで突き止める
+    if (path === "/api/connections/diagnose" && req.method === "POST") {
+      if (!isAdmin) return json({ error: "forbidden" }, 403);
+      const b = (await req.json()) as { caseId?: string; mall?: Mall };
+      const results = await diagnose(env, { caseId: b.caseId, mall: b.mall });
+      // 診断した事実を履歴に残す（止まっていることに後から気づけるように）
+      for (const r of results) {
+        await env.DB.prepare(
+          `INSERT INTO ingests (id, case_id, mall, kind, rows, status, error, source)
+           VALUES (?, ?, ?, 'diagnose', ?, ?, ?, 'api')`
+        )
+          .bind(
+            crypto.randomUUID(), r.caseId, r.mall,
+            r.probes.filter((p) => p.ok).length,
+            r.probes.every((p) => p.ok) ? "ok" : "error",
+            r.probes.filter((p) => !p.ok).map((p) => `${p.label}: ${p.message}`).join(" / ") || null
+          )
+          .run();
+      }
+      return json({ results });
     }
 
     if (path === "/api/connections/admins" && req.method === "POST") {

@@ -7,6 +7,7 @@
  */
 
 import { seal, open, mask } from "./crypto";
+import { licenseExpiry, errorMessage as rmsError } from "./rakuten";
 
 export interface ConnEnv {
   DB: D1Database;
@@ -188,6 +189,27 @@ export async function saveConnection(
     .run();
 }
 
+/** 保存されている接続情報を復号して返す。未登録なら null */
+export async function readCreds(
+  env: ConnEnv,
+  caseId: string,
+  mall: Mall
+): Promise<Record<string, string> | null> {
+  if (!env.SECRET_KEY) throw new Error("SECRET_KEY が未設定です");
+  const row = await env.DB.prepare("SELECT credentials_enc FROM case_malls WHERE case_id = ? AND mall = ?")
+    .bind(caseId, mall)
+    .first<{ credentials_enc: string | null }>();
+  if (!row?.credentials_enc) return null;
+  return await open<Record<string, string>>(env.SECRET_KEY, row.credentials_enc);
+}
+
+/** 楽天ライセンスキーの有効期限を保存する（期限通知のため） */
+export async function saveLicenseExpiry(env: ConnEnv, caseId: string, date: string): Promise<void> {
+  await env.DB.prepare("UPDATE case_malls SET license_expires_on = ? WHERE case_id = ? AND mall = 'rakuten'")
+    .bind(date, caseId)
+    .run();
+}
+
 /**
  * 接続テスト。
  * Amazon は LWA でアクセストークンを取れるかだけ確かめる（取得したトークンは保存しない）。
@@ -233,5 +255,18 @@ export async function testConnection(
   if (!creds.service_secret.startsWith("SP") || !creds.license_key.startsWith("SL")) {
     return { ok: false, message: "値の形式が想定と違います（SP… と SL… で始まるはずです）" };
   }
-  return { ok: true, message: "形式は問題ありません（実際の呼び出しは取り込み処理の実装時に確認します）" };
+  // ライセンス期限APIを実際に呼ぶ。通れば認証が生きていることの証明になり、
+  // 期限も分かるので case_malls に残しておく（期限2週間前の通知に使う）
+  const { date, result } = await licenseExpiry({
+    service_secret: creds.service_secret,
+    license_key: creds.license_key,
+  });
+  if (date) {
+    await saveLicenseExpiry(env, caseId, date);
+    return { ok: true, message: `接続できました。ライセンスキーの有効期限は ${date} です` };
+  }
+  if (result.ok) {
+    return { ok: true, message: "接続できました（有効期限は読み取れませんでした）" };
+  }
+  return { ok: false, message: `楽天から拒否されました：HTTP ${result.status} ${rmsError(result.body)}` };
 }
