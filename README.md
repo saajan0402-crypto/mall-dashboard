@@ -54,6 +54,9 @@ npx wrangler secret put SLACK_WEBHOOK_URL           # 後回しで可
 
 ダッシュボードから登録する場合：Workers & Pages → mall-dashboard → Settings → Variables and Secrets
 
+登録したシークレットは `wrangler.jsonc` の `keep_vars: true` によってデプロイ後も保持される。
+この設定が無いと、`wrangler deploy` が「設定ファイルに書かれていない変数」とみなして毎回削除してしまう。
+
 **キーはコード・リポジトリ・チャットのいずれにも置かない。**
 案件ごとの接続情報（SP-API / RMS）は、アプリの接続画面から登録し、`SECRET_KEY` で暗号化して D1 に保存する。
 

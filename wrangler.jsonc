@@ -5,6 +5,11 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
 
+  // ダッシュボードで登録したシークレットを、デプロイのたびに消さないようにする。
+  // これが無いと wrangler deploy が「設定ファイルに書かれていない変数」を削除してしまい、
+  // push のたびに SECRET_KEY などが消える。
+  "keep_vars": true,
+
   // 画面（静的ファイル）
   "assets": { "directory": "./public", "binding": "ASSETS" },
 
