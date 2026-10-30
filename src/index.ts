@@ -8,6 +8,7 @@
  */
 
 import { parseProductSheet, importProducts } from "./importProducts";
+import { ensureAdmin, addAdmin, listConnections, saveConnection, testConnection, FIELDS, type Mall } from "./connections";
 
 export interface Env {
   DB: D1Database;
@@ -17,6 +18,9 @@ export interface Env {
   SECRET_KEY?: string;
   CLAUDE_API_KEY?: string;
   SLACK_WEBHOOK_URL?: string;
+  /** Amazon LWA のクライアント情報。全案件で共通なのでアプリ側に置く */
+  AMAZON_LWA_CLIENT_ID?: string;
+  AMAZON_LWA_CLIENT_SECRET?: string;
 }
 
 /** Cloudflare Access が付けるヘッダから、ログイン中の社員のメールを取り出す */
@@ -127,6 +131,41 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     });
 
     return json({ imported: rows.length, counts, errors, skipped });
+  }
+
+  /* ───────── 接続情報（管理者のみ） ───────── */
+
+  if (path.startsWith("/api/connections")) {
+    const email = viewer(req);
+    const { admins, isAdmin } = await ensureAdmin(env.DB, email);
+
+    if (path === "/api/connections" && req.method === "GET") {
+      if (!isAdmin) return json({ error: "forbidden", admins }, 403);
+      return json({ ...(await listConnections(env) as object), fields: FIELDS, admins, me: email });
+    }
+
+    if (path === "/api/connections" && req.method === "POST") {
+      if (!isAdmin) return json({ error: "forbidden" }, 403);
+      const b = (await req.json()) as {
+        caseId: string; mall: Mall; values: Record<string, string>;
+        licenseExpiresOn?: string | null; attributionDays?: number | null;
+      };
+      await saveConnection(env, b.caseId, b.mall, b.values ?? {},
+        { licenseExpiresOn: b.licenseExpiresOn, attributionDays: b.attributionDays }, email);
+      return json({ ok: true });
+    }
+
+    if (path === "/api/connections/test" && req.method === "POST") {
+      if (!isAdmin) return json({ error: "forbidden" }, 403);
+      const b = (await req.json()) as { caseId: string; mall: Mall };
+      return json(await testConnection(env, b.caseId, b.mall));
+    }
+
+    if (path === "/api/connections/admins" && req.method === "POST") {
+      if (!isAdmin) return json({ error: "forbidden" }, 403);
+      const b = (await req.json()) as { email: string };
+      return json({ admins: await addAdmin(env.DB, b.email.trim(), email) });
+    }
   }
 
   // 連携ステータス。止まっていることに気づけるようにするための画面の裏側

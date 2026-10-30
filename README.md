@@ -45,9 +45,11 @@ Cloudflare ダッシュボード → Workers & Pages → Create → Import a rep
 ### 4. シークレットを登録する
 
 ```bash
+npx wrangler secret put SECRET_KEY                  # 接続情報を暗号化する親鍵（変更不可）
 npx wrangler secret put CLAUDE_API_KEY
-npx wrangler secret put SLACK_WEBHOOK_URL
-npx wrangler secret put SECRET_KEY        # 案件ごとの接続情報を暗号化する親鍵
+npx wrangler secret put AMAZON_LWA_CLIENT_ID        # 全案件で共通
+npx wrangler secret put AMAZON_LWA_CLIENT_SECRET    # 全案件で共通
+npx wrangler secret put SLACK_WEBHOOK_URL           # 後回しで可
 ```
 
 ダッシュボードから登録する場合：Workers & Pages → mall-dashboard → Settings → Variables and Secrets
@@ -77,6 +79,16 @@ Zero Trust 側で、社員4名のメールアドレスを許可する。本番 U
 - 原価は上書きせず、適用開始日つきの履歴として積まれる
 - 貼り付けた元データは R2 に保存され、あとから作り直せる
 
+### モールとの接続
+
+「接続」タブ（管理者のみ）で、案件ごとにリフレッシュトークンや楽天のキーを登録する。
+
+- 入力はこの画面からだけ。チャット・コード・リポジトリには残さない
+- 保存時に `SECRET_KEY` で暗号化され、画面には伏せ字しか返らない
+- 空欄のまま保存すると、その項目は変更されない
+- 「接続テスト」で、Amazon は実際にアクセストークンが取れるかを確認する
+- 最初にこの画面を開いた人が管理者になる
+
 ## 開発
 
 ```bash
@@ -92,6 +104,8 @@ npm run dev                                               # http://localhost:878
 ```
 src/index.ts          Worker 本体（API と日次バッチ）
 src/importProducts.ts 商品マスタの取り込み（検証と登録）
+src/connections.ts    案件ごとのモール接続情報（暗号化して保存）
+src/crypto.ts         接続情報の暗号化・復号
 migrations/           D1 のスキーマ
 public/               画面（静的ファイル）
 wrangler.jsonc        バインディングと cron の設定

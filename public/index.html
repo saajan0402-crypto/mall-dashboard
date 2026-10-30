@@ -82,6 +82,7 @@
   </div>
   <nav role="tablist">
     <button role="tab" id="t-master" aria-selected="true">商品マスタ</button>
+    <button role="tab" id="t-conn" aria-selected="false">接続</button>
     <button role="tab" id="t-status" aria-selected="false">連携ステータス</button>
   </nav>
 </header>
@@ -124,6 +125,16 @@
     </div>
   </section>
 
+  <!-- 接続 -->
+  <section id="p-conn" class="hidden">
+    <div>
+      <h2>モールとの接続<span class="hint">管理者のみ／案件ごとに登録</span></h2>
+      <div id="conn-guard"></div>
+      <div id="conn-app" class="card hidden" style="margin-bottom:16px"></div>
+      <div id="conn-list"></div>
+    </div>
+  </section>
+
   <!-- 連携ステータス -->
   <section id="p-status" class="hidden">
     <div>
@@ -151,13 +162,14 @@
   const FFL = { fba: "FBA", own: "自社発送", mcf: "マルチチャネル" };
   const POLICY = { profit: "利益重視", share: "シェア獲得", nurture: "育成中" };
 
-  const tabs = [["t-master", "p-master"], ["t-status", "p-status"]];
+  const tabs = [["t-master", "p-master"], ["t-conn", "p-conn"], ["t-status", "p-status"]];
   tabs.forEach(([t, p]) => $(t).addEventListener("click", () => {
     tabs.forEach(([t2, p2]) => {
       $(t2).setAttribute("aria-selected", t2 === t ? "true" : "false");
       $(p2).classList.toggle("hidden", p2 !== p);
     });
     if (p === "p-status") loadStatus();
+    if (p === "p-conn") loadConnections();
   }));
 
   async function get(path) { const r = await fetch(path); return r.json(); }
@@ -221,6 +233,104 @@
     renderErrors(d.errors || [], d.skipped, null, d.imported || 0);
     $("paste-note").textContent = "";
     await loadProducts();
+  });
+
+  /* ---------- 接続 ---------- */
+  const MALL_LABEL = { amazon: "Amazon", rakuten: "楽天市場" };
+  let connFields = null;
+
+  async function loadConnections() {
+    const r = await fetch("/api/connections");
+    if (r.status === 403) {
+      const d = await r.json();
+      $("conn-guard").innerHTML = `<div class="msg ng">この画面は管理者のみが開けます。${
+        (d.admins || []).length ? "管理者：" + (d.admins || []).map(esc).join(", ") : ""}</div>`;
+      $("conn-app").classList.add("hidden");
+      $("conn-list").innerHTML = "";
+      return;
+    }
+    const d = await r.json();
+    connFields = d.fields;
+    $("conn-guard").innerHTML = "";
+
+    const a = d.appLevel || {};
+    const tag = (ok) => `<span class="tag ${ok ? "ok" : "wait"}">${ok ? "登録済み" : "未設定"}</span>`;
+    $("conn-app").classList.remove("hidden");
+    $("conn-app").innerHTML =
+      `<div class="row"><span>暗号化キー（SECRET_KEY）</span><span>${tag(a.encryption)}</span></div>` +
+      `<div class="row"><span>Amazon LWA クライアントID</span><span>${tag(a.lwaClientId)}</span></div>` +
+      `<div class="row"><span>Amazon LWA クライアントシークレット</span><span>${tag(a.lwaClientSecret)}</span></div>` +
+      `<p class="note" style="margin-top:10px">この3つは全案件で共通のため、Cloudflare の Settings → Variables and Secrets に Secret として登録してください（名前：<code>SECRET_KEY</code> / <code>AMAZON_LWA_CLIENT_ID</code> / <code>AMAZON_LWA_CLIENT_SECRET</code>）。</p>`;
+
+    $("conn-list").innerHTML = (d.cases || []).map((c) => `
+      <div class="card" style="margin-bottom:14px">
+        <h2 style="margin-bottom:14px">${esc(c.name)}</h2>
+        ${["amazon", "rakuten"].map((m) => {
+          const s = c.malls[m] || {};
+          const fields = (connFields[m] || []).map((f) => `
+            <label style="display:block;margin-bottom:9px">
+              <span style="display:block;font-size:12.5px;color:var(--ink-2)">${esc(f.label)}
+                ${s.masked && s.masked[f.key] ? `<span class="tag ok" style="margin-left:6px">${esc(s.masked[f.key])}</span>` : ""}</span>
+              <input type="password" autocomplete="off" data-case="${c.id}" data-mall="${m}" data-key="${f.key}"
+                placeholder="${s.masked && s.masked[f.key] ? "変更するときだけ入力" : esc(f.hint)}"
+                style="width:100%;padding:7px 10px;border:1px solid var(--line-strong);border-radius:5px;
+                       background:var(--surface-2);color:var(--ink);font-family:var(--mono);font-size:12px">
+            </label>`).join("");
+          const extra = m === "rakuten"
+            ? `<label style="display:block;margin-bottom:9px"><span style="display:block;font-size:12.5px;color:var(--ink-2)">ライセンスキーの有効期限</span>
+                 <input type="date" data-case="${c.id}" data-mall="rakuten" data-meta="licenseExpiresOn"
+                   value="${esc(s.licenseExpiresOn || "")}"
+                   style="padding:7px 10px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink)">
+               </label>` : "";
+          return `<div style="margin-bottom:18px">
+            <div style="display:flex;gap:10px;align-items:baseline;margin-bottom:9px">
+              <strong style="font-size:13.5px">${MALL_LABEL[m]}</strong>
+              <span class="tag ${s.configured ? "ok" : "wait"}">${s.configured ? "登録済み" : "未登録"}</span>
+            </div>
+            ${fields}${extra}
+            <div class="btns">
+              <button class="act primary" data-save="${c.id}:${m}">保存</button>
+              <button class="act" data-test="${c.id}:${m}" ${s.configured ? "" : "disabled"}>接続テスト</button>
+              <span class="note" data-msg="${c.id}:${m}"></span>
+            </div>
+          </div>`;
+        }).join("")}
+      </div>`).join("")
+      || `<p class="empty">案件がまだありません。先に商品マスタを取り込んでください。</p>`;
+  }
+
+  document.addEventListener("click", async (ev) => {
+    const save = ev.target.closest && ev.target.closest("[data-save]");
+    const test = ev.target.closest && ev.target.closest("[data-test]");
+    if (!save && !test) return;
+    const [caseId, mall] = (save || test).dataset[save ? "save" : "test"].split(":");
+    const msg = document.querySelector(`[data-msg="${caseId}:${mall}"]`);
+
+    if (save) {
+      const values = {};
+      document.querySelectorAll(`input[data-case="${caseId}"][data-mall="${mall}"][data-key]`)
+        .forEach((el) => { if (el.value.trim()) values[el.dataset.key] = el.value.trim(); });
+      const dateEl = document.querySelector(`input[data-case="${caseId}"][data-mall="${mall}"][data-meta="licenseExpiresOn"]`);
+      msg.textContent = "保存中…";
+      const r = await fetch("/api/connections", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ caseId, mall, values, licenseExpiresOn: dateEl ? dateEl.value || null : null })
+      });
+      const d = await r.json();
+      msg.textContent = d.ok ? "保存しました" : `失敗：${d.error || ""}`;
+      document.querySelectorAll(`input[data-case="${caseId}"][data-mall="${mall}"][data-key]`)
+        .forEach((el) => { el.value = ""; });
+      await loadConnections();
+      return;
+    }
+
+    msg.textContent = "テスト中…";
+    const r = await fetch("/api/connections/test", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ caseId, mall })
+    });
+    const d = await r.json();
+    msg.innerHTML = `<span class="tag ${d.ok ? "ok" : "ng"}">${d.ok ? "OK" : "NG"}</span> ${esc(d.message)}`;
   });
 
   /* ---------- 連携ステータス ---------- */
