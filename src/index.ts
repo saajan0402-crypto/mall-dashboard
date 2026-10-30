@@ -10,6 +10,7 @@
 import { parseProductSheet, importProducts } from "./importProducts";
 import { ensureAdmin, addAdmin, listConnections, saveConnection, testConnection, FIELDS, type Mall } from "./connections";
 import { diagnose } from "./diagnose";
+import { advance, pump, jstDate } from "./ingestSales";
 
 export interface Env {
   DB: D1Database;
@@ -134,6 +135,52 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     return json({ imported: rows.length, counts, errors, skipped });
   }
 
+  /* ───────── 売上 ───────── */
+
+  // 日次売上。商品ごと・日ごとに並べて返す
+  if (path === "/api/sales") {
+    const u = new URL(req.url);
+    const caseId = u.searchParams.get("case_id");
+    const from = u.searchParams.get("from") ?? jstDate(14);
+    const to = u.searchParams.get("to") ?? jstDate(1);
+    const { results } = await env.DB.prepare(
+      `SELECT s.date, s.mall, s.units, s.revenue, s.sessions, s.page_views,
+              p.sku, p.name, c.name AS case_name,
+              (SELECT unit_cost FROM cost_history h
+                WHERE h.product_id = p.id AND h.effective_from <= s.date
+                ORDER BY h.effective_from DESC LIMIT 1) AS unit_cost
+         FROM daily_sales s
+         LEFT JOIN products p ON p.id = s.product_id
+         JOIN cases c ON c.id = s.case_id
+        WHERE s.date BETWEEN ? AND ? ${caseId ? "AND s.case_id = ?" : ""}
+        ORDER BY s.date DESC, p.sku`
+    )
+      .bind(...(caseId ? [from, to, caseId] : [from, to]))
+      .all();
+
+    // 日ごとの合計もここで出す。画面側で足し算させない
+    const byDate = new Map<string, { date: string; units: number; revenue: number; sessions: number }>();
+    for (const r of results as Array<Record<string, number | string | null>>) {
+      const d = String(r.date);
+      const agg = byDate.get(d) ?? { date: d, units: 0, revenue: 0, sessions: 0 };
+      agg.units += Number(r.units ?? 0);
+      agg.revenue += Number(r.revenue ?? 0);
+      agg.sessions += Number(r.sessions ?? 0);
+      byDate.set(d, agg);
+    }
+    return json({ from, to, rows: results, daily: [...byDate.values()].sort((a, b) => (a.date < b.date ? 1 : -1)) });
+  }
+
+  // 取り込みの実行。画面から押されたときはその場で少し待つ
+  if (path === "/api/ingest/sales" && req.method === "POST") {
+    const b = (await req.json()) as { caseId?: string; date?: string; days?: number };
+    const date = b.date ?? jstDate(1);
+    if (b.caseId) {
+      return json({ results: [await advance(env, b.caseId, date, { wait: true, maxWaitMs: 55000 })] });
+    }
+    return json({ results: await pump(env, { days: b.days ?? 7 }) });
+  }
+
   /* ───────── 接続情報（管理者のみ） ───────── */
 
   if (path.startsWith("/api/connections")) {
@@ -223,11 +270,20 @@ export default {
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
       (async () => {
-        const id = crypto.randomUUID();
+        // SP-API のレポートは依頼してから生成までに数分かかる。
+        // 6時の実行で依頼し、7時の実行で取りに行く。穴があれば7日前まで遡って埋める
+        const results = await pump(env, { days: 7 });
+        const rows = results.reduce((n, r) => n + (r.rows ?? 0), 0);
+        const failed = results.filter((r) => r.status === "error");
         await env.DB.prepare(
-          "INSERT INTO ingests (id, kind, status, rows, source) VALUES (?, 'scheduled', 'ok', 0, 'api')"
+          `INSERT INTO ingests (id, kind, rows, status, error, source)
+           VALUES (?, 'scheduled', ?, ?, ?, 'api')`
         )
-          .bind(id)
+          .bind(
+            crypto.randomUUID(), rows,
+            failed.length ? "error" : "ok",
+            failed.length ? failed.map((f) => `${f.date}: ${f.message}`).join(" / ").slice(0, 500) : null
+          )
           .run();
       })()
     );

@@ -82,6 +82,7 @@
   </div>
   <nav role="tablist">
     <button role="tab" id="t-master" aria-selected="true">商品マスタ</button>
+    <button role="tab" id="t-sales" aria-selected="false">売上</button>
     <button role="tab" id="t-conn" aria-selected="false">接続</button>
     <button role="tab" id="t-status" aria-selected="false">連携ステータス</button>
   </nav>
@@ -125,6 +126,46 @@
     </div>
   </section>
 
+  <!-- 売上 -->
+  <section id="p-sales" class="hidden">
+    <div>
+      <h2>日次売上<span class="hint">Amazon 売上・トラフィックレポート／前日まで</span></h2>
+      <div class="card" style="margin-bottom:16px">
+        <div class="btns" style="margin-top:0">
+          <select id="sales-case" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
+            border-radius:5px;background:var(--surface-2);color:var(--ink)"></select>
+          <input type="date" id="sales-date" style="font:inherit;font-size:13px;padding:7px 10px;
+            border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink)">
+          <button class="act primary" id="btn-ingest">この日を取り込む</button>
+          <button class="act" id="btn-pump">直近7日の穴を埋める</button>
+          <span class="note" id="ingest-msg"></span>
+        </div>
+        <p class="note" style="margin-top:10px">Amazon のレポートは依頼してから生成まで数分かかります。
+          待っても出来上がらなければ、しばらくしてからもう一度押してください。毎朝6時と7時に自動でも動きます。</p>
+      </div>
+    </div>
+    <div>
+      <h2>日別の合計</h2>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>日付</th><th class="r">販売数</th><th class="r">売上</th><th class="r">セッション</th><th class="r">CVR</th></tr></thead>
+          <tbody id="sales-daily"></tbody>
+        </table>
+      </div>
+    </div>
+    <div>
+      <h2>商品別の明細<span class="hint">新しい順</span></h2>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>日付</th><th>SKU</th><th>商品名</th><th class="r">販売数</th><th class="r">売上</th>
+            <th class="r">セッション</th><th class="r">粗利（概算）</th></tr></thead>
+          <tbody id="sales-rows"></tbody>
+        </table>
+      </div>
+      <p class="empty hidden" id="no-sales">まだ売上データがありません。上の「この日を取り込む」から取り込んでください。</p>
+    </div>
+  </section>
+
   <!-- 接続 -->
   <section id="p-conn" class="hidden">
     <div>
@@ -162,13 +203,14 @@
   const FFL = { fba: "FBA", own: "自社発送", mcf: "マルチチャネル" };
   const POLICY = { profit: "利益重視", share: "シェア獲得", nurture: "育成中" };
 
-  const tabs = [["t-master", "p-master"], ["t-conn", "p-conn"], ["t-status", "p-status"]];
+  const tabs = [["t-master", "p-master"], ["t-sales", "p-sales"], ["t-conn", "p-conn"], ["t-status", "p-status"]];
   tabs.forEach(([t, p]) => $(t).addEventListener("click", () => {
     tabs.forEach(([t2, p2]) => {
       $(t2).setAttribute("aria-selected", t2 === t ? "true" : "false");
       $(p2).classList.toggle("hidden", p2 !== p);
     });
     if (p === "p-status") loadStatus();
+    if (p === "p-sales") loadSales();
     if (p === "p-conn") loadConnections();
   }));
 
@@ -366,6 +408,78 @@
     });
     const d = await r.json();
     msg.innerHTML = `<span class="tag ${d.ok ? "ok" : "ng"}">${d.ok ? "OK" : "NG"}</span> ${esc(d.message)}`;
+  });
+
+  /* ---------- 売上 ---------- */
+  let salesCasesLoaded = false;
+
+  async function loadSales() {
+    if (!salesCasesLoaded) {
+      const cases = await get("/api/cases");
+      $("sales-case").innerHTML = `<option value="">全案件</option>` +
+        (cases.cases || []).map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
+      const d = new Date(Date.now() + 9 * 3600 * 1000 - 24 * 3600 * 1000);
+      $("sales-date").value = d.toISOString().slice(0, 10);
+      salesCasesLoaded = true;
+    }
+    const caseId = $("sales-case").value;
+    const d = await get("/api/sales" + (caseId ? `?case_id=${encodeURIComponent(caseId)}` : ""));
+
+    $("sales-daily").innerHTML = (d.daily || []).map((x) => {
+      const cvr = x.sessions ? ((x.units / x.sessions) * 100).toFixed(1) + "%" : "—";
+      return `<tr><td>${esc(x.date)}</td><td class="r">${x.units}</td>
+        <td class="r">${yen(x.revenue)}</td><td class="r">${x.sessions || "—"}</td><td class="r">${cvr}</td></tr>`;
+    }).join("") || `<tr><td colspan="5" style="color:var(--muted)">まだデータがありません。</td></tr>`;
+
+    const rows = d.rows || [];
+    $("no-sales").classList.toggle("hidden", rows.length > 0);
+    $("sales-rows").innerHTML = rows.map((r) => {
+      // 粗利の概算は原価ぶんだけ。手数料の実額は入金明細が入ってから
+      const gross = r.unit_cost != null ? r.revenue - r.unit_cost * r.units : null;
+      return `<tr><td>${esc(r.date)}</td><td>${esc(r.sku) || "—"}</td><td>${esc(r.name) || "（未登録）"}</td>
+        <td class="r">${r.units}</td><td class="r">${yen(r.revenue)}</td>
+        <td class="r">${r.sessions == null ? "—" : r.sessions}</td>
+        <td class="r">${gross == null ? "—" : yen(gross)}</td></tr>`;
+    }).join("");
+  }
+
+  $("sales-case").addEventListener("change", loadSales);
+
+  $("btn-ingest").addEventListener("click", async () => {
+    const caseId = $("sales-case").value;
+    if (!caseId) { $("ingest-msg").textContent = "案件を選んでください"; return; }
+    const btn = $("btn-ingest");
+    btn.disabled = true;
+    $("ingest-msg").textContent = "取り込み中…（最大1分ほど待ちます）";
+    try {
+      const r = await fetch("/api/ingest/sales", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ caseId, date: $("sales-date").value })
+      });
+      const d = await r.json();
+      const res = (d.results || [])[0];
+      $("ingest-msg").innerHTML = res
+        ? `<span class="tag ${res.status === "done" ? "ok" : res.status === "error" ? "ng" : "wait"}">${esc(res.status)}</span> ${esc(res.message)}`
+        : `失敗：${esc(d.error || "")}`;
+      await loadSales();
+    } finally { btn.disabled = false; }
+  });
+
+  $("btn-pump").addEventListener("click", async () => {
+    const btn = $("btn-pump");
+    btn.disabled = true;
+    $("ingest-msg").textContent = "全案件の穴を確認しています…";
+    try {
+      const r = await fetch("/api/ingest/sales", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ days: 7 })
+      });
+      const d = await r.json();
+      const list = d.results || [];
+      $("ingest-msg").textContent = list.length
+        ? `${list.length} 件を処理しました：` + list.map((x) => `${x.date} ${x.status}`).join(" / ")
+        : "埋める穴はありませんでした";
+      await loadSales();
+    } finally { btn.disabled = false; }
   });
 
   /* ---------- 連携ステータス ---------- */
