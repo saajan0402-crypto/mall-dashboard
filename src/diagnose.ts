@@ -246,6 +246,31 @@ async function probeAmazon(env: ConnEnv & LwaEnv, caseId: string): Promise<Probe
 
 /* ───────── 楽天 ───────── */
 
+/**
+ * 値そのものを出さずに形だけ返す。
+ * 貼り付けミス（余計な空白・改行・全角）をここで切り分けられるようにする
+ */
+function shape(v: string): string {
+  const parts = [`${v.length}文字`, `先頭 ${v.slice(0, 2)}`];
+  if (/\s/.test(v)) parts.push("⚠空白か改行が混ざっています");
+  // eslint-disable-next-line no-control-regex
+  if (/[^\x21-\x7e]/.test(v)) parts.push("⚠半角英数字以外が混ざっています");
+  return parts.join(" / ");
+}
+
+/** 楽天の認証エラーに、確認すべき場所を添える */
+function rakutenHint(status: number, body: unknown): string {
+  const text = typeof body === "string" ? body : JSON.stringify(body);
+  if (status !== 401 && !/Un-Authorised/i.test(text)) return "";
+  return (
+    "　→ 確認する順番：①licenseKey の有効期限（90日ごとに更新が必要）" +
+    " ②RMS で該当APIが「利用可能」になっているか" +
+    " ③serviceSecret と licenseKey が同じアプリの組み合わせか。" +
+    "RMS の 店舗様向け情報・サービス → WEB APIサービス → 利用設定 → アプリ一覧 で確認できます"
+  );
+}
+
+
 async function probeRakuten(env: ConnEnv, caseId: string): Promise<Probe[]> {
   const creds = await readCreds(env, caseId, "rakuten");
   if (!creds?.service_secret || !creds?.license_key) {
@@ -262,6 +287,19 @@ async function probeRakuten(env: ConnEnv, caseId: string): Promise<Probe[]> {
   const rc = { service_secret: creds.service_secret, license_key: creds.license_key };
   const probes: Probe[] = [];
 
+  // 値そのものは出さずに、形だけ報告する。貼り付けミスをここで切り分ける
+  probes.push({
+    key: "credentials",
+    label: "登録されている値の形",
+    need: "（貼り付けミスの切り分け）",
+    unlocks: "原因の切り分け",
+    ok: true,
+    status: 200,
+    message:
+      `serviceSecret: ${shape(creds.service_secret)} / ` +
+      `licenseKey: ${shape(creds.license_key)}`,
+  });
+
   // ライセンス期限。ここが通れば認証そのものは生きている
   const { date, result } = await licenseExpiry(rc);
   if (date) await saveLicenseExpiry(env, caseId, date);
@@ -272,7 +310,11 @@ async function probeRakuten(env: ConnEnv, caseId: string): Promise<Probe[]> {
     unlocks: "期限切れの事前通知",
     ok: result.ok,
     status: result.status,
-    message: date ? `有効期限 ${date}` : result.ok ? "通りましたが期限を読み取れませんでした" : rmsError(result.body),
+    message: date
+      ? `有効期限 ${date}`
+      : result.ok
+        ? "通りましたが期限を読み取れませんでした"
+        : `${rmsError(result.body)}${rakutenHint(result.status, result.body)}`,
   });
 
   const calls: Array<{
@@ -314,7 +356,8 @@ async function probeRakuten(env: ConnEnv, caseId: string): Promise<Probe[]> {
       const r = await c.run();
       probes.push({
         key: c.key, label: c.label, need: c.need, unlocks: c.unlocks,
-        ok: r.ok, status: r.status, message: r.ok ? "通りました" : rmsError(r.body),
+        ok: r.ok, status: r.status,
+        message: r.ok ? "通りました" : `${rmsError(r.body)}${rakutenHint(r.status, r.body)}`,
       });
     } catch (e) {
       probes.push({
