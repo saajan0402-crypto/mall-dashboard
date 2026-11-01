@@ -203,7 +203,8 @@
           <thead><tr><th>状態</th><th>案件</th><th>SKU</th><th>商品名</th>
             <th class="r">販売可能</th><th class="r">納品中</th><th class="r">引当済み</th><th class="r">販売不可</th>
             <th class="r">1日あたり</th><th class="r">残り日数</th><th class="r">しきい値</th>
-            <th class="r">定期便</th><th class="r">今後30日</th></tr></thead>
+            <th class="r" title="継続中の定期おトク便の契約数">定期便の契約</th>
+            <th class="r" title="今後30日に定期おトク便で出荷される見込み数量（Amazonの予測）">30日の出荷見込み</th></tr></thead>
           <tbody id="stock-rows"></tbody>
         </table>
       </div>
@@ -211,6 +212,8 @@
       <p class="note">残り日数は「販売可能な在庫 ÷ 直近28日の1日あたり販売数」です。納品中は含めていません。
         販売実績のない商品は日数を出せないので「—」になります。
         しきい値は商品マスタの「在庫アラート日数」、未設定なら会社共通の設定を使います。</p>
+      <p class="note">「定期便の契約」は継続中の契約数、「30日の出荷見込み」は<strong>そのうち今後30日に実際に出荷される見込みの数量</strong>です。
+        顧客が配送間隔（1か月／2か月／3か月）を選べるので、契約数より少なくなります。判定に使うのは出荷見込みのほうです。</p>
       <p class="note"><strong>定期おトク便は確定した将来需要</strong>なので、販売ペースより優先して判定します。
         今後30日の定期便が販売可能な在庫を上回っていたら、残り日数に余裕があっても「欠品間近」にします。
         在庫切れで定期便を届けられなかった実績があれば「在庫切れ」扱いです。</p>
@@ -226,7 +229,8 @@
 
       <!-- 案件を追加するたびに必要になる設定。手順を探し直さなくて済むよう画面に置いている -->
       <details class="card" style="margin-bottom:16px">
-        <summary style="cursor:pointer;font-weight:700;font-size:13.5px">案件を追加するときの設定メモ</summary>
+        <summary style="cursor:pointer;font-weight:700;font-size:14px;color:var(--accent)">
+          案件を追加するときの設定メモ（クリックで開閉）</summary>
         <p class="note" style="margin-top:12px">新しい店舗をつなぐたびに、モール側でこの設定が要ります。
           ここに挙げたものは<strong>すべて有効にしてください</strong>。取得・検索だけで、書き換える機能はひとつも含めていません。</p>
 
