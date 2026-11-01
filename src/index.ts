@@ -146,9 +146,18 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const { results } = await env.DB.prepare(
       `SELECT s.date, s.mall, s.units, s.revenue, s.sessions, s.page_views,
               p.sku, p.name, c.name AS case_name,
-              (SELECT unit_cost FROM cost_history h
-                WHERE h.product_id = p.id AND h.effective_from <= s.date
-                ORDER BY h.effective_from DESC LIMIT 1) AS unit_cost
+              COALESCE(
+                (SELECT unit_cost FROM cost_history h
+                  WHERE h.product_id = p.id AND h.effective_from <= s.date
+                  ORDER BY h.effective_from DESC LIMIT 1),
+                (SELECT unit_cost FROM cost_history h
+                  WHERE h.product_id = p.id
+                  ORDER BY h.effective_from ASC LIMIT 1)
+              ) AS unit_cost,
+              CASE WHEN NOT EXISTS (SELECT 1 FROM cost_history h
+                      WHERE h.product_id = p.id AND h.effective_from <= s.date)
+                    AND EXISTS (SELECT 1 FROM cost_history h WHERE h.product_id = p.id)
+                   THEN 1 ELSE 0 END AS cost_before_record
          FROM daily_sales s
          LEFT JOIN products p ON p.id = s.product_id
          JOIN cases c ON c.id = s.case_id
@@ -176,7 +185,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const b = (await req.json()) as { caseId?: string; date?: string; days?: number };
     const date = b.date ?? jstDate(1);
     if (b.caseId) {
-      return json({ results: [await advance(env, b.caseId, date, { wait: true, maxWaitMs: 55000 })] });
+      return json({ results: [await advance(env, b.caseId, date, { wait: true, maxWaitMs: 55000, force: true })] });
     }
     return json({ results: await pump(env, { days: b.days ?? 7 }) });
   }

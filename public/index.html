@@ -141,7 +141,8 @@
           <span class="note" id="ingest-msg"></span>
         </div>
         <p class="note" style="margin-top:10px">Amazon のレポートは依頼してから生成まで数分かかります。
-          待っても出来上がらなければ、しばらくしてからもう一度押してください。毎朝6時と7時に自動でも動きます。</p>
+          待っても出来上がらなければ、しばらくしてからもう一度押してください。毎朝6時と7時に自動でも動きます。
+          セッション数は Amazon 側であとから埋め直されるため、直近3日は毎日取り直します。</p>
       </div>
     </div>
     <div>
@@ -163,6 +164,8 @@
         </table>
       </div>
       <p class="empty hidden" id="no-sales">まだ売上データがありません。上の「この日を取り込む」から取り込んでください。</p>
+      <p class="note">粗利は原価を引いただけの概算です。手数料の実額は入金明細を入れてから反映します。
+        「*」は原価の適用開始日より前の日で、いちばん古い原価で代用している印です。</p>
     </div>
   </section>
 
@@ -436,10 +439,12 @@
     $("sales-rows").innerHTML = rows.map((r) => {
       // 粗利の概算は原価ぶんだけ。手数料の実額は入金明細が入ってから
       const gross = r.unit_cost != null ? r.revenue - r.unit_cost * r.units : null;
+      // 原価の適用開始日より前の日は、いちばん古い原価で代用している
+      const mark = r.cost_before_record ? `<span title="原価の適用開始日より前の日です。いちばん古い原価で計算しています">*</span>` : "";
       return `<tr><td>${esc(r.date)}</td><td>${esc(r.sku) || "—"}</td><td>${esc(r.name) || "（未登録）"}</td>
         <td class="r">${r.units}</td><td class="r">${yen(r.revenue)}</td>
         <td class="r">${r.sessions == null ? "—" : r.sessions}</td>
-        <td class="r">${gross == null ? "—" : yen(gross)}</td></tr>`;
+        <td class="r">${gross == null ? "—" : yen(gross) + mark}</td></tr>`;
     }).join("");
   }
 

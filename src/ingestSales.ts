@@ -109,7 +109,7 @@ async function jobFor(db: D1Database, caseId: string, date: string) {
     .prepare("SELECT * FROM report_jobs WHERE case_id = ? AND mall = 'amazon' AND report_type = ? AND date = ?")
     .bind(caseId, SALES_TRAFFIC, date)
     .first<{
-      id: string; report_id: string | null; status: string; attempts: number;
+      id: string; report_id: string | null; status: string; attempts: number; updated_at: string;
     }>();
 }
 
@@ -170,7 +170,7 @@ export async function advance(
   env: IngestEnv,
   caseId: string,
   date: string,
-  opts: { wait?: boolean; maxWaitMs?: number } = {}
+  opts: { wait?: boolean; maxWaitMs?: number; force?: boolean } = {}
 ): Promise<IngestOutcome> {
   const creds = await readCreds(env, caseId, "amazon");
   if (!creds?.refresh_token) {
@@ -186,8 +186,8 @@ export async function advance(
 
   let job = await jobFor(env.DB, caseId, date);
 
-  // まだ依頼していない、または前回失敗していれば依頼する
-  if (!job?.report_id || job.status === "error") {
+  // まだ依頼していない、前回失敗した、または取り直しを指示されたときは依頼する
+  if (!job?.report_id || job.status === "error" || opts.force) {
     const req = await requestDailyReport(token, SALES_TRAFFIC, date);
     if (!req.ok) {
       await upsertJob(env.DB, caseId, date, { status: "error", error: req.message });
@@ -267,9 +267,13 @@ export async function advance(
  * 日次バッチ用。全案件について、未取得の日を古い順に進める。
  * 1回の実行で欲張らず、案件ごとに数日ぶんだけ触る
  */
-export async function pump(env: IngestEnv, opts: { days?: number; perCase?: number } = {}): Promise<IngestOutcome[]> {
+export async function pump(
+  env: IngestEnv,
+  opts: { days?: number; perCase?: number; refreshDays?: number } = {}
+): Promise<IngestOutcome[]> {
   const days = opts.days ?? 7;            // どこまで遡って穴を埋めるか
-  const perCase = opts.perCase ?? 3;      // 1回の実行で1案件あたり触る日数
+  const perCase = opts.perCase ?? 4;      // 1回の実行で1案件あたり触る日数
+  const refreshDays = opts.refreshDays ?? 3;  // 取得済みでも取り直す直近の日数
 
   const { results: cases } = await env.DB.prepare(
     `SELECT c.id FROM cases c
@@ -287,7 +291,21 @@ export async function pump(env: IngestEnv, opts: { days?: number; perCase?: numb
     for (const date of targets) {
       if (touched >= perCase) break;
       const job = await jobFor(env.DB, c.id, date);
-      if (job?.status === "done" || job?.status === "empty") continue;
+      const finished = job?.status === "done" || job?.status === "empty";
+
+      if (finished) {
+        // Amazon はセッション数などを後から埋め直すので、直近数日は取り直す。
+        // ただし依頼した直後に取り直すと取得待ちが流れてしまうので、
+        // 前回の取得から12時間以上経っている日だけを対象にする
+        const ageMs = job?.updated_at
+          ? Date.now() - Date.parse(job.updated_at.replace(" ", "T") + "Z")
+          : Infinity;
+        const recent = targets.length - targets.indexOf(date) <= refreshDays;
+        if (!recent || ageMs < 12 * 60 * 60 * 1000) continue;
+        out.push(await advance(env, c.id, date, { force: true }));
+        touched++;
+        continue;
+      }
       out.push(await advance(env, c.id, date));
       touched++;
     }
