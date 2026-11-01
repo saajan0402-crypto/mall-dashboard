@@ -83,6 +83,7 @@
   <nav role="tablist">
     <button role="tab" id="t-master" aria-selected="true">商品マスタ</button>
     <button role="tab" id="t-sales" aria-selected="false">売上</button>
+    <button role="tab" id="t-stock" aria-selected="false">在庫</button>
     <button role="tab" id="t-conn" aria-selected="false">接続</button>
     <button role="tab" id="t-status" aria-selected="false">連携ステータス</button>
   </nav>
@@ -180,6 +181,37 @@
     </div>
   </section>
 
+  <!-- 在庫 -->
+  <section id="p-stock" class="hidden">
+    <div>
+      <h2>FBA在庫<span class="hint" id="stock-asof"></span></h2>
+      <div class="card" style="margin-bottom:16px">
+        <div class="btns" style="margin-top:0">
+          <select id="stock-case" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
+            border-radius:5px;background:var(--surface-2);color:var(--ink)"></select>
+          <button class="act primary" id="btn-stock">在庫を取り込む</button>
+          <span class="note" id="stock-msg"></span>
+        </div>
+        <div id="stock-summary" style="margin-top:12px"></div>
+      </div>
+    </div>
+    <div>
+      <h2>あと何日もつか<span class="hint">少ない順</span></h2>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>状態</th><th>案件</th><th>SKU</th><th>商品名</th>
+            <th class="r">販売可能</th><th class="r">納品中</th><th class="r">引当済み</th><th class="r">販売不可</th>
+            <th class="r">1日あたり</th><th class="r">残り日数</th><th class="r">しきい値</th></tr></thead>
+          <tbody id="stock-rows"></tbody>
+        </table>
+      </div>
+      <p class="empty hidden" id="no-stock">まだ在庫データがありません。「在庫を取り込む」を押してください。</p>
+      <p class="note">残り日数は「販売可能な在庫 ÷ 直近28日の1日あたり販売数」です。納品中は含めていません。
+        販売実績のない商品は日数を出せないので「—」になります。
+        しきい値は商品マスタの「在庫アラート日数」、未設定なら会社共通の設定を使います。</p>
+    </div>
+  </section>
+
   <!-- 接続 -->
   <section id="p-conn" class="hidden">
     <div>
@@ -217,7 +249,7 @@
   const FFL = { fba: "FBA", own: "自社発送", mcf: "マルチチャネル" };
   const POLICY = { profit: "利益重視", share: "シェア獲得", nurture: "育成中" };
 
-  const tabs = [["t-master", "p-master"], ["t-sales", "p-sales"], ["t-conn", "p-conn"], ["t-status", "p-status"]];
+  const tabs = [["t-master", "p-master"], ["t-sales", "p-sales"], ["t-stock", "p-stock"], ["t-conn", "p-conn"], ["t-status", "p-status"]];
   tabs.forEach(([t, p]) => $(t).addEventListener("click", () => {
     tabs.forEach(([t2, p2]) => {
       $(t2).setAttribute("aria-selected", t2 === t ? "true" : "false");
@@ -225,6 +257,7 @@
     });
     if (p === "p-status") loadStatus();
     if (p === "p-sales") loadSales().then(loadSummary);
+    if (p === "p-stock") loadStock();
     if (p === "p-conn") loadConnections();
   }));
 
@@ -580,6 +613,68 @@
         }
       }
       await loadSummary();
+    } finally { btn.disabled = false; }
+  });
+
+  /* ---------- 在庫 ---------- */
+  const LEVEL = {
+    out:     ["ng",   "在庫切れ"],
+    risk:    ["ng",   "欠品間近"],
+    watch:   ["warn", "注意"],
+    ok:      ["ok",   "問題なし"],
+    unknown: ["wait", "判定不可"]
+  };
+  let stockCasesLoaded = false;
+
+  async function loadStock() {
+    if (!stockCasesLoaded) {
+      const cases = await get("/api/cases");
+      $("stock-case").innerHTML = `<option value="">全案件</option>` +
+        (cases.cases || []).map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
+      stockCasesLoaded = true;
+    }
+    const caseId = $("stock-case").value;
+    const d = await get("/api/inventory" + (caseId ? `?case_id=${encodeURIComponent(caseId)}` : ""));
+    const rows = d.rows || [];
+
+    $("stock-asof").textContent = d.asOf ? `${d.asOf} 時点` : "";
+    const s = d.summary || {};
+    $("stock-summary").innerHTML = [
+      ["在庫切れ", s.out, "ng"], ["欠品間近", s.risk, "ng"], ["注意", s.watch, "warn"],
+      ["問題なし", s.ok, "ok"], ["判定不可", s.unknown, "wait"]
+    ].filter(([, n]) => n).map(([k, n, c]) =>
+      `<span class="tag ${c}" style="margin-right:8px">${k} ${n}件</span>`).join("")
+      || `<span class="note">まだ判定できる在庫がありません。</span>`;
+
+    $("no-stock").classList.toggle("hidden", rows.length > 0);
+    $("stock-rows").innerHTML = rows.map((r) => {
+      const [cls, label] = LEVEL[r.level] || ["wait", r.level];
+      return `<tr>
+        <td><span class="tag ${cls}">${label}</span></td>
+        <td>${esc(r.caseName)}</td><td>${esc(r.sku)}</td><td>${esc(r.name)}</td>
+        <td class="r">${r.qty}</td><td class="r">${r.inbound || "—"}</td>
+        <td class="r">${r.reserved || "—"}</td><td class="r">${r.unfulfillable || "—"}</td>
+        <td class="r">${r.velocity == null ? "—" : r.velocity}</td>
+        <td class="r">${r.daysOfSupply == null ? "—" : r.daysOfSupply + "日"}</td>
+        <td class="r">${r.threshold}日</td></tr>`;
+    }).join("");
+  }
+
+  $("stock-case").addEventListener("change", loadStock);
+
+  $("btn-stock").addEventListener("click", async () => {
+    const btn = $("btn-stock");
+    const caseId = $("stock-case").value;
+    btn.disabled = true;
+    $("stock-msg").textContent = "在庫を取り込み中…";
+    try {
+      const r = await fetch("/api/ingest/inventory", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(caseId ? { caseId } : {})
+      });
+      const d = await r.json();
+      $("stock-msg").textContent = (d.results || []).map((x) => x.message).join(" / ") || "結果がありません";
+      await loadStock();
     } finally { btn.disabled = false; }
   });
 

@@ -13,6 +13,7 @@ import { diagnose } from "./diagnose";
 import { advance, pump, jstDate } from "./ingestSales";
 import { ingestFinances, pumpFinances } from "./ingestFinances";
 import { feeLabel, isKnownFee } from "./feeNames";
+import { ingestInventory, pumpInventory, inventoryStatus, notifyInventory } from "./ingestInventory";
 
 export interface Env {
   DB: D1Database;
@@ -276,6 +277,25 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     return json({ results: await pump(env, { days: b.days ?? 7 }) });
   }
 
+  /* ───────── 在庫 ───────── */
+
+  if (path === "/api/inventory") {
+    const caseId = new URL(req.url).searchParams.get("case_id") ?? undefined;
+    const rows = await inventoryStatus(env.DB, caseId);
+    const count = (lv: string) => rows.filter((r) => r.level === lv).length;
+    return json({
+      rows,
+      summary: { out: count("out"), risk: count("risk"), watch: count("watch"), ok: count("ok"), unknown: count("unknown") },
+      asOf: rows[0]?.date ?? null,
+    });
+  }
+
+  if (path === "/api/ingest/inventory" && req.method === "POST") {
+    const b = (await req.json().catch(() => ({}))) as { caseId?: string };
+    const results = b.caseId ? [await ingestInventory(env, b.caseId)] : await pumpInventory(env);
+    return json({ results });
+  }
+
   /* ───────── 接続情報（管理者のみ） ───────── */
 
   if (path.startsWith("/api/connections")) {
@@ -370,6 +390,9 @@ export default {
         const results = await pump(env, { days: 7 });
         // 入金明細は売上より遅れて確定するので、別に10日ぶん遡って埋める
         const fin = await pumpFinances(env, { days: 10 });
+        // 在庫は毎日とり直し、欠品・欠品間近があれば Slack に流す
+        await pumpInventory(env);
+        await notifyInventory(env);
         const rows = results.reduce((n, r) => n + (r.rows ?? 0), 0)
           + fin.reduce((n, r) => n + (r.rows ?? 0), 0);
         const failed = [...results, ...fin].filter((r) => r.status === "error");
