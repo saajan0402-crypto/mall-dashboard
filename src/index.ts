@@ -11,6 +11,7 @@ import { parseProductSheet, importProducts } from "./importProducts";
 import { ensureAdmin, addAdmin, listConnections, saveConnection, testConnection, FIELDS, type Mall } from "./connections";
 import { diagnose } from "./diagnose";
 import { advance, pump, jstDate } from "./ingestSales";
+import { ingestFinances, pumpFinances } from "./ingestFinances";
 
 export interface Env {
   DB: D1Database;
@@ -145,6 +146,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const to = u.searchParams.get("to") ?? jstDate(1);
     const { results } = await env.DB.prepare(
       `SELECT s.date, s.mall, s.units, s.revenue, s.sessions, s.page_views,
+              s.fee_actual, s.fee_est, s.returns,
               p.sku, p.name, c.name AS case_name,
               COALESCE(
                 (SELECT unit_cost FROM cost_history h
@@ -178,6 +180,83 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       byDate.set(d, agg);
     }
     return json({ from, to, rows: results, daily: [...byDate.values()].sort((a, b) => (a.date < b.date ? 1 : -1)) });
+  }
+
+  // 月次のまとめ。手数料の実額が入っている分はそれを使い、無い日は概算で埋める
+  if (path === "/api/summary") {
+    const u = new URL(req.url);
+    const caseId = u.searchParams.get("case_id");
+    const month = u.searchParams.get("month") ?? jstDate(1).slice(0, 7);
+    const from = `${month}-01`;
+    const to = `${month}-31`;
+    if (!caseId) return json({ error: "案件を指定してください" }, 400);
+
+    const sales = await env.DB.prepare(
+      `SELECT
+         COALESCE(SUM(s.units), 0)   AS units,
+         COALESCE(SUM(s.revenue), 0) AS revenue,
+         COALESCE(SUM(s.returns), 0) AS returns,
+         COALESCE(SUM(COALESCE(
+           (SELECT unit_cost FROM cost_history h
+             WHERE h.product_id = s.product_id AND h.effective_from <= s.date
+             ORDER BY h.effective_from DESC LIMIT 1),
+           (SELECT unit_cost FROM cost_history h
+             WHERE h.product_id = s.product_id ORDER BY h.effective_from ASC LIMIT 1),
+           0) * s.units), 0) AS cost,
+         COALESCE(SUM(COALESCE(s.fee_actual, s.fee_est)), 0) AS fees,
+         SUM(CASE WHEN s.fee_actual IS NULL THEN 1 ELSE 0 END) AS rows_without_actual,
+         COUNT(*) AS rows_total
+       FROM daily_sales s
+      WHERE s.case_id = ? AND s.mall = 'amazon' AND s.date BETWEEN ? AND ?`
+    )
+      .bind(caseId, from, to)
+      .first<Record<string, number>>();
+
+    // 商品に紐づかない費用（注文単位の手数料・月額登録料など）
+    const other = await env.DB.prepare(
+      `SELECT COALESCE(-SUM(amount), 0) AS amount FROM fee_events
+        WHERE case_id = ? AND mall = 'amazon' AND date BETWEEN ? AND ?
+          AND product_id IS NULL AND kind = 'fee'`
+    )
+      .bind(caseId, from, to)
+      .first<{ amount: number }>();
+
+    // 手数料の内訳。何にいくら取られているかを名前ごとに出す
+    const { results: breakdown } = await env.DB.prepare(
+      `SELECT name, -SUM(amount) AS amount, COUNT(*) AS count FROM fee_events
+        WHERE case_id = ? AND mall = 'amazon' AND date BETWEEN ? AND ?
+          AND kind IN ('fee', 'promotion', 'tax_withheld')
+        GROUP BY name ORDER BY amount DESC`
+    )
+      .bind(caseId, from, to)
+      .all();
+
+    const revenue = sales?.revenue ?? 0;
+    const returns = sales?.returns ?? 0;
+    const cost = sales?.cost ?? 0;
+    const fees = sales?.fees ?? 0;
+    const otherFees = other?.amount ?? 0;
+    const gross = revenue - returns - cost - fees - otherFees;
+
+    return json({
+      month, caseId,
+      units: sales?.units ?? 0,
+      revenue, returns, cost, fees, otherFees, gross,
+      grossRate: revenue ? Math.round((gross / revenue) * 1000) / 10 : null,
+      // 損益分岐ROAS = 1 ÷ 広告費を除いた粗利率
+      breakEvenRoas: revenue && gross > 0 ? Math.round((revenue / gross) * 100) / 100 : null,
+      actual: { missing: sales?.rows_without_actual ?? 0, total: sales?.rows_total ?? 0 },
+      breakdown,
+    });
+  }
+
+  // 入金明細の取り込み
+  if (path === "/api/ingest/finances" && req.method === "POST") {
+    const b = (await req.json()) as { caseId?: string; date?: string; days?: number };
+    if (b.caseId) {
+      return json({ results: [await ingestFinances(env, b.caseId, b.date ?? jstDate(2))] });
+    }
+    return json({ results: await pumpFinances(env, { days: b.days ?? 10 }) });
   }
 
   // 取り込みの実行。画面から押されたときはその場で少し待つ
@@ -282,8 +361,11 @@ export default {
         // SP-API のレポートは依頼してから生成までに数分かかる。
         // 6時の実行で依頼し、7時の実行で取りに行く。穴があれば7日前まで遡って埋める
         const results = await pump(env, { days: 7 });
-        const rows = results.reduce((n, r) => n + (r.rows ?? 0), 0);
-        const failed = results.filter((r) => r.status === "error");
+        // 入金明細は売上より遅れて確定するので、別に10日ぶん遡って埋める
+        const fin = await pumpFinances(env, { days: 10 });
+        const rows = results.reduce((n, r) => n + (r.rows ?? 0), 0)
+          + fin.reduce((n, r) => n + (r.rows ?? 0), 0);
+        const failed = [...results, ...fin].filter((r) => r.status === "error");
         await env.DB.prepare(
           `INSERT INTO ingests (id, kind, rows, status, error, source)
            VALUES (?, 'scheduled', ?, ?, ?, 'api')`

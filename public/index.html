@@ -138,11 +138,22 @@
             border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink)">
           <button class="act primary" id="btn-ingest">この日を取り込む</button>
           <button class="act" id="btn-pump">直近7日の穴を埋める</button>
+          <button class="act" id="btn-fin">入金明細を取り込む</button>
           <span class="note" id="ingest-msg"></span>
         </div>
         <p class="note" style="margin-top:10px">Amazon のレポートは依頼してから生成まで数分かかります。
           待っても出来上がらなければ、しばらくしてからもう一度押してください。毎朝6時と7時に自動でも動きます。
           セッション数は Amazon 側であとから埋め直されるため、直近3日は毎日取り直します。</p>
+      </div>
+    </div>
+    <div>
+      <h2>月次のまとめ<span class="hint">手数料の実額ベース</span></h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0;margin-bottom:12px">
+          <input type="month" id="sum-month" style="font:inherit;font-size:13px;padding:7px 10px;
+            border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink)">
+        </div>
+        <div id="summary"></div>
       </div>
     </div>
     <div>
@@ -159,7 +170,7 @@
       <div class="tablewrap">
         <table>
           <thead><tr><th>日付</th><th>SKU</th><th>商品名</th><th class="r">販売数</th><th class="r">売上</th>
-            <th class="r">セッション</th><th class="r">粗利（概算）</th></tr></thead>
+            <th class="r">セッション</th><th class="r">手数料</th><th class="r">粗利</th></tr></thead>
           <tbody id="sales-rows"></tbody>
         </table>
       </div>
@@ -213,7 +224,7 @@
       $(p2).classList.toggle("hidden", p2 !== p);
     });
     if (p === "p-status") loadStatus();
-    if (p === "p-sales") loadSales();
+    if (p === "p-sales") loadSales().then(loadSummary);
     if (p === "p-conn") loadConnections();
   }));
 
@@ -423,6 +434,7 @@
         (cases.cases || []).map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
       const d = new Date(Date.now() + 9 * 3600 * 1000 - 24 * 3600 * 1000);
       $("sales-date").value = d.toISOString().slice(0, 10);
+      $("sum-month").value = d.toISOString().slice(0, 7);
       salesCasesLoaded = true;
     }
     const caseId = $("sales-case").value;
@@ -438,17 +450,77 @@
     $("no-sales").classList.toggle("hidden", rows.length > 0);
     $("sales-rows").innerHTML = rows.map((r) => {
       // 粗利の概算は原価ぶんだけ。手数料の実額は入金明細が入ってから
-      const gross = r.unit_cost != null ? r.revenue - r.unit_cost * r.units : null;
+      // 手数料は実額があればそれを使い、無ければ概算。どちらか分かるよう印をつける
+      const feeActual = r.fee_actual != null;
+      const fee = feeActual ? r.fee_actual : (r.fee_est || 0);
+      const gross = r.unit_cost != null ? r.revenue - r.unit_cost * r.units - fee - (r.returns || 0) : null;
       // 原価の適用開始日より前の日は、いちばん古い原価で代用している
       const mark = r.cost_before_record ? `<span title="原価の適用開始日より前の日です。いちばん古い原価で計算しています">*</span>` : "";
       return `<tr><td>${esc(r.date)}</td><td>${esc(r.sku) || "—"}</td><td>${esc(r.name) || "（未登録）"}</td>
         <td class="r">${r.units}</td><td class="r">${yen(r.revenue)}</td>
         <td class="r">${r.sessions == null ? "—" : r.sessions}</td>
+        <td class="r">${fee ? yen(fee) : "—"}${feeActual ? "" : `<span class="tag wait" style="margin-left:5px">概算</span>`}</td>
         <td class="r">${gross == null ? "—" : yen(gross) + mark}</td></tr>`;
     }).join("");
   }
 
-  $("sales-case").addEventListener("change", loadSales);
+  async function loadSummary() {
+    const caseId = $("sales-case").value;
+    if (!caseId) {
+      $("summary").innerHTML = `<p class="note">案件を選ぶと月次のまとめが出ます。</p>`;
+      return;
+    }
+    const d = await get(`/api/summary?case_id=${encodeURIComponent(caseId)}&month=${$("sum-month").value}`);
+    if (d.error) { $("summary").innerHTML = `<p class="note">${esc(d.error)}</p>`; return; }
+
+    const rows = [
+      ["売上", yen(d.revenue)],
+      ["返品", d.returns ? "-" + yen(d.returns) : "—"],
+      ["原価", "-" + yen(d.cost)],
+      ["手数料", "-" + yen(d.fees)],
+      ["その他の費用（商品に紐づかないもの）", d.otherFees ? "-" + yen(d.otherFees) : "—"],
+      ["<strong>粗利</strong>", `<strong>${yen(d.gross)}</strong>${d.grossRate != null ? `（${d.grossRate}%）` : ""}`],
+      ["損益分岐ROAS", d.breakEvenRoas != null ? d.breakEvenRoas + "倍" : "—"]
+    ];
+    const shared = d.otherFees
+      ? `<p class="note" style="margin-top:10px">「その他の費用」は商品に紐づかない費用（注文単位の手数料・月額登録料など）です。
+         複数の案件が同じセラーアカウントを使っている場合、月額登録料などは案件ごとに重複して入ります。
+         案件単位で見るときは粗利から除いて考えてください。</p>` : "";
+    const warn = d.actual.missing
+      ? `<p class="note" style="margin-top:10px">${d.actual.total} 行のうち ${d.actual.missing} 行はまだ手数料の実額が入っていません（概算で計算しています）。
+         「入金明細を取り込む」を押すか、翌朝の自動実行を待ってください。</p>` : "";
+    const bd = (d.breakdown || []).length
+      ? `<div class="tablewrap" style="margin-top:14px"><table style="min-width:420px">
+          <thead><tr><th>手数料の内訳</th><th class="r">件数</th><th class="r">金額</th></tr></thead>
+          <tbody>${d.breakdown.map((b) => `<tr><td>${esc(b.name)}</td>
+            <td class="r">${b.count}</td><td class="r">${yen(b.amount)}</td></tr>`).join("")}</tbody></table></div>`
+      : "";
+    $("summary").innerHTML = rows.map(([k, v]) =>
+      `<div class="row"><span>${k}</span><span class="v">${v}</span></div>`).join("") + shared + warn + bd;
+  }
+
+  $("sales-case").addEventListener("change", () => { loadSales(); loadSummary(); });
+  $("sum-month").addEventListener("change", loadSummary);
+
+  $("btn-fin").addEventListener("click", async () => {
+    const caseId = $("sales-case").value;
+    const btn = $("btn-fin");
+    btn.disabled = true;
+    $("ingest-msg").textContent = caseId ? "入金明細を取り込み中…" : "全案件の入金明細を確認しています…";
+    try {
+      const r = await fetch("/api/ingest/finances", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(caseId ? { caseId, date: $("sales-date").value } : { days: 10 })
+      });
+      const d = await r.json();
+      const list = d.results || [];
+      $("ingest-msg").textContent = list.length
+        ? list.map((x) => `${x.date}: ${x.message}`).join(" / ")
+        : "取り込む日がありませんでした";
+      await loadSales();
+      await loadSummary();
+    } finally { btn.disabled = false; }
+  });
 
   $("btn-ingest").addEventListener("click", async () => {
     const caseId = $("sales-case").value;
