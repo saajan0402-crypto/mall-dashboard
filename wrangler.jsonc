@@ -31,7 +31,7 @@
   ],
 
   // 毎朝6時（JST）に日次バッチ。cron は UTC で書くため 21:00 UTC = 翌 6:00 JST
-  "triggers": { "crons": ["0 21 * * *", "0 22 * * *"] },
+  "triggers": { "crons": ["0 21 * * *", "0 22 * * *", "*/5 * * * *"] },
 
   "observability": { "enabled": true }
 }

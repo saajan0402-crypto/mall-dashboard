@@ -187,6 +187,39 @@
         <div id="summary"></div>
       </div>
     </div>
+    <div>
+      <h2>過去データの取り込み<span class="hint">案件ごとに一度だけ</span></h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0">
+          <select id="bf-days" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
+            border-radius:5px;background:var(--surface-2);color:var(--ink)">
+            <option value="90">過去90日</option>
+            <option value="180">過去180日</option>
+            <option value="365" selected>過去365日</option>
+            <option value="730">過去730日（2年・Amazonの上限）</option>
+          </select>
+          <label style="display:flex;gap:6px;align-items:center;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="bf-traffic" checked>セッション数も取り込む
+          </label>
+          <button class="act primary" id="btn-bf-start">取り込みを開始</button>
+          <button class="act" id="btn-bf-stop" disabled>画面での進行を止める</button>
+          <span class="note" id="bf-msg"></span>
+        </div>
+        <div id="bf-progress" style="margin-top:12px"></div>
+        <p class="note" style="margin-top:10px">上の案件の選択に従います。
+          <strong>画面を閉じても構いません。</strong>5分ごとのバッチが裏で進め続けます。
+          開いたままにしておくと、そのぶん早く終わります。</p>
+        <p class="note" style="margin-top:6px">3段階で進みます。
+          <strong>①売上（注文API）</strong>は速く、365日でも20分ほどで終わります。
+          <strong>②セッション数</strong>はAmazonのレポートから取りますが、依頼と取得がそれぞれ1分に1回しか呼べないため
+          <strong>1日あたり約2分、30日ぶんで1時間</strong>かかります。365日なら半日ほど、730日なら丸1日ほど裏で動き続けます。
+          <strong>③入金明細</strong>で手数料の実額と返品額が入ります。</p>
+        <p class="note" style="margin-top:6px">②を外すと速く終わりますが、<strong>過去分のCVRが出せません</strong>。
+          広告の評価に使う数字なので、入れておくことをおすすめします。
+          直近7日はふだんの処理が持っているので、ここでは8日前より古い分だけを取りに行きます。</p>
+      </div>
+    </div>
+
     <div id="sales-chart-view" class="hidden" style="display:grid;gap:18px">
       <div class="chart">
         <h3>日別の売上</h3>
@@ -384,7 +417,7 @@
       $(p2).classList.toggle("hidden", p2 !== p);
     });
     if (p === "p-status") loadStatus();
-    if (p === "p-sales") loadSales().then(loadSummary);
+    if (p === "p-sales") loadSales().then(loadSummary).then(loadBackfill);
     if (p === "p-stock") loadStock();
     if (p === "p-conn") loadConnections();
   }));
@@ -931,6 +964,87 @@
     })), yen);
   }
 
+  /* ---------- 過去データ ---------- */
+  let bfLoop = false;
+
+  function renderBackfill(progress) {
+    const KIND = { orders: "① 売上（注文API）", traffic: "② セッション数（レポート）", finances: "③ 入金明細" };
+    const list = progress || [];
+    if (!list.length) { $("bf-progress").innerHTML = ""; return list; }
+    $("bf-progress").innerHTML = list.map((p) => {
+      const pct = p.total ? Math.min(100, Math.round((p.done / p.total) * 100)) : 0;
+      const cls = p.status === "done" ? "ok" : p.status === "error" ? "ng" : "wait";
+      const label = p.status === "done" ? "完了" : p.status === "error" ? "失敗" : "取り込み中";
+      return `<div class="row">
+        <span>${esc(p.caseName || "")} ／ ${KIND[p.kind] || p.kind}
+          <span class="note" style="display:block">${esc(p.fromDate)} 〜 ${esc(p.toDate)}${
+            p.note ? `　${esc(p.note)}` : ""}</span></span>
+        <span class="v"><span class="tag ${cls}">${label}</span>
+          <span style="display:inline-block;width:110px;height:6px;background:var(--surface-2);
+            border-radius:3px;margin:0 8px;vertical-align:middle">
+            <span style="display:block;width:${pct}%;height:6px;background:var(--accent);border-radius:3px"></span>
+          </span>${p.kind === "orders" ? p.done + "件" : p.done + "日"}</span>
+      </div>`;
+    }).join("");
+    return list;
+  }
+
+  async function bfStep() {
+    const caseId = $("sales-case").value;
+    const r = await fetch("/api/backfill", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "run", caseId: caseId || undefined })
+    });
+    const d = await r.json();
+    return renderBackfill(d.progress);
+  }
+
+  async function bfRunLoop() {
+    bfLoop = true;
+    $("btn-bf-start").disabled = true;
+    $("btn-bf-stop").disabled = false;
+    try {
+      for (let i = 0; i < 400 && bfLoop; i++) {
+        $("bf-msg").textContent = `取り込み中…（${i + 1}回目）`;
+        const list = await bfStep();
+        if (!list.some((p) => p.status === "running")) {
+          $("bf-msg").textContent = list.some((p) => p.status === "error")
+            ? "一部が失敗しました。進み具合を確認してください" : "完了しました";
+          await loadSales(); await loadSummary();
+          return;
+        }
+      }
+      $("bf-msg").textContent = bfLoop
+        ? "画面での進行はここまでです。あとは5分ごとのバッチが続きを進めます"
+        : "画面での進行を止めました。5分ごとのバッチは続きを進めます";
+    } finally {
+      bfLoop = false;
+      $("btn-bf-start").disabled = false;
+      $("btn-bf-stop").disabled = true;
+      await loadSales(); await loadSummary();
+    }
+  }
+
+  $("btn-bf-start").addEventListener("click", async () => {
+    const caseId = $("sales-case").value;
+    if (!caseId) { $("bf-msg").textContent = "案件を選んでください"; return; }
+    const running = (await get(`/api/backfill?case_id=${encodeURIComponent(caseId)}`)).progress || [];
+    // すでに途中まで進んでいれば、期間を取り直さず続きから
+    if (!running.some((p) => p.status === "running")) {
+      const r = await fetch("/api/backfill", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "start", caseId, days: Number($("bf-days").value),
+          traffic: $("bf-traffic").checked })
+      });
+      const d = await r.json();
+      if (d.error) { $("bf-msg").textContent = d.error; return; }
+      renderBackfill(d.progress);
+    }
+    bfRunLoop();
+  });
+
+  $("btn-bf-stop").addEventListener("click", () => { bfLoop = false; $("bf-msg").textContent = "止めています…"; });
+
   function setSalesView(v) {
     salesView = v;
     $("view-table").setAttribute("aria-pressed", String(v === "table"));
@@ -938,6 +1052,12 @@
     $("sales-table-view").classList.toggle("hidden", v !== "table");
     $("sales-chart-view").classList.toggle("hidden", v !== "chart");
   }
+  async function loadBackfill() {
+    const caseId = $("sales-case").value;
+    const d = await get("/api/backfill" + (caseId ? `?case_id=${encodeURIComponent(caseId)}` : ""));
+    renderBackfill(d.progress);
+  }
+
   $("view-table").addEventListener("click", () => setSalesView("table"));
   $("view-chart").addEventListener("click", () => setSalesView("chart"));
 
@@ -977,7 +1097,7 @@
       `<div class="row"><span>${k}</span><span class="v">${v}</span></div>`).join("") + shared + warn + bd;
   }
 
-  $("sales-case").addEventListener("change", () => { loadSales(); loadSummary(); });
+  $("sales-case").addEventListener("change", () => { loadSales(); loadSummary(); loadBackfill(); });
   $("sum-month").addEventListener("change", loadSummary);
 
   $("btn-fin").addEventListener("click", async () => {

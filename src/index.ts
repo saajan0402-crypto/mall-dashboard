@@ -15,6 +15,7 @@ import { ingestFinances, pumpFinances } from "./ingestFinances";
 import { feeLabel, isKnownFee } from "./feeNames";
 import { ingestInventory, pumpInventory, inventoryStatus, notifyInventory } from "./ingestInventory";
 import { ingestSns, pumpSns } from "./ingestSns";
+import { startBackfill, runBackfill, backfillStatus } from "./backfill";
 
 export interface Env {
   DB: D1Database;
@@ -259,6 +260,29 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     });
   }
 
+  /* ───────── 過去データの取り込み ───────── */
+
+  if (path === "/api/backfill" && req.method === "GET") {
+    const caseId = new URL(req.url).searchParams.get("case_id") ?? undefined;
+    return json({ progress: await backfillStatus(env, caseId) });
+  }
+
+  if (path === "/api/backfill" && req.method === "POST") {
+    const b = (await req.json().catch(() => ({}))) as {
+      caseId?: string; days?: number; action?: "start" | "run"; traffic?: boolean;
+    };
+    if (b.action === "start") {
+      if (!b.caseId) return json({ error: "案件を選んでください" }, 400);
+      try {
+        return json({ progress: await startBackfill(env, b.caseId, b.days ?? 365, { traffic: b.traffic }) });
+      } catch (e) {
+        return json({ error: String(e instanceof Error ? e.message : e) }, 400);
+      }
+    }
+    // 進める。画面から繰り返し呼ばれる
+    return json(await runBackfill(env, { caseId: b.caseId, budgetMs: 48000 }));
+  }
+
   // 入金明細の取り込み
   if (path === "/api/ingest/finances" && req.method === "POST") {
     const b = (await req.json()) as { caseId?: string; date?: string; days?: number };
@@ -437,7 +461,22 @@ export default {
    * 毎朝6時（JST）の日次バッチ。
    * ver 0.8 では枠だけ。SP-API / RMS の取り込みをここに足していく。
    */
-  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    // 5分ごとの実行は、過去データの取り込みを進めるためだけのもの。
+    // レポートの呼び出し制限が1分に1回なので、短い間隔で少しずつ進めるほうが早く終わる
+    if (event.cron === "*/5 * * * *") {
+      ctx.waitUntil(
+        (async () => {
+          const pending = await env.DB
+            .prepare("SELECT COUNT(*) AS n FROM backfill WHERE status = 'running'")
+            .first<{ n: number }>();
+          if (!pending?.n) return;
+          await runBackfill(env, { budgetMs: 240000 });
+        })()
+      );
+      return;
+    }
+
     ctx.waitUntil(
       (async () => {
         // SP-API のレポートは依頼してから生成までに数分かかる。
@@ -449,6 +488,7 @@ export default {
         await pumpSns(env);
         await pumpInventory(env);
         await notifyInventory(env);
+        // 過去データの取り込みは5分ごとの実行に任せている
         const rows = results.reduce((n, r) => n + (r.rows ?? 0), 0)
           + fin.reduce((n, r) => n + (r.rows ?? 0), 0);
         const failed = [...results, ...fin].filter((r) => r.status === "error");
