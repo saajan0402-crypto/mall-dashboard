@@ -198,7 +198,13 @@ export interface InventoryRow {
   velocity: number | null;
   daysOfSupply: number | null;
   threshold: number;
+  /** 定期おトク便。確定した将来需要なので在庫判断に効く */
+  subscriptions: number | null;
+  snsNext30: number | null;
+  snsNotDelivered: number | null;
   level: "out" | "risk" | "watch" | "ok" | "unknown";
+  /** なぜその判定になったか */
+  reason: string;
 }
 
 /** 設定の継承：商品 → 案件 → 会社共通 */
@@ -224,10 +230,14 @@ export async function inventoryStatus(db: D1Database, caseId?: string): Promise<
   const { results } = await db
     .prepare(
       `SELECT i.case_id, c.name AS case_name, i.product_id, p.sku, p.name, i.date,
-              i.qty, i.inbound, i.reserved, i.unfulfillable, i.velocity, i.days_of_supply
+              i.qty, i.inbound, i.reserved, i.unfulfillable, i.velocity, i.days_of_supply,
+              s.subscriptions, s.next30_units, s.oos_not_delivered
          FROM daily_inventory i
          JOIN products p ON p.id = i.product_id
          JOIN cases c ON c.id = i.case_id
+         LEFT JOIN sns_offers s
+                ON s.product_id = i.product_id
+               AND s.date = (SELECT MAX(date) FROM sns_offers x WHERE x.product_id = i.product_id)
         WHERE i.mall = 'amazon'
           AND i.date = (SELECT MAX(date) FROM daily_inventory d
                          WHERE d.case_id = i.case_id AND d.mall = 'amazon')
@@ -245,12 +255,35 @@ export async function inventoryStatus(db: D1Database, caseId?: string): Promise<
     const dos = r.days_of_supply == null ? null : Number(r.days_of_supply);
     const qty = Number(r.qty ?? 0);
 
+    const subscriptions = r.subscriptions == null ? null : Number(r.subscriptions);
+    const snsNext30 = r.next30_units == null ? null : Number(r.next30_units);
+    const snsNotDelivered = r.oos_not_delivered == null ? null : Number(r.oos_not_delivered);
+
+    // 定期おトク便は確定した将来需要なので、販売ペースより優先して見る
     let level: InventoryRow["level"];
-    if (qty <= 0) level = "out";
-    else if (dos == null) level = "unknown";
-    else if (dos < threshold) level = "risk";
-    else if (dos < threshold * 2) level = "watch";
-    else level = "ok";
+    let reason: string;
+    if (qty <= 0) {
+      level = "out";
+      reason = "販売可能な在庫がありません";
+    } else if (snsNotDelivered && snsNotDelivered > 0) {
+      level = "out";
+      reason = `在庫切れで定期便を ${snsNotDelivered} 個届けられませんでした`;
+    } else if (snsNext30 != null && snsNext30 > 0 && qty < snsNext30) {
+      level = "risk";
+      reason = `今後30日の定期便 ${snsNext30} 個に対して在庫が ${qty} 個しかありません`;
+    } else if (dos == null) {
+      level = "unknown";
+      reason = "販売実績がないため日数を出せません";
+    } else if (dos < threshold) {
+      level = "risk";
+      reason = `残り約${dos}日（しきい値 ${threshold}日）`;
+    } else if (dos < threshold * 2) {
+      level = "watch";
+      reason = `残り約${dos}日`;
+    } else {
+      level = "ok";
+      reason = `残り約${dos}日`;
+    }
 
     return {
       caseId: cid, caseName: String(r.case_name), productId,
@@ -258,7 +291,7 @@ export async function inventoryStatus(db: D1Database, caseId?: string): Promise<
       qty, inbound: Number(r.inbound ?? 0), reserved: Number(r.reserved ?? 0),
       unfulfillable: Number(r.unfulfillable ?? 0),
       velocity: r.velocity == null ? null : Math.round(Number(r.velocity) * 100) / 100,
-      daysOfSupply: dos, threshold, level,
+      daysOfSupply: dos, threshold, subscriptions, snsNext30, snsNotDelivered, level, reason,
     };
   });
 }
@@ -271,9 +304,9 @@ export async function notifyInventory(env: InventoryEnv): Promise<{ sent: boolea
 
   const lines = urgent.map((r) => {
     const head = r.level === "out" ? ":red_circle: 在庫切れ" : ":warning: 欠品間近";
-    const days = r.daysOfSupply == null ? "販売実績なし" : `あと約${r.daysOfSupply}日`;
     const inbound = r.inbound ? `／納品中 ${r.inbound}個` : "";
-    return `${head}　*${r.caseName}* ${r.sku}（${r.name}）　在庫 ${r.qty}個・${days}${inbound}`;
+    const sns = r.subscriptions ? `／定期便 ${r.subscriptions}件` : "";
+    return `${head}　*${r.caseName}* ${r.sku}（${r.name}）　在庫 ${r.qty}個${inbound}${sns}\n　　${r.reason}`;
   });
 
   await fetch(env.SLACK_WEBHOOK_URL, {

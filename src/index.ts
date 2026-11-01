@@ -14,6 +14,7 @@ import { advance, pump, jstDate } from "./ingestSales";
 import { ingestFinances, pumpFinances } from "./ingestFinances";
 import { feeLabel, isKnownFee } from "./feeNames";
 import { ingestInventory, pumpInventory, inventoryStatus, notifyInventory } from "./ingestInventory";
+import { ingestSns, pumpSns } from "./ingestSns";
 
 export interface Env {
   DB: D1Database;
@@ -290,6 +291,13 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     });
   }
 
+  // 定期おトク便。在庫の取り込みとセットで動かす
+  if (path === "/api/ingest/sns" && req.method === "POST") {
+    const b = (await req.json().catch(() => ({}))) as { caseId?: string };
+    const results = b.caseId ? [await ingestSns(env, b.caseId)] : await pumpSns(env);
+    return json({ results });
+  }
+
   if (path === "/api/ingest/inventory" && req.method === "POST") {
     const b = (await req.json().catch(() => ({}))) as { caseId?: string };
     const results = b.caseId ? [await ingestInventory(env, b.caseId)] : await pumpInventory(env);
@@ -437,7 +445,8 @@ export default {
         const results = await pump(env, { days: 7 });
         // 入金明細は売上より遅れて確定するので、別に10日ぶん遡って埋める
         const fin = await pumpFinances(env, { days: 10 });
-        // 在庫は毎日とり直し、欠品・欠品間近があれば Slack に流す
+        // 在庫は毎日とり直す。定期便を先に取り込むのは、判定に使うため
+        await pumpSns(env);
         await pumpInventory(env);
         await notifyInventory(env);
         const rows = results.reduce((n, r) => n + (r.rows ?? 0), 0)

@@ -190,6 +190,7 @@
           <select id="stock-case" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
             border-radius:5px;background:var(--surface-2);color:var(--ink)"></select>
           <button class="act primary" id="btn-stock">在庫を取り込む</button>
+          <button class="act" id="btn-sns">定期おトク便を取り込む</button>
           <span class="note" id="stock-msg"></span>
         </div>
         <div id="stock-summary" style="margin-top:12px"></div>
@@ -201,7 +202,8 @@
         <table>
           <thead><tr><th>状態</th><th>案件</th><th>SKU</th><th>商品名</th>
             <th class="r">販売可能</th><th class="r">納品中</th><th class="r">引当済み</th><th class="r">販売不可</th>
-            <th class="r">1日あたり</th><th class="r">残り日数</th><th class="r">しきい値</th></tr></thead>
+            <th class="r">1日あたり</th><th class="r">残り日数</th><th class="r">しきい値</th>
+            <th class="r">定期便</th><th class="r">今後30日</th></tr></thead>
           <tbody id="stock-rows"></tbody>
         </table>
       </div>
@@ -209,6 +211,9 @@
       <p class="note">残り日数は「販売可能な在庫 ÷ 直近28日の1日あたり販売数」です。納品中は含めていません。
         販売実績のない商品は日数を出せないので「—」になります。
         しきい値は商品マスタの「在庫アラート日数」、未設定なら会社共通の設定を使います。</p>
+      <p class="note"><strong>定期おトク便は確定した将来需要</strong>なので、販売ペースより優先して判定します。
+        今後30日の定期便が販売可能な在庫を上回っていたら、残り日数に余裕があっても「欠品間近」にします。
+        在庫切れで定期便を届けられなかった実績があれば「在庫切れ」扱いです。</p>
     </div>
   </section>
 
@@ -218,6 +223,63 @@
       <h2>モールとの接続<span class="hint">管理者のみ／案件ごとに登録</span></h2>
       <div id="conn-guard"></div>
       <div id="conn-app" class="card hidden" style="margin-bottom:16px"></div>
+
+      <!-- 案件を追加するたびに必要になる設定。手順を探し直さなくて済むよう画面に置いている -->
+      <details class="card" style="margin-bottom:16px">
+        <summary style="cursor:pointer;font-weight:700;font-size:13.5px">案件を追加するときの設定メモ</summary>
+        <p class="note" style="margin-top:12px">新しい店舗をつなぐたびに、モール側でこの設定が要ります。
+          ここに挙げたものは<strong>すべて有効にしてください</strong>。取得・検索だけで、書き換える機能はひとつも含めていません。</p>
+
+        <h3 style="font-size:13px;margin:18px 0 8px">Amazon（SP-API）</h3>
+        <p class="note" style="margin:0 0 8px">セラーセントラル → アプリとサービス → アプリを開発 →
+          自己認可でリフレッシュトークンを発行。アプリに次のロールが付いている必要があります。</p>
+        <div class="tablewrap"><table style="min-width:520px">
+          <thead><tr><th>ロール</th><th>これが無いと使えないもの</th></tr></thead>
+          <tbody>
+            <tr><td>在庫および注文のトラッキング</td><td>注文の取得</td></tr>
+            <tr><td>Amazonフルフィルメント</td><td>FBA在庫・欠品アラート・定期おトク便</td></tr>
+            <tr><td>財務および会計</td><td>入金明細（手数料の実額）</td></tr>
+            <tr><td>ブランド分析</td><td>売上・トラフィックレポート、検索用語レポート、競合データ</td></tr>
+          </tbody></table></div>
+        <p class="note" style="margin-top:8px">広告データは SP-API ではなく <strong>Amazon Ads API</strong> の別途承認が必要です。
+          承認が下りるまでは広告レポートのCSV取り込みで運用します。</p>
+
+        <h3 style="font-size:13px;margin:22px 0 8px">楽天（RMS WEB SERVICE）</h3>
+        <p class="note" style="margin:0 0 8px">RMS → 店舗様向け情報・サービス → WEB APIサービス → 利用設定 → アプリ一覧 →
+          APIアクセス許可設定。<strong>チェックが入っていないと、鍵が正しくても全API が 401 になります。</strong></p>
+        <div class="tablewrap"><table style="min-width:600px">
+          <thead><tr><th>API</th><th>有効にする機能</th></tr></thead>
+          <tbody>
+            <tr><td>楽天ペイ受注API</td><td style="font-family:var(--mono);font-size:11.5px">
+              rpay.order.searchOrder ／ rpay.order.getOrder ／ rpay.order.getPayment ／ rpay.order.getSubStatusList</td></tr>
+            <tr><td>在庫API 2.1</td><td style="font-family:var(--mono);font-size:11.5px">
+              inventories.bulk.get.range_2.1 ／ inventories.bulk.get_2.1 ／ inventories.variant-lists.get ／ inventories.variants.get_2.1</td></tr>
+            <tr><td>在庫API 2.0</td><td style="font-family:var(--mono);font-size:11.5px">
+              inventories.bulk.get.range ／ inventories.bulk.get ／ inventories.variants.get</td></tr>
+            <tr><td>商品API 2.0</td><td style="font-family:var(--mono);font-size:11.5px">
+              itemapi_2.0.items.search ／ itemapi_2.0.items.get ／ itemapi_2.0.items.bulk.get ／ itemapi_2.0.inv-settings.get</td></tr>
+            <tr><td>問い合わせ管理API</td><td style="font-family:var(--mono);font-size:11.5px">
+              inquirymngapi.counts.get ／ inquirymngapi.inquiries.get ／ inquirymngapi.inquiry.get ／ inquirymngapi.attachment.get</td></tr>
+            <tr><td>ライセンス管理</td><td class="note">「LicenseManagementAPI」「ライセンス管理」に相当する項目があれば有効に。有効期限の取得に使います</td></tr>
+          </tbody></table></div>
+
+        <p class="note" style="margin-top:12px"><strong>有効にしてはいけないもの</strong>：
+          名前に <code>update</code> <code>upsert</code> <code>patch</code> <code>delete</code> <code>cancel</code>
+          <code>confirm</code> <code>post</code> が付く機能。このシステムはモールに書き込まないので、
+          権限を持たせる理由がありません。問い合わせの <code>reply.post</code> も同様です（下書きまで作り、送信は人がやる方針）。</p>
+
+        <h3 style="font-size:13px;margin:22px 0 8px">つまずきやすいところ</h3>
+        <ul class="steps" style="font-size:12.5px">
+          <li><strong>商品API 2.0 は「商品一括登録」への別途申込みが必要</strong>です。無くても売上・在庫・広告は動きます</li>
+          <li><strong>楽天のライセンスキーは90日ごとに更新</strong>が必要。切れると全APIが一斉に401になります</li>
+          <li>2025年6月に楽天の認証方式が変わり、licenseKey は「アプリ」単位で発行される形になりました。
+            serviceSecret と licenseKey は<strong>同じアプリの組み合わせ</strong>である必要があります</li>
+          <li>機能のチェックを変えたあと、<strong>ライセンスキーの再発行が必要な場合があります</strong></li>
+          <li>楽天のRPP広告にAPIはありません（楽天に確認済み）。広告データはCSV取り込みのままです</li>
+          <li>設定が終わったら、下の該当案件で「APIを一通り試す」を押して全部通るか確認してください</li>
+        </ul>
+      </details>
+
       <div id="conn-list"></div>
     </div>
   </section>
@@ -713,18 +775,40 @@
     $("no-stock").classList.toggle("hidden", rows.length > 0);
     $("stock-rows").innerHTML = rows.map((r) => {
       const [cls, label] = LEVEL[r.level] || ["wait", r.level];
+      // 定期便が在庫を上回っているときは数字を目立たせる
+      const short = r.snsNext30 != null && r.snsNext30 > r.qty;
       return `<tr>
-        <td><span class="tag ${cls}">${label}</span></td>
+        <td><span class="tag ${cls}">${label}</span>
+          <div class="note" style="margin-top:3px">${esc(r.reason)}</div></td>
         <td>${esc(r.caseName)}</td><td>${esc(r.sku)}</td><td>${esc(r.name)}</td>
         <td class="r">${r.qty}</td><td class="r">${r.inbound || "—"}</td>
         <td class="r">${r.reserved || "—"}</td><td class="r">${r.unfulfillable || "—"}</td>
         <td class="r">${r.velocity == null ? "—" : r.velocity}</td>
         <td class="r">${r.daysOfSupply == null ? "—" : r.daysOfSupply + "日"}</td>
-        <td class="r">${r.threshold}日</td></tr>`;
+        <td class="r">${r.threshold}日</td>
+        <td class="r">${r.subscriptions == null ? "—" : r.subscriptions + "件"}</td>
+        <td class="r">${r.snsNext30 == null ? "—" : `<span class="${short ? "" : ""}" ${short ? 'style="color:var(--risk);font-weight:700"' : ""}>${r.snsNext30}個</span>`}</td>
+        </tr>`;
     }).join("");
   }
 
   $("stock-case").addEventListener("change", loadStock);
+
+  $("btn-sns").addEventListener("click", async () => {
+    const btn = $("btn-sns");
+    const caseId = $("stock-case").value;
+    btn.disabled = true;
+    $("stock-msg").textContent = "定期おトク便を取り込み中…（呼び出し制限があるため20秒ほどかかります）";
+    try {
+      const r = await fetch("/api/ingest/sns", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(caseId ? { caseId } : {})
+      });
+      const d = await r.json();
+      $("stock-msg").textContent = (d.results || []).map((x) => x.message).join(" / ") || "結果がありません";
+      await loadStock();
+    } finally { btn.disabled = false; }
+  });
 
   $("btn-stock").addEventListener("click", async () => {
     const btn = $("btn-stock");
