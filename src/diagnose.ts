@@ -194,44 +194,45 @@ async function probeAmazon(env: ConnEnv & LwaEnv, caseId: string): Promise<Probe
   //   - sellingPartners/metrics/search は条件を本文の直下に置く形で通る
   //   - offers/* は条件を filters でくるむ必要がある（[filters is required]）
   //   - このAPIは呼び出し制限が厳しく、続けて叩くと 429 が返る。間隔をあける
-  const snsInterval = {
-    startDate: isoDate(daysAgo(28)) + "T00:00:00Z",
-    endDate: isoDate(daysAgo(1)) + "T00:00:00Z",
-  };
-  const snsFuture = {
-    startDate: isoDate(daysAgo(0)) + "T00:00:00Z",
-    endDate: isoDate(daysAgo(-56)) + "T00:00:00Z",
-  };
-  const snsCommon = (interval: { startDate: string; endDate: string }, type: "PERFORMANCE" | "FORECAST") => ({
-    aggregationFrequency: "WEEK",
-    timeInterval: interval,
-    timePeriodType: type,
+  // 週は日曜はじまり・土曜おわり。商品別は「ちょうど1週間」でないと受け付けられない
+  const weekStr = (d: Date) => d.toISOString().slice(0, 10) + "T00:00:00Z";
+  const dayOf = (d: Date, n: number) => new Date(d.getTime() + n * 24 * 60 * 60 * 1000);
+  const today = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  // 直近の「終わった週」（今日より前のいちばん近い土曜で終わる週）
+  const backToSat = ((today.getUTCDay() - 6) + 7) % 7 || 7;
+  const lastSat = dayOf(today, -backToSat);
+  const lastWeek = { startDate: weekStr(dayOf(lastSat, -6)), endDate: weekStr(lastSat) };
+  // これから先の8週間（次の日曜から）
+  const toSun = (7 - today.getUTCDay()) % 7 || 7;
+  const nextSun = dayOf(today, toSun);
+  const future = { startDate: weekStr(nextSun), endDate: weekStr(dayOf(nextSun, 55)) };
+
+  const base = {
     marketplaceId: JP_MARKETPLACE,
     programTypes: ["SUBSCRIBE_AND_SAVE"],
-  });
+  };
+  // 実績は週ごとの集計を指定する。予測は aggregationFrequency を付けると弾かれる
+  const perf = { ...base, aggregationFrequency: "WEEK", timeInterval: lastWeek, timePeriodType: "PERFORMANCE" };
+  const fcst = { ...base, timeInterval: future, timePeriodType: "FORECAST" };
 
   const snsCalls: Array<[string, string, string, Record<string, unknown>]> = [
     ["sns_partner_perf", "定期おトク便の実績（店舗全体）",
       "/replenishment/2022-11-07/sellingPartners/metrics/search",
-      { ...snsCommon(snsInterval, "PERFORMANCE"),
-        metrics: ["TOTAL_SUBSCRIPTIONS_REVENUE", "SHIPPED_SUBSCRIPTION_UNITS", "ACTIVE_SUBSCRIPTIONS"] }],
+      { ...perf, metrics: ["TOTAL_SUBSCRIPTIONS_REVENUE", "SHIPPED_SUBSCRIPTION_UNITS", "ACTIVE_SUBSCRIPTIONS"] }],
     ["sns_partner_forecast", "定期おトク便の予測（店舗全体）",
       "/replenishment/2022-11-07/sellingPartners/metrics/search",
-      { ...snsCommon(snsFuture, "FORECAST"), metrics: ["SHIPPED_SUBSCRIPTION_UNITS"] }],
+      { ...fcst, metrics: ["SHIPPED_SUBSCRIPTION_UNITS"] }],
     ["sns_offer_perf", "定期おトク便の実績（商品別）",
       "/replenishment/2022-11-07/offers/metrics/search",
-      { filters: snsCommon(snsInterval, "PERFORMANCE"),
-        metrics: ["SHIPPED_SUBSCRIPTION_UNITS", "TOTAL_SUBSCRIPTIONS_REVENUE"],
+      { filters: perf, metrics: ["SHIPPED_SUBSCRIPTION_UNITS", "TOTAL_SUBSCRIPTIONS_REVENUE"],
         pagination: { limit: 10, offset: 0 } }],
     ["sns_offer_forecast", "定期おトク便の予測（商品別）",
       "/replenishment/2022-11-07/offers/metrics/search",
-      { filters: snsCommon(snsFuture, "FORECAST"),
-        metrics: ["SHIPPED_SUBSCRIPTION_UNITS"],
+      { filters: fcst, metrics: ["SHIPPED_SUBSCRIPTION_UNITS"],
         pagination: { limit: 10, offset: 0 } }],
     ["sns_offers", "定期おトク便の設定（商品別）",
       "/replenishment/2022-11-07/offers/search",
-      { filters: { marketplaceId: JP_MARKETPLACE, programTypes: ["SUBSCRIBE_AND_SAVE"] },
-        pagination: { limit: 10, offset: 0 } }],
+      { filters: base, pagination: { limit: 10, offset: 0 } }],
   ];
 
   for (let i = 0; i < snsCalls.length; i++) {
