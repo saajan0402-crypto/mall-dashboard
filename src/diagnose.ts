@@ -188,7 +188,12 @@ async function probeAmazon(env: ConnEnv & LwaEnv, caseId: string): Promise<Probe
   ];
 
   // 定期おトク便。旧レポート（GET_FBA_SNS_FORECAST_DATA）は2025年12月に廃止されたので
-  // 後継の Replenishment API を試す。本体の作りを決めるため、通った場合は応答の冒頭も出す
+  // 後継の Replenishment API を試す。本体の作りを決めるため、通った場合は応答の冒頭も出す。
+  //
+  // 分かったこと（2026-11-01 の実測）
+  //   - sellingPartners/metrics/search は条件を本文の直下に置く形で通る
+  //   - offers/* は条件を filters でくるむ必要がある（[filters is required]）
+  //   - このAPIは呼び出し制限が厳しく、続けて叩くと 429 が返る。間隔をあける
   const snsInterval = {
     startDate: isoDate(daysAgo(28)) + "T00:00:00Z",
     endDate: isoDate(daysAgo(1)) + "T00:00:00Z",
@@ -197,41 +202,60 @@ async function probeAmazon(env: ConnEnv & LwaEnv, caseId: string): Promise<Probe
     startDate: isoDate(daysAgo(0)) + "T00:00:00Z",
     endDate: isoDate(daysAgo(-56)) + "T00:00:00Z",
   };
-  for (const [key, label, path, body] of [
+  const snsCommon = (interval: { startDate: string; endDate: string }, type: "PERFORMANCE" | "FORECAST") => ({
+    aggregationFrequency: "WEEK",
+    timeInterval: interval,
+    timePeriodType: type,
+    marketplaceId: JP_MARKETPLACE,
+    programTypes: ["SUBSCRIBE_AND_SAVE"],
+  });
+
+  const snsCalls: Array<[string, string, string, Record<string, unknown>]> = [
     ["sns_partner_perf", "定期おトク便の実績（店舗全体）",
       "/replenishment/2022-11-07/sellingPartners/metrics/search",
-      { aggregationFrequency: "WEEK", timeInterval: snsInterval, timePeriodType: "PERFORMANCE",
-        marketplaceId: JP_MARKETPLACE, programTypes: ["SUBSCRIBE_AND_SAVE"],
+      { ...snsCommon(snsInterval, "PERFORMANCE"),
         metrics: ["TOTAL_SUBSCRIPTIONS_REVENUE", "SHIPPED_SUBSCRIPTION_UNITS", "ACTIVE_SUBSCRIPTIONS"] }],
     ["sns_partner_forecast", "定期おトク便の予測（店舗全体）",
       "/replenishment/2022-11-07/sellingPartners/metrics/search",
-      { aggregationFrequency: "WEEK", timeInterval: snsFuture, timePeriodType: "FORECAST",
-        marketplaceId: JP_MARKETPLACE, programTypes: ["SUBSCRIBE_AND_SAVE"],
-        metrics: ["SHIPPED_SUBSCRIPTION_UNITS"] }],
+      { ...snsCommon(snsFuture, "FORECAST"), metrics: ["SHIPPED_SUBSCRIPTION_UNITS"] }],
+    ["sns_offer_perf", "定期おトク便の実績（商品別）",
+      "/replenishment/2022-11-07/offers/metrics/search",
+      { filters: snsCommon(snsInterval, "PERFORMANCE"),
+        metrics: ["SHIPPED_SUBSCRIPTION_UNITS", "TOTAL_SUBSCRIPTIONS_REVENUE"],
+        pagination: { limit: 10, offset: 0 } }],
     ["sns_offer_forecast", "定期おトク便の予測（商品別）",
       "/replenishment/2022-11-07/offers/metrics/search",
-      { aggregationFrequency: "WEEK", timeInterval: snsFuture, timePeriodType: "FORECAST",
-        marketplaceId: JP_MARKETPLACE, programTypes: ["SUBSCRIBE_AND_SAVE"],
-        metrics: ["SHIPPED_SUBSCRIPTION_UNITS"], pagination: { limit: 10, offset: 0 } }],
+      { filters: snsCommon(snsFuture, "FORECAST"),
+        metrics: ["SHIPPED_SUBSCRIPTION_UNITS"],
+        pagination: { limit: 10, offset: 0 } }],
     ["sns_offers", "定期おトク便の設定（商品別）",
       "/replenishment/2022-11-07/offers/search",
-      { marketplaceId: JP_MARKETPLACE, programTypes: ["SUBSCRIBE_AND_SAVE"],
+      { filters: { marketplaceId: JP_MARKETPLACE, programTypes: ["SUBSCRIBE_AND_SAVE"] },
         pagination: { limit: 10, offset: 0 } }],
-  ] as Array<[string, string, string, Record<string, unknown>]>) {
+  ];
+
+  for (let i = 0; i < snsCalls.length; i++) {
+    const [key, label, path, body] = snsCalls[i];
+    if (i > 0) await new Promise((r) => setTimeout(r, 3000));   // 呼び出し制限よけ
     try {
-      const r = await spapi(token, path, { method: "POST", body });
+      let r = await spapi(token, path, { method: "POST", body });
+      if (r.status === 429) {
+        // 制限に当たっただけなら、少し待てば通る
+        await new Promise((res) => setTimeout(res, 12000));
+        r = await spapi(token, path, { method: "POST", body });
+      }
       // 応答の冒頭を添える。どの項目が返るか分からないと取り込み処理を書けないため
-      const preview = JSON.stringify(r.body).slice(0, 600);
+      const preview = JSON.stringify(r.body).slice(0, 700);
       probes.push({
         key, label,
-        need: "（Replenishment API・ロール要確認）",
+        need: "（Replenishment API）",
         unlocks: "定期便の確定需要を欠品アラートに反映",
         ok: r.ok, status: r.status,
         message: r.ok ? `通りました　${preview}` : `${amzError(r.body)}　${preview}`,
       });
     } catch (e) {
       probes.push({
-        key, label, need: "（Replenishment API・ロール要確認）",
+        key, label, need: "（Replenishment API）",
         unlocks: "定期便の確定需要を欠品アラートに反映",
         ok: false, status: 0, message: String(e),
       });
