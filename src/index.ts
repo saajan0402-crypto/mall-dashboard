@@ -8,7 +8,7 @@
  */
 
 import { parseProductSheet, importProducts } from "./importProducts";
-import { ensureAdmin, addAdmin, listConnections, saveConnection, testConnection, FIELDS, type Mall } from "./connections";
+import { ensureAdmin, addAdmin, removeAdmin, setAdminAll, listConnections, saveConnection, testConnection, FIELDS, type Mall } from "./connections";
 import { diagnose } from "./diagnose";
 import { advance, pump, jstDate } from "./ingestSales";
 import { ingestFinances, pumpFinances } from "./ingestFinances";
@@ -296,15 +296,50 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     return json({ results });
   }
 
+  /* ───────── Slack ───────── */
+
+  // 登録した Webhook がちゃんと届くかをこの画面から確かめられるようにする
+  if (path === "/api/slack/test" && req.method === "POST") {
+    if (!env.SLACK_WEBHOOK_URL) {
+      return json({ ok: false, message: "SLACK_WEBHOOK_URL が未設定です（Cloudflare の Runtime の Secret に登録してください）" }, 400);
+    }
+    const who = viewer(req) ?? "不明なユーザー";
+    const res = await fetch(env.SLACK_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        text: `:white_check_mark: モール横断ダッシュボードからのテスト送信です（${who}／${todayJst()}）`,
+      }),
+    });
+    const body = await res.text();
+    return json({
+      ok: res.ok,
+      message: res.ok ? "送信しました。Slack を確認してください" : `Slack に拒否されました：HTTP ${res.status} ${body.slice(0, 200)}`,
+    });
+  }
+
+  // 在庫アラートを今すぐ流す
+  if (path === "/api/notify/inventory" && req.method === "POST") {
+    const r = await notifyInventory(env);
+    return json({
+      ok: r.sent,
+      message: r.sent
+        ? `${r.count} 件のアラートを送りました`
+        : r.count
+          ? `対象が ${r.count} 件ありますが、SLACK_WEBHOOK_URL が未設定のため送れません`
+          : "いま流すアラートはありません（欠品・欠品間近なし）",
+    });
+  }
+
   /* ───────── 接続情報（管理者のみ） ───────── */
 
   if (path.startsWith("/api/connections")) {
     const email = viewer(req);
-    const { admins, isAdmin } = await ensureAdmin(env.DB, email);
+    const { admins, all, isAdmin } = await ensureAdmin(env.DB, email);
 
     if (path === "/api/connections" && req.method === "GET") {
       if (!isAdmin) return json({ error: "forbidden", admins }, 403);
-      return json({ ...(await listConnections(env) as object), fields: FIELDS, admins, me: email });
+      return json({ ...(await listConnections(env) as object), fields: FIELDS, admins, adminAll: all, me: email });
     }
 
     if (path === "/api/connections" && req.method === "POST") {
@@ -346,10 +381,22 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       return json({ results });
     }
 
+    // 管理者の管理。追加・削除と「全員管理者」の切り替え
     if (path === "/api/connections/admins" && req.method === "POST") {
       if (!isAdmin) return json({ error: "forbidden" }, 403);
-      const b = (await req.json()) as { email: string };
-      return json({ admins: await addAdmin(env.DB, b.email.trim(), email) });
+      const b = (await req.json()) as { action?: "add" | "remove" | "all"; email?: string; enabled?: boolean };
+      try {
+        if (b.action === "remove" && b.email) {
+          return json({ admins: await removeAdmin(env.DB, b.email.trim(), email) });
+        }
+        if (b.action === "all") {
+          return json({ adminAll: await setAdminAll(env.DB, Boolean(b.enabled), email) });
+        }
+        if (!b.email) return json({ error: "メールアドレスを入れてください" }, 400);
+        return json({ admins: await addAdmin(env.DB, b.email.trim(), email) });
+      } catch (e) {
+        return json({ error: String(e instanceof Error ? e.message : e) }, 400);
+      }
     }
   }
 

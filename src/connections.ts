@@ -57,13 +57,26 @@ async function writeSetting(db: D1Database, key: string, value: unknown, by: str
  * 管理者の一覧。まだ誰も登録されていなければ、最初に開いた人が管理者になる。
  * 社員4名しか入れない画面なので、設定ファイルを増やさずこの形にしている。
  */
-export async function ensureAdmin(db: D1Database, email: string | null): Promise<{ admins: string[]; isAdmin: boolean }> {
+export interface AdminState {
+  admins: string[];
+  /** ログインできる人を全員管理者として扱うか */
+  all: boolean;
+  isAdmin: boolean;
+}
+
+export async function ensureAdmin(db: D1Database, email: string | null): Promise<AdminState> {
+  const all = (await readSetting<boolean>(db, "admin_all")) ?? false;
   const admins = (await readSetting<string[]>(db, "admins")) ?? [];
+
+  // ログインできる時点で Cloudflare Access を通っている＝社内の人なので、
+  // 全員管理者にしたい場合はこの設定ひとつで切り替えられるようにしている
+  if (all) return { admins, all, isAdmin: Boolean(email) };
+
   if (admins.length === 0 && email) {
     await writeSetting(db, "admins", [email], email);
-    return { admins: [email], isAdmin: true };
+    return { admins: [email], all, isAdmin: true };
   }
-  return { admins, isAdmin: Boolean(email && admins.includes(email)) };
+  return { admins, all, isAdmin: Boolean(email && admins.includes(email)) };
 }
 
 export async function addAdmin(db: D1Database, email: string, by: string | null): Promise<string[]> {
@@ -71,6 +84,29 @@ export async function addAdmin(db: D1Database, email: string, by: string | null)
   if (!admins.includes(email)) admins.push(email);
   await writeSetting(db, "admins", admins, by);
   return admins;
+}
+
+/** 管理者を外す。最後のひとりは外せない（誰も設定を触れなくなるため） */
+export async function removeAdmin(db: D1Database, email: string, by: string | null): Promise<string[]> {
+  const admins = (await readSetting<string[]>(db, "admins")) ?? [];
+  const all = (await readSetting<boolean>(db, "admin_all")) ?? false;
+  const next = admins.filter((a) => a !== email);
+  if (!all && next.length === 0) throw new Error("最後の管理者は外せません");
+  await writeSetting(db, "admins", next, by);
+  return next;
+}
+
+/** 「ログインできる人は全員管理者」の切り替え */
+export async function setAdminAll(db: D1Database, enabled: boolean, by: string | null): Promise<boolean> {
+  await writeSetting(db, "admin_all", enabled, by);
+  await db
+    .prepare(
+      `INSERT INTO settings_log (id, scope, scope_id, key, old_value, new_value, changed_by)
+       VALUES (?, 'company', '', 'admin_all', NULL, ?, ?)`
+    )
+    .bind(crypto.randomUUID(), String(enabled), by)
+    .run();
+  return enabled;
 }
 
 /* ───────── 接続情報 ───────── */

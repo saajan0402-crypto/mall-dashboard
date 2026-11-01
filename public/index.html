@@ -229,6 +229,17 @@
       <div class="card" id="health"></div>
     </div>
     <div>
+      <h2>Slack 通知</h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0">
+          <button class="act" id="btn-slack-test">テスト送信</button>
+          <button class="act" id="btn-slack-stock">在庫アラートを今すぐ送る</button>
+          <span class="note" id="slack-msg"></span>
+        </div>
+        <p class="note" style="margin-top:10px">毎朝6時と7時のバッチで、欠品・欠品間近があれば自動で流れます。</p>
+      </div>
+    </div>
+    <div>
       <h2>取り込みの履歴<span class="hint">新しい順に50件</span></h2>
       <div class="tablewrap">
         <table>
@@ -349,7 +360,28 @@
       `<div class="row"><span>暗号化キー（SECRET_KEY）</span><span>${tag(a.encryption)}</span></div>` +
       `<div class="row"><span>Amazon LWA クライアントID</span><span>${tag(a.lwaClientId)}</span></div>` +
       `<div class="row"><span>Amazon LWA クライアントシークレット</span><span>${tag(a.lwaClientSecret)}</span></div>` +
-      `<p class="note" style="margin-top:10px">この3つは全案件で共通のため、Cloudflare の Settings → Variables and Secrets に Secret として登録してください（名前：<code>SECRET_KEY</code> / <code>AMAZON_LWA_CLIENT_ID</code> / <code>AMAZON_LWA_CLIENT_SECRET</code>）。</p>`;
+      `<p class="note" style="margin-top:10px">この3つは全案件で共通のため、Cloudflare の Settings → Runtime の Variables and Secrets に Secret として登録してください（名前：<code>SECRET_KEY</code> / <code>AMAZON_LWA_CLIENT_ID</code> / <code>AMAZON_LWA_CLIENT_SECRET</code>）。</p>` +
+      `<hr style="border:none;border-top:1px solid var(--line);margin:16px 0">` +
+      `<div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
+         <strong style="font-size:13.5px">管理者</strong>
+         <span class="note">接続情報の登録と設定変更ができる人</span></div>` +
+      `<label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:12px;cursor:pointer">
+         <input type="checkbox" id="admin-all" ${d.adminAll ? "checked" : ""} style="margin-top:4px">
+         <span style="font-size:13px">ログインできる人は全員管理者にする
+           <span class="note" style="display:block">Cloudflare Access で入れるのは社内の${(d.admins || []).length ? "" : ""}メンバーだけなので、
+             社内で分ける必要がなければこれで十分です。下の個別指定は無視されます。</span></span></label>` +
+      `<div id="admin-list" style="${d.adminAll ? "opacity:.45" : ""}">` +
+        (d.admins || []).map((a) => `<div class="row">
+          <span class="v">${esc(a)}${a === d.me ? `<span class="tag ok" style="margin-left:8px">自分</span>` : ""}</span>
+          <button class="act" data-admin-remove="${esc(a)}" ${d.adminAll ? "disabled" : ""}
+            style="padding:3px 10px;font-size:12px">外す</button></div>`).join("") +
+        `<div class="btns">
+           <input type="email" id="admin-email" placeholder="メールアドレス" autocomplete="off"
+             style="padding:7px 10px;border:1px solid var(--line-strong);border-radius:5px;
+                    background:var(--surface-2);color:var(--ink);font-size:13px;min-width:260px">
+           <button class="act" id="admin-add" ${d.adminAll ? "disabled" : ""}>管理者に追加</button>
+           <span class="note" id="admin-msg"></span>
+         </div></div>`;
 
     $("conn-list").innerHTML = (d.cases || []).map((c) => `
       <div class="card" style="margin-bottom:14px">
@@ -390,7 +422,39 @@
       || `<p class="empty">案件がまだありません。先に商品マスタを取り込んでください。</p>`;
   }
 
+  async function postAdmin(body) {
+    const r = await fetch("/api/connections/admins", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body)
+    });
+    return r.json();
+  }
+
+  document.addEventListener("change", async (ev) => {
+    if (!ev.target.matches || !ev.target.matches("#admin-all")) return;
+    const d = await postAdmin({ action: "all", enabled: ev.target.checked });
+    if (d.error) { $("admin-msg").textContent = d.error; return; }
+    await loadConnections();
+  });
+
   document.addEventListener("click", async (ev) => {
+    const addAdminBtn = ev.target.closest && ev.target.closest("#admin-add");
+    const rmAdmin = ev.target.closest && ev.target.closest("[data-admin-remove]");
+
+    if (addAdminBtn) {
+      const email = ($("admin-email").value || "").trim();
+      if (!email) { $("admin-msg").textContent = "メールアドレスを入れてください"; return; }
+      const d = await postAdmin({ action: "add", email });
+      if (d.error) { $("admin-msg").textContent = d.error; return; }
+      await loadConnections();
+      return;
+    }
+    if (rmAdmin) {
+      const d = await postAdmin({ action: "remove", email: rmAdmin.dataset.adminRemove });
+      if (d.error) { $("admin-msg").textContent = d.error; return; }
+      await loadConnections();
+      return;
+    }
+
     const save = ev.target.closest && ev.target.closest("[data-save]");
     const test = ev.target.closest && ev.target.closest("[data-test]");
     const diag = ev.target.closest && ev.target.closest("[data-diag]");
@@ -702,6 +766,18 @@
       <td>${esc(x.error) || "—"}</td></tr>`).join("")
       || `<tr><td colspan="6" style="color:var(--muted)">まだ取り込みの記録がありません。</td></tr>`;
   }
+
+  async function slackPost(path, btn) {
+    btn.disabled = true;
+    $("slack-msg").textContent = "送信中…";
+    try {
+      const r = await fetch(path, { method: "POST" });
+      const d = await r.json();
+      $("slack-msg").innerHTML = `<span class="tag ${d.ok ? "ok" : "ng"}">${d.ok ? "OK" : "NG"}</span> ${esc(d.message)}`;
+    } finally { btn.disabled = false; }
+  }
+  $("btn-slack-test").addEventListener("click", (e) => slackPost("/api/slack/test", e.target));
+  $("btn-slack-stock").addEventListener("click", (e) => slackPost("/api/notify/inventory", e.target));
 
   /* ---------- 起動 ---------- */
   (async () => {
