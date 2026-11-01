@@ -187,6 +187,57 @@ async function probeAmazon(env: ConnEnv & LwaEnv, caseId: string): Promise<Probe
     },
   ];
 
+  // 定期おトク便。旧レポート（GET_FBA_SNS_FORECAST_DATA）は2025年12月に廃止されたので
+  // 後継の Replenishment API を試す。本体の作りを決めるため、通った場合は応答の冒頭も出す
+  const snsInterval = {
+    startDate: isoDate(daysAgo(28)) + "T00:00:00Z",
+    endDate: isoDate(daysAgo(1)) + "T00:00:00Z",
+  };
+  const snsFuture = {
+    startDate: isoDate(daysAgo(0)) + "T00:00:00Z",
+    endDate: isoDate(daysAgo(-56)) + "T00:00:00Z",
+  };
+  for (const [key, label, path, body] of [
+    ["sns_partner_perf", "定期おトク便の実績（店舗全体）",
+      "/replenishment/2022-11-07/sellingPartners/metrics/search",
+      { aggregationFrequency: "WEEK", timeInterval: snsInterval, timePeriodType: "PERFORMANCE",
+        marketplaceId: JP_MARKETPLACE, programTypes: ["SUBSCRIBE_AND_SAVE"],
+        metrics: ["TOTAL_SUBSCRIPTIONS_REVENUE", "SHIPPED_SUBSCRIPTION_UNITS", "ACTIVE_SUBSCRIPTIONS"] }],
+    ["sns_partner_forecast", "定期おトク便の予測（店舗全体）",
+      "/replenishment/2022-11-07/sellingPartners/metrics/search",
+      { aggregationFrequency: "WEEK", timeInterval: snsFuture, timePeriodType: "FORECAST",
+        marketplaceId: JP_MARKETPLACE, programTypes: ["SUBSCRIBE_AND_SAVE"],
+        metrics: ["SHIPPED_SUBSCRIPTION_UNITS"] }],
+    ["sns_offer_forecast", "定期おトク便の予測（商品別）",
+      "/replenishment/2022-11-07/offers/metrics/search",
+      { aggregationFrequency: "WEEK", timeInterval: snsFuture, timePeriodType: "FORECAST",
+        marketplaceId: JP_MARKETPLACE, programTypes: ["SUBSCRIBE_AND_SAVE"],
+        metrics: ["SHIPPED_SUBSCRIPTION_UNITS"], pagination: { limit: 10, offset: 0 } }],
+    ["sns_offers", "定期おトク便の設定（商品別）",
+      "/replenishment/2022-11-07/offers/search",
+      { marketplaceId: JP_MARKETPLACE, programTypes: ["SUBSCRIBE_AND_SAVE"],
+        pagination: { limit: 10, offset: 0 } }],
+  ] as Array<[string, string, string, Record<string, unknown>]>) {
+    try {
+      const r = await spapi(token, path, { method: "POST", body });
+      // 応答の冒頭を添える。どの項目が返るか分からないと取り込み処理を書けないため
+      const preview = JSON.stringify(r.body).slice(0, 600);
+      probes.push({
+        key, label,
+        need: "（Replenishment API・ロール要確認）",
+        unlocks: "定期便の確定需要を欠品アラートに反映",
+        ok: r.ok, status: r.status,
+        message: r.ok ? `通りました　${preview}` : `${amzError(r.body)}　${preview}`,
+      });
+    } catch (e) {
+      probes.push({
+        key, label, need: "（Replenishment API・ロール要確認）",
+        unlocks: "定期便の確定需要を欠品アラートに反映",
+        ok: false, status: 0, message: String(e),
+      });
+    }
+  }
+
   for (const c of calls) {
     try {
       const r = await c.run();
