@@ -483,9 +483,8 @@
       ["損益分岐ROAS", d.breakEvenRoas != null ? d.breakEvenRoas + "倍" : "—"]
     ];
     const shared = d.otherFees
-      ? `<p class="note" style="margin-top:10px">「その他の費用」は商品に紐づかない費用（注文単位の手数料・月額登録料など）です。
-         複数の案件が同じセラーアカウントを使っている場合、月額登録料などは案件ごとに重複して入ります。
-         案件単位で見るときは粗利から除いて考えてください。</p>` : "";
+      ? `<p class="note" style="margin-top:10px">「その他の費用」は商品に紐づかない費用です。
+         注文単位の手数料、月額登録料、在庫保管料などが入ります。粗利からは引いてあります。</p>` : "";
     const warn = d.actual.missing
       ? `<p class="note" style="margin-top:10px">${d.actual.total} 行のうち ${d.actual.missing} 行はまだ手数料の実額が入っていません（概算で計算しています）。
          「入金明細を取り込む」を押すか、翌朝の自動実行を待ってください。</p>` : "";

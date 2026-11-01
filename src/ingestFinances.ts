@@ -67,26 +67,29 @@ async function fetchDay(
   return { ok: true, rows, ignored, raw, message: "取得しました" };
 }
 
-/** Amazon SKU → 商品ID。案件もあわせて返す */
-async function skuMap(db: D1Database): Promise<Map<string, { product_id: string; case_id: string }>> {
+/**
+ * Amazon SKU → 商品ID。
+ * 案件ごとにセラーアカウントが別なので、同じSKU名が別案件に存在しうる。
+ * その案件の商品だけを読む
+ */
+async function skuMap(db: D1Database, caseId: string): Promise<Map<string, string>> {
   const { results } = await db
     .prepare(
-      `SELECT l.external_id AS sku, l.product_id, p.case_id
+      `SELECT l.external_id AS sku, l.product_id
          FROM product_listings l JOIN products p ON p.id = l.product_id
-        WHERE l.mall = 'amazon'`
+        WHERE l.mall = 'amazon' AND p.case_id = ?`
     )
-    .all<{ sku: string; product_id: string; case_id: string }>();
-  const m = new Map<string, { product_id: string; case_id: string }>();
-  for (const r of results) m.set(r.sku, { product_id: r.product_id, case_id: r.case_id });
+    .bind(caseId)
+    .all<{ sku: string; product_id: string }>();
+  const m = new Map<string, string>();
+  for (const r of results) m.set(r.sku, r.product_id);
   return m;
 }
 
 /**
  * 1案件1日ぶんを取り込む。
- * 同じセラーアカウントに複数案件が入っていても、その案件のSKUの行だけを残す。
- * SKUの付かない行（注文単位の手数料・月額登録料など）は、どの案件のものか
- * 決められないので案件ごとに同じものが入る。重複して見えるが、
- * 案件ごとの粗利を出すうえでは商品に紐づく手数料だけを使うので影響はない
+ * 案件ごとにセラーアカウントが別なので、取れる明細はすべてその案件のもの。
+ * SKUの付かない行（注文単位の手数料・月額登録料など）もその案件の費用として扱う
  */
 export async function ingestFinances(
   env: FinanceEnv,
@@ -118,15 +121,16 @@ export async function ingestFinances(
   const r2Key = `raw/amazon/finances/${caseId}/${date}.json`;
   await env.FILES.put(r2Key, JSON.stringify(got.raw), { httpMetadata: { contentType: "application/json" } });
 
-  const map = await skuMap(env.DB);
+  const map = await skuMap(env.DB, caseId);
   const statements: D1PreparedStatement[] = [
     env.DB.prepare("DELETE FROM fee_events WHERE case_id = ? AND mall = 'amazon' AND date = ?").bind(caseId, date),
   ];
 
   let kept = 0;
+  const unknown = new Set<string>();
   for (const row of got.rows) {
-    const hit = row.sku ? map.get(row.sku) : undefined;
-    if (row.sku && hit && hit.case_id !== caseId) continue;   // 別案件の商品の行は入れない
+    const productId = row.sku ? map.get(row.sku) ?? null : null;
+    if (row.sku && !productId) unknown.add(row.sku);
     statements.push(
       env.DB
         .prepare(
@@ -138,7 +142,7 @@ export async function ingestFinances(
           // 行ごとの PostedDate ではなく date を入れることで、
           // 取り直したときに必ず同じ行が消えるようにしている（生の日時は R2 に残している）
           crypto.randomUUID(), caseId, date, row.orderId, row.sku,
-          hit?.product_id ?? null, row.eventType, row.kind, row.name, row.amount
+          productId, row.eventType, row.kind, row.name, row.amount
         )
     );
     kept++;
@@ -166,9 +170,14 @@ export async function ingestFinances(
   await env.DB.batch(statements);
 
   const fees = got.rows.filter((r) => r.kind === "fee").reduce((n, r) => n + r.amount, 0);
-  const note = Object.keys(got.ignored).length
-    ? `未対応の種類：${Object.entries(got.ignored).map(([k, v]) => `${k} ${v}件`).join(", ")}`
-    : null;
+  const notes: string[] = [];
+  if (unknown.size) {
+    notes.push(`商品マスタに無いSKUが ${unknown.size} 件：${[...unknown].slice(0, 10).join(", ")}`);
+  }
+  if (Object.keys(got.ignored).length) {
+    notes.push(`未対応の種類：${Object.entries(got.ignored).map(([k, v]) => `${k} ${v}件`).join(", ")}`);
+  }
+  const note = notes.length ? notes.join(" ／ ") : null;
 
   await env.DB.prepare(
     `INSERT INTO ingests (id, case_id, mall, kind, period_start, period_end, rows, status, error, r2_key, source)

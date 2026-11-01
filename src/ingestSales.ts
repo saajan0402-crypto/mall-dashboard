@@ -44,15 +44,20 @@ interface Listing {
   case_id: string;
 }
 
-/** Amazon SKU から商品を引くための対応表。全案件ぶん読む */
-async function skuMap(db: D1Database): Promise<Map<string, Listing>> {
+/**
+ * Amazon SKU から商品を引くための対応表。
+ * 案件ごとにセラーアカウントが別なので、同じSKU名が別案件に存在しうる。
+ * 必ず案件とSKUの組で引く
+ */
+async function skuMap(db: D1Database, caseId: string): Promise<Map<string, Listing>> {
   const { results } = await db
     .prepare(
       `SELECT l.external_id AS sku, l.product_id, p.case_id
          FROM product_listings l
          JOIN products p ON p.id = l.product_id
-        WHERE l.mall = 'amazon'`
+        WHERE l.mall = 'amazon' AND p.case_id = ?`
     )
+    .bind(caseId)
     .all<Listing>();
   const m = new Map<string, Listing>();
   for (const r of results) m.set(r.sku, r);
@@ -77,11 +82,10 @@ async function writeDay(
   for (const row of rows) {
     const hit = map.get(row.sku);
     if (!hit) {
-      // どの案件にも無いSKU。マスタ登録漏れの可能性があるので名前を残す
+      // この案件の商品マスタに無いSKU。登録漏れの可能性があるので名前を残す
       if (row.units > 0 || row.revenue > 0) unknown.push(row.sku);
       continue;
     }
-    if (hit.case_id !== caseId) continue;          // 別案件のSKU。ここでは扱わない
     mine.push({ productId: hit.product_id, row });
   }
 
@@ -248,7 +252,7 @@ export async function advance(
     return { caseId, date, status: "error", message: msg };
   }
 
-  const map = await skuMap(env.DB);
+  const map = await skuMap(env.DB, caseId);
   const { saved, unknown } = await writeDay(env.DB, caseId, date, parsed.rows, map);
 
   const note = unknown.length
