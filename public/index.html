@@ -491,7 +491,9 @@
     const bd = (d.breakdown || []).length
       ? `<div class="tablewrap" style="margin-top:14px"><table style="min-width:420px">
           <thead><tr><th>手数料の内訳</th><th class="r">件数</th><th class="r">金額</th></tr></thead>
-          <tbody>${d.breakdown.map((b) => `<tr><td>${esc(b.name)}</td>
+          <tbody>${d.breakdown.map((b) => `<tr>
+            <td>${esc(b.label)}${b.known ? "" : `<span class="tag warn" style="margin-left:6px">未対応</span>`}
+              <div class="note" style="font-family:var(--mono);font-size:10.5px">${esc(b.name)}</div></td>
             <td class="r">${b.count}</td><td class="r">${yen(b.amount)}</td></tr>`).join("")}</tbody></table></div>`
       : "";
     $("summary").innerHTML = rows.map(([k, v]) =>
@@ -541,20 +543,43 @@
     } finally { btn.disabled = false; }
   });
 
+  const STATUS_JA = { done: "取り込み済み", requested: "依頼中", waiting: "生成待ち", empty: "データなし", error: "失敗" };
+
+  async function runPump() {
+    const r = await fetch("/api/ingest/sales", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ days: 7 })
+    });
+    const d = await r.json();
+    return d.results || [];
+  }
+
   $("btn-pump").addEventListener("click", async () => {
     const btn = $("btn-pump");
     btn.disabled = true;
     $("ingest-msg").textContent = "全案件の穴を確認しています…";
     try {
-      const r = await fetch("/api/ingest/sales", {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ days: 7 })
-      });
-      const d = await r.json();
-      const list = d.results || [];
-      $("ingest-msg").textContent = list.length
-        ? `${list.length} 件を処理しました：` + list.map((x) => `${x.date} ${x.status}`).join(" / ")
-        : "埋める穴はありませんでした";
+      let list = await runPump();
       await loadSales();
+      const show = (l) => l.length
+        ? `${l.length} 件：` + l.map((x) => `${x.date} ${STATUS_JA[x.status] || x.status}`).join(" / ")
+        : "埋める穴はありませんでした";
+      $("ingest-msg").textContent = show(list);
+
+      // 依頼しただけで終わった日があれば、生成を待ってもう一度取りに行く。
+      // Amazon のレポートは依頼から生成まで数分かかるため
+      if (list.some((x) => x.status === "requested" || x.status === "waiting")) {
+        for (let i = 0; i < 4; i++) {
+          for (let sec = 45; sec > 0; sec--) {
+            $("ingest-msg").textContent = `${show(list)}　／　レポートの生成を待っています（あと約${sec}秒・${i + 1}回目）`;
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+          list = await runPump();
+          await loadSales();
+          $("ingest-msg").textContent = show(list);
+          if (!list.some((x) => x.status === "requested" || x.status === "waiting")) break;
+        }
+      }
+      await loadSummary();
     } finally { btn.disabled = false; }
   });
 

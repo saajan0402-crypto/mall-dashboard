@@ -12,6 +12,7 @@ import { ensureAdmin, addAdmin, listConnections, saveConnection, testConnection,
 import { diagnose } from "./diagnose";
 import { advance, pump, jstDate } from "./ingestSales";
 import { ingestFinances, pumpFinances } from "./ingestFinances";
+import { feeLabel, isKnownFee } from "./feeNames";
 
 export interface Env {
   DB: D1Database;
@@ -222,14 +223,20 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       .first<{ amount: number }>();
 
     // 手数料の内訳。何にいくら取られているかを名前ごとに出す
-    const { results: breakdown } = await env.DB.prepare(
+    const { results: breakdownRaw } = await env.DB.prepare(
       `SELECT name, -SUM(amount) AS amount, COUNT(*) AS count FROM fee_events
         WHERE case_id = ? AND mall = 'amazon' AND date BETWEEN ? AND ?
           AND kind IN ('fee', 'promotion', 'tax_withheld')
         GROUP BY name ORDER BY amount DESC`
     )
       .bind(caseId, from, to)
-      .all();
+      .all<{ name: string; amount: number; count: number }>();
+
+    // 英語の識別子のままでは読めないので日本語を付ける。
+    // Amazon のレポートと突き合わせられるよう、元の名前も一緒に返す
+    const breakdown = breakdownRaw.map((b) => ({
+      ...b, label: feeLabel(b.name), known: isKnownFee(b.name),
+    }));
 
     const revenue = sales?.revenue ?? 0;
     const returns = sales?.returns ?? 0;
