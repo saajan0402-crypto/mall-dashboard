@@ -351,10 +351,11 @@
               inquirymngapi.counts.get ／ inquirymngapi.inquiries.get ／ inquirymngapi.inquiry.get ／ inquirymngapi.attachment.get</td></tr>
             <tr><td>ライセンス管理</td><td class="note">LicenseManagementAPI。有効期限の取得に使います（90日ごとの更新に必要）</td></tr>
             <tr><td>商品API 2.0</td><td style="font-family:var(--mono);font-size:11.5px">
-              itemapi_2.0.items.get ／ itemapi_2.0.items.bulk.get
-              <div class="note" style="font-family:inherit">この2つは無料。商品管理番号の実在確認と販売価格の取得に使います。<br>
-                <strong>itemapi_2.0.items.search と itemapi_2.0.inv-settings.get は別料金</strong>なので使いません。
-                商品管理番号はマスタに持っているので検索は不要です</div></td></tr>
+              itemapi_2.0.items.search
+              <div class="note" style="font-family:inherit">search は無料。店舗の商品を全件めくって、
+                商品管理番号の実在確認と販売価格の取得に使います。<br>
+                <strong>itemapi_2.0.items.get と itemapi_2.0.items.bulk.get は別料金</strong>なので
+                チェックを入れないでください。<code>inv-settings.get</code> は無料ですが使いません</div></td></tr>
           </tbody></table></div>
 
         <p class="note" style="margin-top:12px"><strong>有効にしてはいけないもの</strong>：
@@ -364,8 +365,8 @@
 
         <h3 style="font-size:13px;margin:22px 0 8px">つまずきやすいところ</h3>
         <ul class="steps" style="font-size:12.5px">
-          <li>商品API 2.0 のうち<strong>有料なのは items.search と inv-settings.get の2つだけ</strong>です。
-            使っている items.get / items.bulk.get は無料なので、この2つにはチェックを入れないでください</li>
+          <li>商品API 2.0 のうち<strong>有料なのは items.get と items.bulk.get</strong>です。
+            使うのは無料の <code>items.search</code> だけなので、有料の2つにはチェックを入れないでください</li>
           <li><strong>楽天のライセンスキーは90日ごとに更新</strong>が必要。切れると全APIが一斉に401になります</li>
           <li>2025年6月に楽天の認証方式が変わり、licenseKey は「アプリ」単位で発行される形になりました。
             serviceSecret と licenseKey は<strong>同じアプリの組み合わせ</strong>である必要があります</li>

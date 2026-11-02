@@ -400,28 +400,18 @@ async function probeRakuten(env: ConnEnv, caseId: string): Promise<Probe[]> {
         : `${rmsError(result.body)}${rakutenHint(result.status, result.body)}`,
   });
 
-  // 商品API 2.0 のうち items.search と inv-settings.get は別料金なので使わない。
-  // items.bulk.get は無料なので、こちらで商品管理番号の実在と価格を確認する
-  const sample = await env.DB
-    .prepare(
-      `SELECT l.external_id AS num FROM product_listings l JOIN products p ON p.id = l.product_id
-        WHERE l.mall = 'rakuten' AND p.case_id = ? LIMIT 1`
-    )
-    .bind(caseId)
-    .first<{ num: string }>();
-
+  // 商品API 2.0 のうち無料なのは items.search と inv-settings.get。
+  // items.get / items.bulk.get は別料金なので使わない
   const calls: Array<{
     key: string; label: string; need: string; unlocks: string;
     run: () => Promise<{ status: number; ok: boolean; body: unknown }>;
   }> = [
     {
-      key: "item_bulk_get",
-      label: "商品情報の取得（商品API 2.0 / bulk-get）",
-      need: "商品APIの利用申請（この機能は無料）",
+      key: "item_search",
+      label: "商品情報の取得（商品API 2.0 / search）",
+      need: "商品APIの利用申請（search は無料）",
       unlocks: "商品管理番号の実在確認・販売価格の取得",
-      run: () => sample
-        ? rms(rc, "/2.0/items/bulk-get", { method: "POST", body: { manageNumbers: [sample.num] } })
-        : Promise.resolve({ ok: true, status: 200, body: { note: "商品マスタに楽天の商品管理番号がありません" } }),
+      run: () => rms(rc, "/2.0/items/search?hits=1"),
     },
     {
       key: "order_search",

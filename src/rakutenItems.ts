@@ -1,13 +1,15 @@
 /**
  * 楽天の商品情報との照合（商品API 2.0）
  *
- * 商品API 2.0 のうち有料なのは items.search と inv-settings.get の2つだけで、
- * items.get / items.bulk.get は無料で使える。
- * 商品管理番号は商品マスタに持っているので検索は要らず、この2つで足りる。
+ * 商品API 2.0 のうち無料なのは items.search と inv-settings.get の2つ。
+ * items.get と items.bulk.get は別料金なので使わない。
+ * そこで search で店舗の商品を全件めくって、商品管理番号で突き合わせる。
+ * 店舗の商品数は数十なので、全件取っても1〜2回の呼び出しで済む。
  *
- * ここでやるのは2つ。
+ * ここでやるのは3つ。
  *   1. マスタの商品管理番号がモールに実在するかの確認（打ち間違いの発見）
  *   2. 販売価格の取得（粗利の確認と、値下げの検知に使う）
+ *   3. 店舗にあるのにマスタに無い商品の洗い出し（登録漏れの発見）
  */
 
 import { readCreds, type ConnEnv } from "./connections";
@@ -59,20 +61,24 @@ export async function syncRakutenItems(env: ItemsEnv, caseId: string): Promise<I
     return { caseId, status: "done", checked: 0, message: "照合する商品がありません（楽天の商品管理番号が未登録です）" };
   }
 
+  // 店舗の商品を全件めくる。search は無料で使える
   const found = new Map<string, RItem>();
-  for (let i = 0; i < listings.length; i += 50) {
-    const batch = listings.slice(i, i + 50).map((l) => l.num);
-    const r = await rms(creds, "/2.0/items/bulk-get", {
-      method: "POST",
-      body: { manageNumbers: batch },
-    });
+  let numFound = 0;
+  for (let page = 0; page < 30; page++) {
+    const r = await rms(creds, `/2.0/items/search?hits=100&offset=${page * 100}`);
     if (!r.ok) {
-      return { caseId, status: "error", message: `商品情報の取得に失敗：${errorMessage(r.body)}` };
+      const hint = r.status === 401
+        ? "（RMS のアプリ一覧で itemapi_2.0.items.search にチェックが入っているか確認してください）"
+        : "";
+      return { caseId, status: "error", message: `商品情報の取得に失敗：${errorMessage(r.body)}${hint}` };
     }
-    for (const it of ((r.body as { result?: RItem[] }).result ?? [])) {
+    const b = r.body as { numFound?: number; results?: RItem[] };
+    numFound = b.numFound ?? 0;
+    for (const it of b.results ?? []) {
       if (it.manageNumber) found.set(it.manageNumber, it);
     }
-    if (i + 50 < listings.length) await new Promise((res) => setTimeout(res, 400));
+    if ((page + 1) * 100 >= numFound) break;
+    await new Promise((res) => setTimeout(res, 400));
   }
 
   const now = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 19).replace("T", " ");
@@ -102,9 +108,18 @@ export async function syncRakutenItems(env: ItemsEnv, caseId: string): Promise<I
   }
   await env.DB.batch(statements);
 
-  const note = notFound.length
-    ? `楽天に見つからない商品管理番号が ${notFound.length} 件：${notFound.slice(0, 10).join(", ")}`
-    : null;
+  // 店舗にあるのにマスタに無い商品（登録漏れ）
+  const registered = new Set(listings.map((l) => l.num));
+  const missingFromMaster = [...found.keys()].filter((n) => !registered.has(n));
+
+  const notes: string[] = [];
+  if (notFound.length) {
+    notes.push(`楽天に見つからない商品管理番号が ${notFound.length} 件：${notFound.slice(0, 10).join(", ")}`);
+  }
+  if (missingFromMaster.length) {
+    notes.push(`店舗にあるのにマスタに無い商品が ${missingFromMaster.length} 件：${missingFromMaster.slice(0, 10).join(", ")}`);
+  }
+  const note = notes.length ? notes.join(" ／ ") : null;
   await env.DB.prepare(
     `INSERT INTO ingests (id, case_id, mall, kind, rows, status, error, source)
      VALUES (?, ?, 'rakuten', 'items', ?, ?, ?, 'api')`
@@ -112,7 +127,7 @@ export async function syncRakutenItems(env: ItemsEnv, caseId: string): Promise<I
 
   return {
     caseId, status: "done", checked: listings.length, notFound,
-    message: `${listings.length} 件を照合しました${note ? `（${note}）` : "（すべて一致）"}`,
+    message: `マスタ ${listings.length} 件 / 店舗 ${numFound} 件を照合しました${note ? `／${note}` : "／すべて一致"}`,
   };
 }
 
