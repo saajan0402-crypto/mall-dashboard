@@ -343,11 +343,12 @@
               inventories.bulk.get.range_2.1 ／ inventories.bulk.get_2.1 ／ inventories.variant-lists.get ／ inventories.variants.get_2.1</td></tr>
             <tr><td>在庫API 2.0</td><td style="font-family:var(--mono);font-size:11.5px">
               inventories.bulk.get.range ／ inventories.bulk.get ／ inventories.variants.get</td></tr>
-            <tr><td>商品API 2.0</td><td style="font-family:var(--mono);font-size:11.5px">
-              itemapi_2.0.items.search ／ itemapi_2.0.items.get ／ itemapi_2.0.items.bulk.get ／ itemapi_2.0.inv-settings.get</td></tr>
             <tr><td>問い合わせ管理API</td><td style="font-family:var(--mono);font-size:11.5px">
               inquirymngapi.counts.get ／ inquirymngapi.inquiries.get ／ inquirymngapi.inquiry.get ／ inquirymngapi.attachment.get</td></tr>
-            <tr><td>ライセンス管理</td><td class="note">「LicenseManagementAPI」「ライセンス管理」に相当する項目があれば有効に。有効期限の取得に使います</td></tr>
+            <tr><td>ライセンス管理</td><td class="note">LicenseManagementAPI。有効期限の取得に使います（90日ごとの更新に必要）</td></tr>
+            <tr><td>商品API 2.0</td><td class="note"><strong>使いません。</strong>
+              利用には商品一括登録の申込みが必要で、別料金（月1万円ほど）がかかります。
+              商品情報は商品マスタで管理しているので、無くても売上・在庫・手数料はすべて動きます</td></tr>
           </tbody></table></div>
 
         <p class="note" style="margin-top:12px"><strong>有効にしてはいけないもの</strong>：
@@ -357,7 +358,7 @@
 
         <h3 style="font-size:13px;margin:22px 0 8px">つまずきやすいところ</h3>
         <ul class="steps" style="font-size:12.5px">
-          <li><strong>商品API 2.0 は「商品一括登録」への別途申込みが必要</strong>です。無くても売上・在庫・広告は動きます</li>
+          <li><strong>商品API 2.0 は別料金（月1万円ほど）</strong>なので使わない方針です。診断では「対象外」と表示されます</li>
           <li><strong>楽天のライセンスキーは90日ごとに更新</strong>が必要。切れると全APIが一斉に401になります</li>
           <li>2025年6月に楽天の認証方式が変わり、licenseKey は「アプリ」単位で発行される形になりました。
             serviceSecret と licenseKey は<strong>同じアプリの組み合わせ</strong>である必要があります</li>
@@ -651,7 +652,8 @@
           </tr></thead><tbody>${res.probes.map(p => `
             <tr>
               <td>${esc(p.label)}</td>
-              <td><span class="tag ${p.ok ? "ok" : "ng"}">${p.ok ? "OK" : (p.status || "—")}</span>
+              <td><span class="tag ${p.skipped ? "wait" : p.ok ? "ok" : "ng"}">${
+                    p.skipped ? "対象外" : p.ok ? "OK" : (p.status || "—")}</span>
                   <div class="note" style="margin-top:3px">${esc(p.message)}</div></td>
               <td class="note">${esc(p.need)}</td>
               <td class="note">${esc(p.unlocks)}</td>

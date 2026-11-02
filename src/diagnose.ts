@@ -24,6 +24,8 @@ export interface Probe {
   ok: boolean;
   status: number;
   message: string;
+  /** 使わないと決めたもの。通過数の分母に入れない */
+  skipped?: boolean;
 }
 
 export interface DiagnoseResult {
@@ -377,6 +379,17 @@ async function probeRakuten(env: ConnEnv, caseId: string): Promise<Probe[]> {
   });
 
   // ライセンス期限。ここが通れば認証そのものは生きている
+  // 商品API 2.0 は別料金（月1万円ほど）のため使わない。
+  // 商品情報は商品マスタで管理しているので、無くても困らない
+  probes.push({
+    key: "item_search",
+    label: "商品情報の取得（商品API 2.0）",
+    need: "商品一括登録の申込み（別料金）",
+    unlocks: "（使いません。商品情報は商品マスタで管理）",
+    ok: false, status: 0, skipped: true,
+    message: "使わない方針です（別料金・月1万円ほど）",
+  });
+
   const { date, result } = await licenseExpiry(rc);
   if (date) await saveLicenseExpiry(env, caseId, date);
   probes.push({
@@ -403,13 +416,6 @@ async function probeRakuten(env: ConnEnv, caseId: string): Promise<Probe[]> {
       need: "RMS WEB SERVICE の受注API利用申請",
       unlocks: "日次売上・商品別の販売数",
       run: () => searchOrders(rc, daysAgo(2), new Date(), { perPage: 10 }),
-    },
-    {
-      key: "item_search",
-      label: "商品情報の取得（商品API 2.0）",
-      need: "商品APIの利用申請",
-      unlocks: "商品管理番号の照合・価格の取得",
-      run: () => rms(rc, "/2.0/items/search?hits=1"),
     },
     {
       key: "inventory",
@@ -465,14 +471,15 @@ export async function diagnose(
     for (const mall of malls) {
       const probes = mall === "amazon" ? await probeAmazon(env, c.id) : await probeRakuten(env, c.id);
       const configured = !probes.some((p) => p.message === "接続情報が未登録です");
-      const passed = probes.filter((p) => p.ok).length;
+      const counted = probes.filter((p) => !p.skipped);
+      const passed = counted.filter((p) => p.ok).length;
       out.push({
         caseId: c.id,
         caseName: c.name,
         mall,
         configured,
         probes,
-        summary: configured ? `${passed} / ${probes.length} 通過` : "未登録",
+        summary: configured ? `${passed} / ${counted.length} 通過` : "未登録",
       });
     }
   }
