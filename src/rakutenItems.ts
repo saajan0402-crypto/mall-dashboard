@@ -32,6 +32,23 @@ interface RItem {
   variants?: Record<string, RVariant>;
 }
 
+/**
+ * 検索結果の1要素から商品を取り出す。
+ * 楽天は results の要素を { item: {...} } のように包んで返すことがあるので、
+ * 包まれていればひとつ潜る。どちらの形でも読めるようにしておく
+ */
+function asItem(el: unknown): RItem | null {
+  if (!el || typeof el !== "object") return null;
+  const o = el as Record<string, unknown>;
+  if (typeof o.manageNumber === "string") return o as RItem;
+  for (const v of Object.values(o)) {
+    if (v && typeof v === "object" && typeof (v as Record<string, unknown>).manageNumber === "string") {
+      return v as RItem;
+    }
+  }
+  return null;
+}
+
 /** バリエーションの中でいちばん安い価格。1つしかなければその価格 */
 function lowestPrice(item: RItem): number | null {
   const prices = Object.values(item.variants ?? {})
@@ -72,12 +89,14 @@ export async function syncRakutenItems(env: ItemsEnv, caseId: string): Promise<I
         : "";
       return { caseId, status: "error", message: `商品情報の取得に失敗：${errorMessage(r.body)}${hint}` };
     }
-    const b = r.body as { numFound?: number; results?: RItem[] };
+    const b = r.body as { numFound?: number; results?: unknown[]; items?: unknown[] };
     numFound = b.numFound ?? 0;
-    for (const it of b.results ?? []) {
-      if (it.manageNumber) found.set(it.manageNumber, it);
+    const list = b.results ?? b.items ?? [];
+    for (const el of list) {
+      const it = asItem(el);
+      if (it?.manageNumber) found.set(it.manageNumber, it);
     }
-    if ((page + 1) * 100 >= numFound) break;
+    if (!list.length || (page + 1) * 100 >= numFound) break;
     await new Promise((res) => setTimeout(res, 400));
   }
 
@@ -86,10 +105,12 @@ export async function syncRakutenItems(env: ItemsEnv, caseId: string): Promise<I
   if (found.size === 0) {
     return {
       caseId, status: "error",
-      message: `店舗の商品を1件も取得できませんでした（numFound=${numFound}）。` +
-        "RMS のアプリ一覧で itemapi_2.0.items.search が有効か、" +
-        "接続している店舗が合っているかを確認してください。" +
-        "商品管理番号の判定は行っていません",
+      message: numFound > 0
+        ? `店舗には ${numFound} 件ありますが、中身を読み取れませんでした。` +
+          "応答の形が想定と違う可能性があります。接続タブの「APIを一通り試す」で中身を確認してください。" +
+          "商品管理番号の判定は行っていません"
+        : "店舗の商品が0件でした。接続している店舗が合っているかを確認してください。" +
+          "商品管理番号の判定は行っていません",
     };
   }
 
