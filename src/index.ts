@@ -22,6 +22,7 @@ import { syncRakutenItems, pumpRakutenItems } from "./rakutenItems";
 import { importAdFile, adCoverage, adSummary, type ImportResult } from "./ingestAds";
 import { type AdLevel } from "./adImport";
 import { SETTINGS, resolveSettings, saveSettings, feeRate, recalcFeeEst, recalcAllFeeEst, type Scope } from "./settings";
+import { parseChargeCsv, saveCharges, listCharges, type ChargeRow } from "./mallCharges";
 
 export interface Env {
   DB: D1Database;
@@ -196,9 +197,51 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     return json({ from, to, rows: results, daily: [...byDate.values()].sort((a, b) => (a.date < b.date ? 1 : -1)) });
   }
 
+  /* ───────── 請求明細（実額） ───────── */
+
+  if (path === "/api/charges" && req.method === "GET") {
+    const u = new URL(req.url);
+    const caseId = u.searchParams.get("case_id");
+    const month = u.searchParams.get("month") ?? jstDate(1).slice(0, 7);
+    if (!caseId) return json({ charges: [] });
+    return json({ month, charges: await listCharges(env.DB, caseId, month) });
+  }
+
+  // CSVで入れる。書式が読めなかったときは見出しをそのまま返す
+  if (path === "/api/charges/import" && req.method === "POST") {
+    const form = await req.formData();
+    const caseId = String(form.get("caseId") ?? "");
+    const mall = String(form.get("mall") ?? "rakuten");
+    const month = String(form.get("month") ?? jstDate(1).slice(0, 7));
+    const file = form.get("file");
+    if (!caseId || !(file instanceof File)) return json({ error: "案件とファイルを選んでください" }, 400);
+
+    const bytes = await file.arrayBuffer();
+    const parsed = parseChargeCsv(bytes, file.name);
+    if (!parsed.ok) return json({ ...parsed, saved: false });
+
+    const r2Key = `raw/${mall}/charges/${caseId}/${month}.csv`;
+    await env.FILES.put(r2Key, bytes, { httpMetadata: { contentType: "text/csv" } });
+    const saved = await saveCharges(env, caseId, mall, month, parsed.rows, {
+      fileName: file.name, r2Key, source: "csv",
+    });
+    return json({ ...parsed, saved: true, ...saved });
+  }
+
+  // 手で入れる。CSVの書式に合わない月の逃げ道
+  if (path === "/api/charges" && req.method === "POST") {
+    const b = (await req.json()) as {
+      caseId: string; mall: string; month: string; rows: ChargeRow[];
+    };
+    if (!b.caseId || !b.month) return json({ error: "案件と月を指定してください" }, 400);
+    const saved = await saveCharges(env, b.caseId, b.mall ?? "rakuten", b.month,
+      (b.rows ?? []).filter((r) => r.name && Number.isFinite(Number(r.amount))), { source: "manual" });
+    return json({ ok: true, ...saved });
+  }
+
   /* ───────── 設定 ───────── */
 
-  if (path === "/api/settings") {
+  if (path === "/api/settings" && req.method === "GET") {
     const u = new URL(req.url);
     const caseId = u.searchParams.get("case_id") ?? undefined;
     const mall = (u.searchParams.get("mall") ?? undefined) as "amazon" | "rakuten" | undefined;
@@ -255,6 +298,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
            0) * s.units), 0) AS cost,
          COALESCE(SUM(COALESCE(s.fee_actual, s.fee_est)), 0) AS fees,
          COALESCE(SUM(CASE WHEN s.fee_actual IS NULL THEN COALESCE(s.fee_est,0) ELSE 0 END), 0) AS fees_est,
+         COALESCE(SUM(CASE WHEN s.fee_source = 'allocated' THEN COALESCE(s.fee_actual,0) ELSE 0 END), 0) AS fees_allocated,
          COALESCE(SUM(CASE WHEN (SELECT unit_cost FROM cost_history h
                                   WHERE h.product_id = s.product_id
                                   ORDER BY h.effective_from DESC LIMIT 1) IS NULL
@@ -288,6 +332,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       mall: String(r.mall),
       units: n(r.units), revenue: n(r.revenue), returns: n(r.returns),
       discounts: n(r.discounts), cost: n(r.cost), fees: n(r.fees), feesEst: n(r.fees_est),
+      feesAllocated: n(r.fees_allocated),
       revenueWithoutCost: n(r.revenue_without_cost),
       rowsWithoutActual: n(r.rows_without_actual), rowsTotal: n(r.rows_total),
       gross: n(r.revenue) - n(r.returns) - n(r.cost) - n(r.fees) - n(r.discounts),
@@ -301,7 +346,8 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     return json({
       month, caseId, byMall,
       units: sum("units"), revenue, returns: sum("returns"), discounts: sum("discounts"),
-      cost: sum("cost"), fees: sum("fees"), feesEst: sum("feesEst"), otherFees, gross,
+      cost: sum("cost"), fees: sum("fees"), feesEst: sum("feesEst"),
+      feesAllocated: sum("feesAllocated"), otherFees, gross,
       grossRate: revenue ? Math.round((gross / revenue) * 1000) / 10 : null,
       breakEvenRoas: revenue && gross > 0 ? Math.round((revenue / gross) * 100) / 100 : null,
       revenueWithoutCost: sum("revenueWithoutCost"),

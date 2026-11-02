@@ -248,6 +248,29 @@
 
     <div id="sales-table-view">
     <div>
+      <h2>請求明細の取り込み<span class="hint">実額に置き換えます</span></h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0">
+          <select id="ch-mall" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
+            border-radius:5px;background:var(--surface-2);color:var(--ink)">
+            <option value="rakuten">楽天</option>
+            <option value="amazon">Amazon</option>
+          </select>
+          <input type="file" id="ch-file" accept=".csv,.tsv,text/csv" style="font:inherit;font-size:13px;color:var(--ink-2)">
+          <button class="act primary" id="btn-ch-import">取り込む</button>
+          <button class="act" id="btn-ch-manual">手で入力する</button>
+          <span class="note" id="ch-msg"></span>
+        </div>
+        <p class="note" style="margin-top:10px">上の「月次のまとめ」で選んだ月が対象です。
+          RMS の請求明細を入れると、<strong>その月の手数料が概算から実額に変わります</strong>。</p>
+        <p class="note" style="margin-top:6px"><strong>請求明細は店舗単位で、商品ごとの内訳はありません。</strong>
+          店舗の合計は実額になりますが、商品別の手数料は<strong>売上で按分した値</strong>になります。
+          月全体の粗利は正確に、商品別は目安、という使い分けになります。</p>
+        <div id="ch-list" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <div>
       <h2>日別の合計</h2>
       <div class="tablewrap">
         <table>
@@ -514,7 +537,7 @@
       $(p2).classList.toggle("hidden", p2 !== p);
     });
     if (p === "p-status") loadStatus();
-    if (p === "p-sales") loadSales().then(loadSummary).then(loadBackfill);
+    if (p === "p-sales") loadSales().then(loadSummary).then(loadCharges).then(loadBackfill);
     if (p === "p-stock") loadStock();
     if (p === "p-ads") loadAds();
     if (p === "p-settings") loadSettings();
@@ -1207,7 +1230,9 @@
       ["返品", d.returns ? "-" + yen(d.returns) : "—"],
       ["値引き（クーポン等）", d.discounts ? "-" + yen(d.discounts) : "—"],
       ["原価", "-" + yen(d.cost)],
-      ["手数料", "-" + yen(d.fees) + (d.feesEst ? `<span class="tag wait" style="margin-left:6px">うち概算 ${yen(d.feesEst)}</span>` : "")],
+      ["手数料", "-" + yen(d.fees)
+        + (d.feesEst ? `<span class="tag wait" style="margin-left:6px">うち概算 ${yen(d.feesEst)}</span>` : "")
+        + (d.feesAllocated ? `<span class="tag ok" style="margin-left:6px">うち請求明細 ${yen(d.feesAllocated)}</span>` : "")],
       ["その他の費用（商品に紐づかないもの）", d.otherFees ? "-" + yen(d.otherFees) : "—"],
       ["<strong>粗利</strong>", `<strong>${yen(d.gross)}</strong>${d.grossRate != null ? `（${d.grossRate}%）` : ""}`],
       ["損益分岐ROAS", d.breakEvenRoas != null ? d.breakEvenRoas + "倍" : "—"]
@@ -1246,8 +1271,86 @@
       `<div class="row"><span>${k}</span><span class="v">${v}</span></div>`).join("") + mallTable + mallNote + noCost + shared + warn + bd;
   }
 
-  $("sales-case").addEventListener("change", () => { loadSales(); loadSummary(); loadBackfill(); });
-  $("sum-month").addEventListener("change", loadSummary);
+  $("sales-case").addEventListener("change", () => { loadSales(); loadSummary(); loadCharges(); loadBackfill(); });
+  $("sum-month").addEventListener("change", () => { loadSummary(); loadCharges(); });
+
+  /* ---------- 請求明細 ---------- */
+  async function loadCharges() {
+    const caseId = $("sales-case").value;
+    if (!caseId) { $("ch-list").innerHTML = ""; return; }
+    const d = await get(`/api/charges?case_id=${encodeURIComponent(caseId)}&month=${$("sum-month").value}`);
+    const rows = d.charges || [];
+    if (!rows.length) {
+      $("ch-list").innerHTML = `<p class="note">この月の請求明細はまだ入っていません。手数料は料率からの概算です。</p>`;
+      return;
+    }
+    const total = rows.reduce((n, r) => n + r.amount, 0);
+    $("ch-list").innerHTML = `<div class="tablewrap"><table style="min-width:420px">
+      <thead><tr><th>モール</th><th>費目</th><th class="r">金額</th><th>入力</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr>
+        <td>${r.mall === "rakuten" ? "楽天" : "Amazon"}</td><td>${esc(r.name)}</td>
+        <td class="r">${yen(r.amount)}</td>
+        <td><span class="tag wait">${r.source === "manual" ? "手入力" : "CSV"}</span></td></tr>`).join("")}
+      <tr><td colspan="2"><strong>合計</strong></td><td class="r"><strong>${yen(total)}</strong></td><td></td></tr>
+      </tbody></table></div>`;
+  }
+
+  $("btn-ch-import").addEventListener("click", async () => {
+    const caseId = $("sales-case").value;
+    const file = $("ch-file").files && $("ch-file").files[0];
+    if (!caseId) { $("ch-msg").textContent = "案件を選んでください"; return; }
+    if (!file) { $("ch-msg").textContent = "ファイルを選んでください"; return; }
+
+    const btn = $("btn-ch-import");
+    btn.disabled = true;
+    $("ch-msg").textContent = "取り込み中…";
+    try {
+      const fd = new FormData();
+      fd.append("caseId", caseId);
+      fd.append("mall", $("ch-mall").value);
+      fd.append("month", $("sum-month").value);
+      fd.append("file", file);
+      const r = await fetch("/api/charges/import", { method: "POST", body: fd });
+      const d = await r.json();
+      if (!d.saved) {
+        // 書式が読めなかったときは、見出しをそのまま出して次の手がかりにする
+        $("ch-msg").innerHTML = `<span class="tag ng">読めませんでした</span> ${esc(d.message || d.error || "")}`;
+        $("ch-list").innerHTML = d.headers
+          ? `<p class="note" style="margin-top:8px">見つかった見出し：<span style="font-family:var(--mono)">${
+              d.headers.map(esc).join(" / ")}</span><br>
+             この内容を伝えてもらえれば、この書式に対応します。それまでは「手で入力する」で進められます。</p>`
+          : "";
+        return;
+      }
+      $("ch-msg").innerHTML = `<span class="tag ok">取り込みました</span> ${esc(d.message)}／商品別に按分：${d.allocated}行`;
+      await loadCharges(); await loadSummary(); await loadSales();
+    } finally { btn.disabled = false; }
+  });
+
+  $("btn-ch-manual").addEventListener("click", async () => {
+    const caseId = $("sales-case").value;
+    if (!caseId) { $("ch-msg").textContent = "案件を選んでください"; return; }
+    const raw = prompt(
+      "費目と金額を1行ずつ入れてください（タブかカンマ区切り）。例：\nシステム利用料\t45000\n決済手数料\t32000",
+      ""
+    );
+    if (!raw) return;
+    const rows = raw.split(/\n/).map((l) => {
+      const [name, amount] = l.split(/[\t,]/);
+      return { name: (name || "").trim(), amount: Math.round(Number((amount || "").replace(/[,¥円\s]/g, ""))) };
+    }).filter((r) => r.name && Number.isFinite(r.amount) && r.amount !== 0);
+    if (!rows.length) { $("ch-msg").textContent = "読み取れる行がありませんでした"; return; }
+
+    const r = await fetch("/api/charges", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ caseId, mall: $("ch-mall").value, month: $("sum-month").value, rows })
+    });
+    const d = await r.json();
+    $("ch-msg").innerHTML = d.ok
+      ? `<span class="tag ok">保存しました</span> 合計 ${yen(d.total)}／商品別に按分：${d.allocated}行`
+      : `失敗：${esc(d.error || "")}`;
+    await loadCharges(); await loadSummary(); await loadSales();
+  });
 
   $("btn-rakuten").addEventListener("click", async () => {
     const caseId = $("sales-case").value;
@@ -1640,9 +1743,11 @@
         body: JSON.stringify({ scope, scopeId, values, caseId, mall })
       });
       const d = await r.json();
+      // 期待した形が返らなかったときに「失敗：」とだけ出ると原因が追えないので、
+      // 返ってきた中身をそのまま見せる
       $("set-msg").innerHTML = d.ok
         ? `<span class="tag ok">保存しました</span>${d.recalculated ? ` 過去分 ${d.recalculated} 行を計算し直しました` : ""}`
-        : `失敗：${esc(d.error || "")}`;
+        : `<span class="tag ng">失敗</span> ${esc(d.error || JSON.stringify(d).slice(0, 200))}`;
       await loadSettings();
     } finally { btn.disabled = false; }
   });
