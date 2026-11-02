@@ -338,7 +338,7 @@
   <!-- 広告 -->
   <section id="p-ads" class="hidden">
     <div>
-      <h2>広告レポートの取り込み<span class="hint">楽天RPP（CSV）</span></h2>
+      <h2>広告レポートの取り込み<span class="hint">楽天RPP・Amazon広告（CSV）</span></h2>
       <div class="card">
         <div class="btns" style="margin-top:0">
           <select id="ads-case" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
@@ -352,9 +352,12 @@
           楽天の商品別・キーワード別は1回の操作で1日分しか落とせないので、
           何日分かためて落としてから、まとめて放り込んでください。
           同じ日を入れ直しても二重にはなりません。</p>
-        <p class="note" style="margin-top:6px">月ごと集計のファイルは取り込めません（日付が1日に定まらないため）。
+        <p class="note" style="margin-top:6px"><strong>楽天：</strong>月ごと集計のファイルは取り込めません（日付が1日に定まらないため）。
           RMSの「集計期間」で<strong>日ごと、または1日ぶん</strong>を選んで出してください。
           キャンペーン別は日ごと集計で1か月まとめて落とせます。</p>
+        <p class="note" style="margin-top:6px"><strong>Amazon：</strong>レポートの単位は<strong>「日別」</strong>、形式は<strong>CSV</strong>で出してください（Excelは読めません）。
+          対応しているのはキャンペーン・検索用語（SP／SB）・掲載枠・広告された商品の4種類です。
+          ファイルの中身を見て種類を自動で判定するので、ファイル名は何でも構いません。</p>
         <div id="ads-result" style="margin-top:12px"></div>
       </div>
     </div>
@@ -370,20 +373,23 @@
         <span class="seg">
           <button id="lv-product" aria-pressed="true">商品別</button>
           <button id="lv-keyword" aria-pressed="false">キーワード別</button>
+          <button id="lv-search_term" aria-pressed="false">検索用語</button>
           <button id="lv-campaign" aria-pressed="false">キャンペーン別</button>
+          <button id="lv-placement" aria-pressed="false">掲載枠</button>
         </span>
       </div>
       <div class="tablewrap">
         <table>
-          <thead><tr><th id="ads-col1">商品</th><th class="r">表示</th><th class="r">クリック</th>
-            <th class="r">広告費</th><th class="r">売上</th><th class="r">ROAS</th>
-            <th class="r">入札</th><th class="r">目安CPC</th><th class="r">新規比率</th></tr></thead>
+          <thead id="ads-head"></thead>
           <tbody id="ads-rows"></tbody>
         </table>
       </div>
-      <p class="note">ROASは楽天の720時間（約30日）・合計の売上で計算しています。
-        表示回数は楽天がインプレッションを返さないため、クリック数とCTRからの逆算です。
-        CTRが0.00と出る低い行は求められないので「—」になります。</p>
+      <p class="note"><strong>ROASは売上の帰属期間が種類ごとに違います。</strong>
+        楽天RPPは30日（720時間）、Amazon SPは7日、SBは14日です。帰属期間が長いほど売上が多く数えられるので、
+        <strong>違う種類どうしのROASをそのまま比べないでください。</strong>表の「帰属」列で確認できます。</p>
+      <p class="note" style="margin-top:6px">楽天の表示回数はインプレッションが返らないため、クリック数とCTRからの逆算です。
+        CTRが0.00と出る低い行は求められないので「—」になります。
+        検索用語のインプレッションシェアはAmazon上に30日しか残らないので、こまめに取り込むと履歴が貯まります。</p>
     </div>
   </section>
 
@@ -1595,36 +1601,61 @@
     renderCoverage(d.coverage);
   }
 
+  const MALL_TAG = (m, t) => {
+    const T = { sp: "SP", sb: "SB", sd: "SD", rpp: "RPP" };
+    const cls = m === "rakuten" ? "pill-r" : "pill-a";
+    return `<span class="tag ${cls}">${m === "rakuten" ? "楽天" : "Amazon"}${t && m === "amazon" ? " " + (T[t] || t) : ""}</span>`;
+  };
+  const num = (v) => v == null ? "—" : Number(v).toLocaleString("ja-JP");
+  const roasOf = (r) => r.cost > 0 ? (r.sales / r.cost).toFixed(2) + "倍" : "—";
+
+  // 粒度ごとの列。共通の列（表示〜ROAS）の前後に、その粒度でしか意味のない列を足す
+  const ADS_COLS = {
+    product:     { first: "商品",       extra: [["入札", (r) => r.bid == null ? "—" : yen(r.bid)],
+                                                 ["新規比率", (r) => r.clicks > 0 && r.new_clicks != null ? Math.round(r.new_clicks / r.clicks * 100) + "%" : "—"]] },
+    keyword:     { first: "キーワード", extra: [["目安CPC", (r) => r.suggested_cpc == null ? "—" : yen(r.suggested_cpc)],
+                                                 ["新規比率", (r) => r.clicks > 0 && r.new_clicks != null ? Math.round(r.new_clicks / r.clicks * 100) + "%" : "—"]] },
+    search_term: { first: "検索用語",   extra: [["表示シェア", (r) => r.imp_share == null ? "—" : r.imp_share + "%"],
+                                                 ["表示ランク", (r) => r.imp_rank == null ? "—" : r.imp_rank + "位"]] },
+    campaign:    { first: "キャンペーン", extra: [["予算", (r) => r.budget == null ? "—" : yen(r.budget)],
+                                                 ["予算内の時間", (r) => r.budget_coverage == null ? "—"
+                                                   : `<span ${r.budget_coverage < 100 ? 'style="color:var(--risk);font-weight:700"' : ""}>${r.budget_coverage}%</span>`]] },
+    placement:   { first: "キャンペーン ／ 掲載枠", extra: [] },
+  };
+
   async function loadAdRows() {
     const caseId = $("ads-case").value;
     if (!caseId) return;
     const d = await get(`/api/ads?case_id=${encodeURIComponent(caseId)}&level=${adsLevel}`);
     $("ads-period").textContent = `${d.from} 〜 ${d.to}`;
-    $("ads-col1").textContent = adsLevel === "campaign" ? "キャンペーン"
-      : adsLevel === "keyword" ? "キーワード" : "商品";
+    const cfg = ADS_COLS[adsLevel] || ADS_COLS.product;
+
+    $("ads-head").innerHTML = `<tr><th>${cfg.first}</th><th>モール</th><th class="r">帰属</th>
+      <th class="r">表示</th><th class="r">クリック</th><th class="r">広告費</th>
+      <th class="r">売上</th><th class="r">ROAS</th>
+      ${cfg.extra.map(([h]) => `<th class="r">${h}</th>`).join("")}</tr>`;
+
     const rows = d.rows || [];
     $("ads-rows").innerHTML = rows.map((r) => {
-      const roas = r.cost > 0 ? (r.sales / r.cost) : null;
-      const newRate = r.clicks > 0 && r.new_clicks != null
-        ? Math.round((r.new_clicks / r.clicks) * 100) + "%" : "—";
-      const name = adsLevel === "keyword"
-        ? `${esc(r.name)}<div class="note">${esc(r.sku || r.external_id || "")}</div>`
-        : `${esc(r.sku || r.name)}${r.product_name ? `<div class="note">${esc(r.product_name)}</div>` : ""}`;
-      return `<tr><td>${name}</td>
-        <td class="r">${r.impressions == null ? "—" : Number(r.impressions).toLocaleString("ja-JP")}</td>
-        <td class="r">${r.clicks}</td><td class="r">${yen(r.cost)}</td><td class="r">${yen(r.sales)}</td>
-        <td class="r">${roas == null ? "—" : roas.toFixed(2) + "倍"}</td>
-        <td class="r">${r.bid == null ? "—" : yen(r.bid)}</td>
-        <td class="r">${r.suggested_cpc == null ? "—" : yen(r.suggested_cpc)}</td>
-        <td class="r">${newRate}</td></tr>`;
-    }).join("") || `<tr><td colspan="9" style="color:var(--muted)">この粒度のデータがまだありません。</td></tr>`;
+      const name = adsLevel === "product"
+        ? `${esc(r.sku || r.name || "（未登録）")}${r.product_name ? `<div class="note">${esc(r.product_name)}</div>` : ""}`
+        : adsLevel === "keyword"
+          ? `${esc(r.name)}<div class="note">${esc(r.sku || r.external_id || "")}</div>`
+          : esc(r.name);
+      return `<tr><td>${name}</td><td>${MALL_TAG(r.mall, r.ad_type)}</td>
+        <td class="r">${r.attribution_days ? r.attribution_days + "日" : "—"}</td>
+        <td class="r">${num(r.impressions)}</td><td class="r">${num(r.clicks)}</td>
+        <td class="r">${yen(r.cost)}</td><td class="r">${yen(r.sales)}</td>
+        <td class="r">${roasOf(r)}</td>
+        ${cfg.extra.map(([, f]) => `<td class="r">${f(r)}</td>`).join("")}</tr>`;
+    }).join("") || `<tr><td colspan="${8 + cfg.extra.length}" style="color:var(--muted)">この粒度のデータがまだありません。</td></tr>`;
   }
 
-  ["product", "keyword", "campaign"].forEach((lv) => {
+  const LEVELS = ["product", "keyword", "search_term", "campaign", "placement"];
+  LEVELS.forEach((lv) => {
     $("lv-" + lv).addEventListener("click", () => {
       adsLevel = lv;
-      ["product", "keyword", "campaign"].forEach((x) =>
-        $("lv-" + x).setAttribute("aria-pressed", String(x === lv)));
+      LEVELS.forEach((x) => $("lv-" + x).setAttribute("aria-pressed", String(x === lv)));
       loadAdRows();
     });
   });

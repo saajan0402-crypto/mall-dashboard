@@ -19,8 +19,7 @@ import { startBackfill, runBackfill, backfillStatus } from "./backfill";
 import { notifyLicenseExpiry, expiringLicenses } from "./licenseAlert";
 import { ingestRakutenSales, ingestRakutenInventory, pumpRakuten } from "./ingestRakuten";
 import { syncRakutenItems, pumpRakutenItems } from "./rakutenItems";
-import { importAdFile, adCoverage, adSummary, type ImportResult } from "./ingestAds";
-import { type AdLevel } from "./adImport";
+import { importAdFile, adCoverage, adSummary, type ImportResult, type SummaryLevel } from "./ingestAds";
 import { SETTINGS, resolveSettings, saveSettings, feeRate, recalcFeeEst, recalcAllFeeEst, type Scope } from "./settings";
 import { parseChargeCsv, saveCharges, listCharges, type ChargeRow } from "./mallCharges";
 
@@ -433,7 +432,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const u = new URL(req.url);
     const caseId = u.searchParams.get("case_id");
     if (!caseId) return json({ rows: [] });
-    const level = (u.searchParams.get("level") ?? "product") as AdLevel;
+    const level = (u.searchParams.get("level") ?? "product") as SummaryLevel;
     const from = u.searchParams.get("from") ?? jstDate(14);
     const to = u.searchParams.get("to") ?? jstDate(1);
     return json({ level, from, to, rows: await adSummary(env.DB, caseId, level, from, to) });
