@@ -17,6 +17,8 @@ import { ingestInventory, pumpInventory, inventoryStatus, notifyInventory } from
 import { ingestSns, pumpSns } from "./ingestSns";
 import { startBackfill, runBackfill, backfillStatus } from "./backfill";
 import { notifyLicenseExpiry, expiringLicenses } from "./licenseAlert";
+import { ingestRakutenSales, ingestRakutenInventory, pumpRakuten } from "./ingestRakuten";
+import { syncRakutenItems, pumpRakutenItems } from "./rakutenItems";
 
 export interface Env {
   DB: D1Database;
@@ -96,6 +98,8 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
              MAX(CASE WHEN l.mall = 'amazon' THEN l.fulfillment END) AS amazon_fulfillment,
              MAX(CASE WHEN l.mall = 'rakuten' THEN l.external_id END) AS rakuten_id,
              MAX(CASE WHEN l.mall = 'rakuten' THEN l.fulfillment END) AS rakuten_fulfillment,
+             MAX(CASE WHEN l.mall = 'rakuten' THEN l.price END)        AS rakuten_price,
+             MAX(CASE WHEN l.mall = 'rakuten' THEN l.check_status END) AS rakuten_check,
              (SELECT unit_cost FROM cost_history h WHERE h.product_id = p.id
                ORDER BY h.effective_from DESC LIMIT 1) AS unit_cost
         FROM products p
@@ -256,6 +260,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       grossRate: revenue ? Math.round((gross / revenue) * 1000) / 10 : null,
       // 損益分岐ROAS = 1 ÷ 広告費を除いた粗利率
       breakEvenRoas: revenue && gross > 0 ? Math.round((revenue / gross) * 100) / 100 : null,
+      mallNote: "Amazon のみ。楽天は手数料のAPIがないため、料率設定を入れてから対応します",
       actual: { missing: sales?.rows_without_actual ?? 0, total: sales?.rows_total ?? 0 },
       breakdown,
     });
@@ -320,6 +325,26 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
   if (path === "/api/ingest/sns" && req.method === "POST") {
     const b = (await req.json().catch(() => ({}))) as { caseId?: string };
     const results = b.caseId ? [await ingestSns(env, b.caseId)] : await pumpSns(env);
+    return json({ results });
+  }
+
+  // 楽天の商品情報との照合（商品管理番号の確認と価格の取得）
+  if (path === "/api/ingest/rakuten-items" && req.method === "POST") {
+    const b = (await req.json().catch(() => ({}))) as { caseId?: string };
+    const results = b.caseId ? [await syncRakutenItems(env, b.caseId)] : await pumpRakutenItems(env);
+    return json({ results });
+  }
+
+  // 楽天の売上・在庫
+  if (path === "/api/ingest/rakuten" && req.method === "POST") {
+    const b = (await req.json().catch(() => ({}))) as { caseId?: string; days?: number; kind?: "sales" | "inventory" };
+    if (!b.caseId) return json({ results: await pumpRakuten(env, { days: b.days ?? 7 }) });
+
+    const results = [];
+    if (b.kind !== "inventory") {
+      results.push(await ingestRakutenSales(env, b.caseId, jstDate(b.days ?? 7), jstDate(0)));
+    }
+    if (b.kind !== "sales") results.push(await ingestRakutenInventory(env, b.caseId));
     return json({ results });
   }
 
@@ -505,6 +530,10 @@ export default {
         // 在庫は毎日とり直す。定期便を先に取り込むのは、判定に使うため
         await pumpSns(env);
         await pumpInventory(env);
+        // 楽天。売上と在庫をまとめて取り込む
+        await pumpRakuten(env, { days: 7 });
+        // 商品情報の照合は朝6時の実行だけ。価格はそう頻繁に変わらない
+        if (event.cron === "0 21 * * *") await pumpRakutenItems(env);
         await notifyInventory(env);
         // 期限通知は朝6時の実行だけ。7時の実行でもう一度流さないため
         if (event.cron === "0 21 * * *") await notifyLicenseExpiry(env);

@@ -187,6 +187,7 @@ export async function ingestInventory(env: InventoryEnv, caseId: string): Promis
 export interface InventoryRow {
   caseId: string;
   caseName: string;
+  mall: string;
   productId: string;
   sku: string;
   name: string;
@@ -229,18 +230,18 @@ async function alertDays(db: D1Database): Promise<{ company: number; byCase: Map
 export async function inventoryStatus(db: D1Database, caseId?: string): Promise<InventoryRow[]> {
   const { results } = await db
     .prepare(
-      `SELECT i.case_id, c.name AS case_name, i.product_id, p.sku, p.name, i.date,
+      `SELECT i.case_id, c.name AS case_name, i.mall, i.product_id, p.sku, p.name, i.date,
               i.qty, i.inbound, i.reserved, i.unfulfillable, i.velocity, i.days_of_supply,
               s.subscriptions, s.next30_units, s.oos_not_delivered
          FROM daily_inventory i
          JOIN products p ON p.id = i.product_id
          JOIN cases c ON c.id = i.case_id
+         -- 定期おトク便は Amazon だけの仕組み
          LEFT JOIN sns_offers s
-                ON s.product_id = i.product_id
+                ON i.mall = 'amazon' AND s.product_id = i.product_id
                AND s.date = (SELECT MAX(date) FROM sns_offers x WHERE x.product_id = i.product_id)
-        WHERE i.mall = 'amazon'
-          AND i.date = (SELECT MAX(date) FROM daily_inventory d
-                         WHERE d.case_id = i.case_id AND d.mall = 'amazon')
+        WHERE i.date = (SELECT MAX(date) FROM daily_inventory d
+                         WHERE d.case_id = i.case_id AND d.mall = i.mall)
           ${caseId ? "AND i.case_id = ?" : ""}
         ORDER BY i.days_of_supply IS NULL, i.days_of_supply`
     )
@@ -286,7 +287,7 @@ export async function inventoryStatus(db: D1Database, caseId?: string): Promise<
     }
 
     return {
-      caseId: cid, caseName: String(r.case_name), productId,
+      caseId: cid, caseName: String(r.case_name), mall: String(r.mall), productId,
       sku: String(r.sku), name: String(r.name), date: String(r.date),
       qty, inbound: Number(r.inbound ?? 0), reserved: Number(r.reserved ?? 0),
       unfulfillable: Number(r.unfulfillable ?? 0),
@@ -306,7 +307,8 @@ export async function notifyInventory(env: InventoryEnv): Promise<{ sent: boolea
     const head = r.level === "out" ? ":red_circle: 在庫切れ" : ":warning: 欠品間近";
     const inbound = r.inbound ? `／納品中 ${r.inbound}個` : "";
     const sns = r.subscriptions ? `／定期便 ${r.subscriptions}件` : "";
-    return `${head}　*${r.caseName}* ${r.sku}（${r.name}）　在庫 ${r.qty}個${inbound}${sns}\n　　${r.reason}`;
+    const mall = r.mall === "rakuten" ? "楽天" : "Amazon";
+    return `${head}　*${r.caseName}*（${mall}） ${r.sku}（${r.name}）　在庫 ${r.qty}個${inbound}${sns}\n　　${r.reason}`;
   });
 
   await fetch(env.SLACK_WEBHOOK_URL, {

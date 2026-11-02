@@ -127,6 +127,7 @@
         <div class="btns">
           <button class="act" id="btn-check">内容を確認</button>
           <button class="act primary" id="btn-import" disabled>取り込む</button>
+          <button class="act" id="btn-rakuten-items">楽天の商品情報と照合</button>
           <span class="note" id="paste-note"></span>
         </div>
         <div id="result"></div>
@@ -141,6 +142,7 @@
             <th>案件</th><th>自社SKU</th><th>商品名</th>
             <th>Amazon SKU</th><th>発送</th>
             <th>楽天 商品管理番号</th><th>発送</th>
+            <th class="r">楽天 販売価格</th>
             <th class="r">原価</th><th>広告方針</th>
           </tr></thead>
           <tbody id="products"></tbody>
@@ -163,6 +165,7 @@
           <button class="act primary" id="btn-ingest">この日を取り込む</button>
           <button class="act" id="btn-pump">直近7日の穴を埋める</button>
           <button class="act" id="btn-fin">入金明細を取り込む</button>
+          <button class="act" id="btn-rakuten">楽天の売上を取り込む</button>
           <span class="note" id="ingest-msg"></span>
         </div>
         <div class="btns" style="margin-top:12px">
@@ -178,7 +181,7 @@
       </div>
     </div>
     <div>
-      <h2>月次のまとめ<span class="hint">手数料の実額ベース</span></h2>
+      <h2>月次のまとめ<span class="hint">Amazon のみ／手数料の実額ベース</span></h2>
       <div class="card">
         <div class="btns" style="margin-top:0;margin-bottom:12px">
           <input type="month" id="sum-month" style="font:inherit;font-size:13px;padding:7px 10px;
@@ -252,7 +255,7 @@
       <h2>商品別の明細<span class="hint">新しい順</span></h2>
       <div class="tablewrap">
         <table>
-          <thead><tr><th>日付</th><th>SKU</th><th>商品名</th><th class="r">販売数</th><th class="r">売上</th>
+          <thead><tr><th>日付</th><th>モール</th><th>SKU</th><th>商品名</th><th class="r">販売数</th><th class="r">売上</th>
             <th class="r">セッション</th><th class="r">手数料</th><th class="r">粗利</th></tr></thead>
           <tbody id="sales-rows"></tbody>
         </table>
@@ -274,6 +277,7 @@
             border-radius:5px;background:var(--surface-2);color:var(--ink)"></select>
           <button class="act primary" id="btn-stock">在庫を取り込む</button>
           <button class="act" id="btn-sns">定期おトク便を取り込む</button>
+          <button class="act" id="btn-rakuten-stock">楽天の在庫を取り込む</button>
           <span class="note" id="stock-msg"></span>
         </div>
         <div id="stock-summary" style="margin-top:12px"></div>
@@ -283,7 +287,7 @@
       <h2>あと何日もつか<span class="hint">少ない順</span></h2>
       <div class="tablewrap">
         <table>
-          <thead><tr><th>状態</th><th>案件</th><th>SKU</th><th>商品名</th>
+          <thead><tr><th>状態</th><th>案件</th><th>モール</th><th>SKU</th><th>商品名</th>
             <th class="r">販売可能</th><th class="r">納品中</th><th class="r">引当済み</th><th class="r">販売不可</th>
             <th class="r">1日あたり</th><th class="r">残り日数</th><th class="r">しきい値</th>
             <th class="r" title="継続中の定期おトク便の契約数">定期便の契約</th>
@@ -346,9 +350,11 @@
             <tr><td>問い合わせ管理API</td><td style="font-family:var(--mono);font-size:11.5px">
               inquirymngapi.counts.get ／ inquirymngapi.inquiries.get ／ inquirymngapi.inquiry.get ／ inquirymngapi.attachment.get</td></tr>
             <tr><td>ライセンス管理</td><td class="note">LicenseManagementAPI。有効期限の取得に使います（90日ごとの更新に必要）</td></tr>
-            <tr><td>商品API 2.0</td><td class="note"><strong>使いません。</strong>
-              利用には商品一括登録の申込みが必要で、別料金（月1万円ほど）がかかります。
-              商品情報は商品マスタで管理しているので、無くても売上・在庫・手数料はすべて動きます</td></tr>
+            <tr><td>商品API 2.0</td><td style="font-family:var(--mono);font-size:11.5px">
+              itemapi_2.0.items.get ／ itemapi_2.0.items.bulk.get
+              <div class="note" style="font-family:inherit">この2つは無料。商品管理番号の実在確認と販売価格の取得に使います。<br>
+                <strong>itemapi_2.0.items.search と itemapi_2.0.inv-settings.get は別料金</strong>なので使いません。
+                商品管理番号はマスタに持っているので検索は不要です</div></td></tr>
           </tbody></table></div>
 
         <p class="note" style="margin-top:12px"><strong>有効にしてはいけないもの</strong>：
@@ -358,7 +364,8 @@
 
         <h3 style="font-size:13px;margin:22px 0 8px">つまずきやすいところ</h3>
         <ul class="steps" style="font-size:12.5px">
-          <li><strong>商品API 2.0 は別料金（月1万円ほど）</strong>なので使わない方針です。診断では「対象外」と表示されます</li>
+          <li>商品API 2.0 のうち<strong>有料なのは items.search と inv-settings.get の2つだけ</strong>です。
+            使っている items.get / items.bulk.get は無料なので、この2つにはチェックを入れないでください</li>
           <li><strong>楽天のライセンスキーは90日ごとに更新</strong>が必要。切れると全APIが一斉に401になります</li>
           <li>2025年6月に楽天の認証方式が変わり、licenseKey は「アプリ」単位で発行される形になりました。
             serviceSecret と licenseKey は<strong>同じアプリの組み合わせ</strong>である必要があります</li>
@@ -436,14 +443,30 @@
       <td>${esc(p.case_name)}</td><td>${esc(p.sku)}</td><td>${esc(p.name)}</td>
       <td>${p.amazon_sku ? `<span class="tag pill-a">${esc(p.amazon_sku)}</span>` : "—"}</td>
       <td>${FFL[p.amazon_fulfillment] || "—"}</td>
-      <td>${p.rakuten_id ? `<span class="tag pill-r">${esc(p.rakuten_id)}</span>` : "—"}</td>
+      <td>${p.rakuten_id ? `<span class="tag pill-r">${esc(p.rakuten_id)}</span>` : "—"}${
+        p.rakuten_check === "not_found" ? `<div class="note" style="color:var(--risk)">楽天に見つかりません</div>` : ""}</td>
       <td>${FFL[p.rakuten_fulfillment] || "—"}</td>
+      <td class="r">${p.rakuten_price == null ? "—" : yen(p.rakuten_price)}</td>
       <td class="r">${yen(p.unit_cost)}</td>
       <td>${POLICY[p.ad_policy] || "—"}</td></tr>`).join("");
     const cases = await get("/api/cases");
     $("case-summary").textContent = (cases.cases || [])
       .map((c) => `${c.name} ${c.products}件`).join(" ／ ");
   }
+
+  $("btn-rakuten-items").addEventListener("click", async () => {
+    const btn = $("btn-rakuten-items");
+    btn.disabled = true;
+    $("paste-note").textContent = "楽天の商品情報と照合中…";
+    try {
+      const r = await fetch("/api/ingest/rakuten-items", {
+        method: "POST", headers: { "content-type": "application/json" }, body: "{}"
+      });
+      const d = await r.json();
+      $("paste-note").textContent = (d.results || []).map((x) => x.message).join(" ／ ") || "結果がありません";
+      await loadProducts();
+    } finally { btn.disabled = false; }
+  });
 
   /* ---------- 取り込み ---------- */
   function renderErrors(errors, skipped, ready, imported) {
@@ -915,7 +938,9 @@
       const gross = r.unit_cost != null ? r.revenue - r.unit_cost * r.units - fee - (r.returns || 0) : null;
       // 原価の適用開始日より前の日は、いちばん古い原価で代用している
       const mark = r.cost_before_record ? `<span title="原価の適用開始日より前の日です。いちばん古い原価で計算しています">*</span>` : "";
-      return `<tr><td>${esc(r.date)}</td><td>${esc(r.sku) || "—"}</td><td>${esc(r.name) || "（未登録）"}</td>
+      return `<tr><td>${esc(r.date)}</td>
+        <td><span class="tag ${r.mall === "rakuten" ? "pill-r" : "pill-a"}">${r.mall === "rakuten" ? "楽天" : "Amazon"}</span></td>
+        <td>${esc(r.sku) || "—"}</td><td>${esc(r.name) || "（未登録）"}</td>
         <td class="r">${r.units}</td><td class="r">${yen(r.revenue)}</td>
         <td class="r">${r.sessions == null ? "—" : r.sessions}</td>
         <td class="r">${fee ? yen(fee) : "—"}${feeActual ? "" : `<span class="tag wait" style="margin-left:5px">概算</span>`}</td>
@@ -1092,6 +1117,8 @@
       ["<strong>粗利</strong>", `<strong>${yen(d.gross)}</strong>${d.grossRate != null ? `（${d.grossRate}%）` : ""}`],
       ["損益分岐ROAS", d.breakEvenRoas != null ? d.breakEvenRoas + "倍" : "—"]
     ];
+    const mallNote = d.mallNote
+      ? `<p class="note" style="margin-top:10px">${esc(d.mallNote)}</p>` : "";
     const shared = d.otherFees
       ? `<p class="note" style="margin-top:10px">「その他の費用」は商品に紐づかない費用です。
          注文単位の手数料、月額登録料、在庫保管料などが入ります。粗利からは引いてあります。</p>` : "";
@@ -1107,11 +1134,27 @@
             <td class="r">${b.count}</td><td class="r">${yen(b.amount)}</td></tr>`).join("")}</tbody></table></div>`
       : "";
     $("summary").innerHTML = rows.map(([k, v]) =>
-      `<div class="row"><span>${k}</span><span class="v">${v}</span></div>`).join("") + shared + warn + bd;
+      `<div class="row"><span>${k}</span><span class="v">${v}</span></div>`).join("") + mallNote + shared + warn + bd;
   }
 
   $("sales-case").addEventListener("change", () => { loadSales(); loadSummary(); loadBackfill(); });
   $("sum-month").addEventListener("change", loadSummary);
+
+  $("btn-rakuten").addEventListener("click", async () => {
+    const caseId = $("sales-case").value;
+    const btn = $("btn-rakuten");
+    btn.disabled = true;
+    $("ingest-msg").textContent = caseId ? "楽天の売上を取り込み中…" : "全案件の楽天を取り込み中…";
+    try {
+      const r = await fetch("/api/ingest/rakuten", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(caseId ? { caseId, kind: "sales", days: 7 } : { days: 7 })
+      });
+      const d = await r.json();
+      $("ingest-msg").textContent = (d.results || []).map((x) => x.message).join(" / ") || "結果がありません";
+      await loadSales(); await loadSummary();
+    } finally { btn.disabled = false; }
+  });
 
   $("btn-fin").addEventListener("click", async () => {
     const caseId = $("sales-case").value;
@@ -1231,7 +1274,9 @@
       return `<tr>
         <td><span class="tag ${cls}">${label}</span>
           <div class="note" style="margin-top:3px">${esc(r.reason)}</div></td>
-        <td>${esc(r.caseName)}</td><td>${esc(r.sku)}</td><td>${esc(r.name)}</td>
+        <td>${esc(r.caseName)}</td>
+        <td><span class="tag ${r.mall === "rakuten" ? "pill-r" : "pill-a"}">${r.mall === "rakuten" ? "楽天" : "Amazon"}</span></td>
+        <td>${esc(r.sku)}</td><td>${esc(r.name)}</td>
         <td class="r">${r.qty}</td><td class="r">${r.inbound || "—"}</td>
         <td class="r">${r.reserved || "—"}</td><td class="r">${r.unfulfillable || "—"}</td>
         <td class="r">${r.velocity == null ? "—" : r.velocity}</td>
@@ -1254,6 +1299,22 @@
       const r = await fetch("/api/ingest/sns", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify(caseId ? { caseId } : {})
+      });
+      const d = await r.json();
+      $("stock-msg").textContent = (d.results || []).map((x) => x.message).join(" / ") || "結果がありません";
+      await loadStock();
+    } finally { btn.disabled = false; }
+  });
+
+  $("btn-rakuten-stock").addEventListener("click", async () => {
+    const btn = $("btn-rakuten-stock");
+    const caseId = $("stock-case").value;
+    btn.disabled = true;
+    $("stock-msg").textContent = "楽天の在庫を取り込み中…";
+    try {
+      const r = await fetch("/api/ingest/rakuten", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(caseId ? { caseId, kind: "inventory" } : {})
       });
       const d = await r.json();
       $("stock-msg").textContent = (d.results || []).map((x) => x.message).join(" / ") || "結果がありません";
