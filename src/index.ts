@@ -19,6 +19,8 @@ import { startBackfill, runBackfill, backfillStatus } from "./backfill";
 import { notifyLicenseExpiry, expiringLicenses } from "./licenseAlert";
 import { ingestRakutenSales, ingestRakutenInventory, pumpRakuten } from "./ingestRakuten";
 import { syncRakutenItems, pumpRakutenItems } from "./rakutenItems";
+import { importAdFile, adCoverage, adSummary, type ImportResult } from "./ingestAds";
+import { type AdLevel } from "./adImport";
 
 export interface Env {
   DB: D1Database;
@@ -326,6 +328,48 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const b = (await req.json().catch(() => ({}))) as { caseId?: string };
     const results = b.caseId ? [await ingestSns(env, b.caseId)] : await pumpSns(env);
     return json({ results });
+  }
+
+  /* ───────── 広告レポート ───────── */
+
+  // 複数ファイルをまとめて受け取る。楽天の商品別・キーワード別は
+  // 1回の操作で1日分しか落とせないので、まとめて投げられることが大事
+  if (path === "/api/import/ads" && req.method === "POST") {
+    const form = await req.formData();
+    const caseId = String(form.get("caseId") ?? "");
+    if (!caseId) return json({ error: "案件を選んでください" }, 400);
+
+    const results: ImportResult[] = [];
+    for (const entry of form.getAll("files")) {
+      if (!(entry instanceof File)) continue;
+      try {
+        results.push(await importAdFile(env, caseId, entry.name, await entry.arrayBuffer()));
+      } catch (e) {
+        results.push({
+          fileName: entry.name, ok: false, mall: "", level: "",
+          periodStart: "", periodEnd: "", rows: 0, unknown: [],
+          message: `読み込みに失敗：${String(e instanceof Error ? e.message : e)}`,
+        });
+      }
+    }
+    return json({ results, coverage: await adCoverage(env.DB, caseId) });
+  }
+
+  if (path === "/api/ads/coverage") {
+    const u = new URL(req.url);
+    const caseId = u.searchParams.get("case_id");
+    if (!caseId) return json({ coverage: [] });
+    return json({ coverage: await adCoverage(env.DB, caseId, Number(u.searchParams.get("days") ?? 30)) });
+  }
+
+  if (path === "/api/ads") {
+    const u = new URL(req.url);
+    const caseId = u.searchParams.get("case_id");
+    if (!caseId) return json({ rows: [] });
+    const level = (u.searchParams.get("level") ?? "product") as AdLevel;
+    const from = u.searchParams.get("from") ?? jstDate(14);
+    const to = u.searchParams.get("to") ?? jstDate(1);
+    return json({ level, from, to, rows: await adSummary(env.DB, caseId, level, from, to) });
   }
 
   // 楽天の商品情報との照合（商品管理番号の確認と価格の取得）

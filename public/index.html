@@ -107,6 +107,7 @@
     <button role="tab" id="t-master" aria-selected="true">商品マスタ</button>
     <button role="tab" id="t-sales" aria-selected="false">売上</button>
     <button role="tab" id="t-stock" aria-selected="false">在庫</button>
+    <button role="tab" id="t-ads" aria-selected="false">広告</button>
     <button role="tab" id="t-conn" aria-selected="false">接続</button>
     <button role="tab" id="t-status" aria-selected="false">連携ステータス</button>
   </nav>
@@ -307,6 +308,58 @@
     </div>
   </section>
 
+  <!-- 広告 -->
+  <section id="p-ads" class="hidden">
+    <div>
+      <h2>広告レポートの取り込み<span class="hint">楽天RPP（CSV）</span></h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0">
+          <select id="ads-case" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
+            border-radius:5px;background:var(--surface-2);color:var(--ink)"></select>
+          <input type="file" id="ads-files" multiple accept=".csv,.tsv,text/csv"
+            style="font:inherit;font-size:13px;color:var(--ink-2)">
+          <button class="act primary" id="btn-ads-import">取り込む</button>
+          <span class="note" id="ads-msg"></span>
+        </div>
+        <p class="note" style="margin-top:10px"><strong>何ファイルでも一度に選べます。</strong>
+          楽天の商品別・キーワード別は1回の操作で1日分しか落とせないので、
+          何日分かためて落としてから、まとめて放り込んでください。
+          同じ日を入れ直しても二重にはなりません。</p>
+        <p class="note" style="margin-top:6px">月ごと集計のファイルは取り込めません（日付が1日に定まらないため）。
+          RMSの「集計期間」で<strong>日ごと、または1日ぶん</strong>を選んで出してください。
+          キャンペーン別は日ごと集計で1か月まとめて落とせます。</p>
+        <div id="ads-result" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <div>
+      <h2>取り込み状況<span class="hint">直近30日／抜けている日が分かります</span></h2>
+      <div class="card" id="ads-coverage"></div>
+    </div>
+
+    <div>
+      <h2>広告の実績<span class="hint" id="ads-period"></span></h2>
+      <div class="btns" style="margin-top:0;margin-bottom:10px">
+        <span class="seg">
+          <button id="lv-product" aria-pressed="true">商品別</button>
+          <button id="lv-keyword" aria-pressed="false">キーワード別</button>
+          <button id="lv-campaign" aria-pressed="false">キャンペーン別</button>
+        </span>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th id="ads-col1">商品</th><th class="r">表示</th><th class="r">クリック</th>
+            <th class="r">広告費</th><th class="r">売上</th><th class="r">ROAS</th>
+            <th class="r">入札</th><th class="r">目安CPC</th><th class="r">新規比率</th></tr></thead>
+          <tbody id="ads-rows"></tbody>
+        </table>
+      </div>
+      <p class="note">ROASは楽天の720時間（約30日）・合計の売上で計算しています。
+        表示回数は楽天がインプレッションを返さないため、クリック数とCTRからの逆算です。
+        CTRが0.00と出る低い行は求められないので「—」になります。</p>
+    </div>
+  </section>
+
   <!-- 接続 -->
   <section id="p-conn" class="hidden">
     <div>
@@ -421,7 +474,7 @@
   const FFL = { fba: "FBA", own: "自社発送", mcf: "マルチチャネル" };
   const POLICY = { profit: "利益重視", share: "シェア獲得", nurture: "育成中" };
 
-  const tabs = [["t-master", "p-master"], ["t-sales", "p-sales"], ["t-stock", "p-stock"], ["t-conn", "p-conn"], ["t-status", "p-status"]];
+  const tabs = [["t-master", "p-master"], ["t-sales", "p-sales"], ["t-stock", "p-stock"], ["t-ads", "p-ads"], ["t-conn", "p-conn"], ["t-status", "p-status"]];
   tabs.forEach(([t, p]) => $(t).addEventListener("click", () => {
     tabs.forEach(([t2, p2]) => {
       $(t2).setAttribute("aria-selected", t2 === t ? "true" : "false");
@@ -430,6 +483,7 @@
     if (p === "p-status") loadStatus();
     if (p === "p-sales") loadSales().then(loadSummary).then(loadBackfill);
     if (p === "p-stock") loadStock();
+    if (p === "p-ads") loadAds();
     if (p === "p-conn") loadConnections();
   }));
 
@@ -1336,6 +1390,121 @@
       const d = await r.json();
       $("stock-msg").textContent = (d.results || []).map((x) => x.message).join(" / ") || "結果がありません";
       await loadStock();
+    } finally { btn.disabled = false; }
+  });
+
+  /* ---------- 広告 ---------- */
+  let adsCasesLoaded = false;
+  let adsLevel = "product";
+
+  async function loadAds() {
+    if (!adsCasesLoaded) {
+      const cases = await get("/api/cases");
+      $("ads-case").innerHTML = (cases.cases || [])
+        .map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
+      adsCasesLoaded = true;
+    }
+    await loadCoverage();
+    await loadAdRows();
+  }
+
+  function renderCoverage(coverage) {
+    if (!coverage || !coverage.length) { $("ads-coverage").innerHTML = `<p class="note">まだ取り込んでいません。</p>`; return; }
+    $("ads-coverage").innerHTML = coverage.map((c) => {
+      const cells = c.days.map((d) => {
+        const on = d.rows > 0;
+        return `<span title="${esc(d.date)}${on ? `／${d.rows}行` : "／未取り込み"}"
+          style="display:inline-block;width:14px;height:14px;margin:1px;border-radius:3px;
+            background:${on ? "var(--accent)" : "var(--surface-2)"};
+            border:1px solid ${on ? "var(--accent)" : "var(--line)"}"></span>`;
+      }).join("");
+      const miss = c.missing.length;
+      return `<div style="margin-bottom:14px">
+        <div style="display:flex;gap:10px;align-items:baseline;margin-bottom:5px">
+          <strong style="font-size:13px">${esc(c.label)}</strong>
+          <span class="tag ${miss === 0 ? "ok" : miss > 20 ? "ng" : "warn"}">${
+            miss === 0 ? "すべて揃っています" : `${miss}日 抜けています`}</span>
+          ${miss && miss <= 10 ? `<span class="note">${c.missing.map(esc).join(" / ")}</span>` : ""}
+        </div>
+        <div>${cells}</div>
+      </div>`;
+    }).join("") + `<p class="note">左が30日前、右が昨日です。色が付いている日は取り込み済みです。</p>`;
+  }
+
+  async function loadCoverage() {
+    const caseId = $("ads-case").value;
+    if (!caseId) return;
+    const d = await get(`/api/ads/coverage?case_id=${encodeURIComponent(caseId)}`);
+    renderCoverage(d.coverage);
+  }
+
+  async function loadAdRows() {
+    const caseId = $("ads-case").value;
+    if (!caseId) return;
+    const d = await get(`/api/ads?case_id=${encodeURIComponent(caseId)}&level=${adsLevel}`);
+    $("ads-period").textContent = `${d.from} 〜 ${d.to}`;
+    $("ads-col1").textContent = adsLevel === "campaign" ? "キャンペーン"
+      : adsLevel === "keyword" ? "キーワード" : "商品";
+    const rows = d.rows || [];
+    $("ads-rows").innerHTML = rows.map((r) => {
+      const roas = r.cost > 0 ? (r.sales / r.cost) : null;
+      const newRate = r.clicks > 0 && r.new_clicks != null
+        ? Math.round((r.new_clicks / r.clicks) * 100) + "%" : "—";
+      const name = adsLevel === "keyword"
+        ? `${esc(r.name)}<div class="note">${esc(r.sku || r.external_id || "")}</div>`
+        : `${esc(r.sku || r.name)}${r.product_name ? `<div class="note">${esc(r.product_name)}</div>` : ""}`;
+      return `<tr><td>${name}</td>
+        <td class="r">${r.impressions == null ? "—" : Number(r.impressions).toLocaleString("ja-JP")}</td>
+        <td class="r">${r.clicks}</td><td class="r">${yen(r.cost)}</td><td class="r">${yen(r.sales)}</td>
+        <td class="r">${roas == null ? "—" : roas.toFixed(2) + "倍"}</td>
+        <td class="r">${r.bid == null ? "—" : yen(r.bid)}</td>
+        <td class="r">${r.suggested_cpc == null ? "—" : yen(r.suggested_cpc)}</td>
+        <td class="r">${newRate}</td></tr>`;
+    }).join("") || `<tr><td colspan="9" style="color:var(--muted)">この粒度のデータがまだありません。</td></tr>`;
+  }
+
+  ["product", "keyword", "campaign"].forEach((lv) => {
+    $("lv-" + lv).addEventListener("click", () => {
+      adsLevel = lv;
+      ["product", "keyword", "campaign"].forEach((x) =>
+        $("lv-" + x).setAttribute("aria-pressed", String(x === lv)));
+      loadAdRows();
+    });
+  });
+
+  $("ads-case").addEventListener("change", loadAds);
+
+  $("btn-ads-import").addEventListener("click", async () => {
+    const caseId = $("ads-case").value;
+    const files = $("ads-files").files;
+    if (!caseId) { $("ads-msg").textContent = "案件を選んでください"; return; }
+    if (!files || !files.length) { $("ads-msg").textContent = "ファイルを選んでください"; return; }
+
+    const btn = $("btn-ads-import");
+    btn.disabled = true;
+    $("ads-msg").textContent = `${files.length}ファイルを取り込み中…`;
+    try {
+      const fd = new FormData();
+      fd.append("caseId", caseId);
+      for (const f of files) fd.append("files", f);
+      const r = await fetch("/api/import/ads", { method: "POST", body: fd });
+      const d = await r.json();
+      if (d.error) { $("ads-msg").textContent = d.error; return; }
+
+      const list = d.results || [];
+      const okCount = list.filter((x) => x.ok).length;
+      $("ads-msg").innerHTML = `<span class="tag ${okCount === list.length ? "ok" : "warn"}">${okCount} / ${list.length} 成功</span>`;
+      $("ads-result").innerHTML = `<div class="tablewrap"><table style="min-width:620px">
+        <thead><tr><th>ファイル</th><th>種類</th><th>期間</th><th class="r">行数</th><th>結果</th></tr></thead>
+        <tbody>${list.map((x) => `<tr>
+          <td style="font-family:var(--mono);font-size:11px">${esc(x.fileName)}</td>
+          <td>${esc(x.level || "—")}</td>
+          <td>${x.periodStart ? esc(x.periodStart) + (x.periodEnd !== x.periodStart ? " 〜 " + esc(x.periodEnd) : "") : "—"}</td>
+          <td class="r">${x.rows}</td>
+          <td><span class="tag ${x.ok ? "ok" : "ng"}">${x.ok ? "OK" : "NG"}</span>
+            <div class="note">${esc(x.message)}</div></td></tr>`).join("")}</tbody></table></div>`;
+      renderCoverage(d.coverage);
+      await loadAdRows();
     } finally { btn.disabled = false; }
   });
 
