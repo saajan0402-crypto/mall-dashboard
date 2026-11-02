@@ -324,6 +324,11 @@ async function probeAmazon(env: ConnEnv & LwaEnv, caseId: string): Promise<Probe
 
 /* ───────── 楽天 ───────── */
 
+/** 問い合わせ管理APIの日時書式。日本時間で yyyy-MM-ddTHH:mm:ss */
+function rmsDatetime(d: Date): string {
+  return new Date(d.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 19);
+}
+
 /**
  * 値そのものを出さずに形だけ返す。
  * 貼り付けミス（余計な空白・改行・全角）をここで切り分けられるようにする
@@ -429,7 +434,9 @@ async function probeRakuten(env: ConnEnv, caseId: string): Promise<Probe[]> {
       label: "問い合わせ件数の取得（問い合わせ管理API）",
       need: "問い合わせ管理APIの利用申請",
       unlocks: "返信下書き（ver 2.0）",
-      run: () => rms(rc, "/1.0/inquirymng-api/inquiries/count"),
+      // 期間は必須。書式は yyyy-MM-ddTHH:mm:ss（タイムゾーンは付けない）
+      run: () => rms(rc, `/1.0/inquirymng-api/inquiries/count` +
+        `?fromDate=${rmsDatetime(daysAgo(7))}&toDate=${rmsDatetime(new Date())}`),
     },
   ];
 

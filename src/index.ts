@@ -16,6 +16,7 @@ import { feeLabel, isKnownFee } from "./feeNames";
 import { ingestInventory, pumpInventory, inventoryStatus, notifyInventory } from "./ingestInventory";
 import { ingestSns, pumpSns } from "./ingestSns";
 import { startBackfill, runBackfill, backfillStatus } from "./backfill";
+import { notifyLicenseExpiry, expiringLicenses } from "./licenseAlert";
 
 export interface Env {
   DB: D1Database;
@@ -350,6 +351,23 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     });
   }
 
+  // ライセンスキーの期限
+  if (path === "/api/licenses") {
+    return json({ expiring: await expiringLicenses(env.DB, 60) });
+  }
+
+  if (path === "/api/notify/license" && req.method === "POST") {
+    const r = await notifyLicenseExpiry(env);
+    return json({
+      ok: r.sent,
+      message: r.sent
+        ? `${r.count} 件の期限を通知しました`
+        : r.count
+          ? `期限が近いものが ${r.count} 件ありますが、SLACK_WEBHOOK_URL が未設定のため送れません`
+          : "期限が近いライセンスキーはありません",
+    });
+  }
+
   // 在庫アラートを今すぐ流す
   if (path === "/api/notify/inventory" && req.method === "POST") {
     const r = await notifyInventory(env);
@@ -488,6 +506,8 @@ export default {
         await pumpSns(env);
         await pumpInventory(env);
         await notifyInventory(env);
+        // 期限通知は朝6時の実行だけ。7時の実行でもう一度流さないため
+        if (event.cron === "0 21 * * *") await notifyLicenseExpiry(env);
         // 過去データの取り込みは5分ごとの実行に任せている
         const rows = results.reduce((n, r) => n + (r.rows ?? 0), 0)
           + fin.reduce((n, r) => n + (r.rows ?? 0), 0);
