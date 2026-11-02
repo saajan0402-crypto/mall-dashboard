@@ -81,6 +81,18 @@ export async function syncRakutenItems(env: ItemsEnv, caseId: string): Promise<I
     await new Promise((res) => setTimeout(res, 400));
   }
 
+  // 1件も返ってこなかったときに全部を「見つかりません」と書き込むと、
+  // マスタが間違っているように見えてしまう。取得そのものを失敗として扱う
+  if (found.size === 0) {
+    return {
+      caseId, status: "error",
+      message: `店舗の商品を1件も取得できませんでした（numFound=${numFound}）。` +
+        "RMS のアプリ一覧で itemapi_2.0.items.search が有効か、" +
+        "接続している店舗が合っているかを確認してください。" +
+        "商品管理番号の判定は行っていません",
+    };
+  }
+
   const now = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 19).replace("T", " ");
   const statements: D1PreparedStatement[] = [];
   const notFound: string[] = [];
@@ -118,6 +130,11 @@ export async function syncRakutenItems(env: ItemsEnv, caseId: string): Promise<I
   }
   if (missingFromMaster.length) {
     notes.push(`店舗にあるのにマスタに無い商品が ${missingFromMaster.length} 件：${missingFromMaster.slice(0, 10).join(", ")}`);
+  }
+  // 1件も一致しないときは、店舗側の番号の例を出す。
+  // 書式の食い違い（大文字小文字・前後の空白など）に気づけるようにするため
+  if (notFound.length === listings.length) {
+    notes.push(`店舗側の番号の例：${[...found.keys()].slice(0, 5).join(", ")}`);
   }
   const note = notes.length ? notes.join(" ／ ") : null;
   await env.DB.prepare(

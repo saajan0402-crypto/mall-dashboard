@@ -411,7 +411,11 @@ async function probeRakuten(env: ConnEnv, caseId: string): Promise<Probe[]> {
       label: "商品情報の取得（商品API 2.0 / search）",
       need: "商品APIの利用申請（search は無料）",
       unlocks: "商品管理番号の実在確認・販売価格の取得",
-      run: () => rms(rc, "/2.0/items/search?hits=1"),
+      // 返ってくる形を確かめたいので、応答の冒頭も出す
+      run: async () => {
+        const r = await rms(rc, "/2.0/items/search?hits=2");
+        return { ...r, body: { preview: JSON.stringify(r.body).slice(0, 600) } };
+      },
     },
     {
       key: "order_search",
@@ -441,10 +445,13 @@ async function probeRakuten(env: ConnEnv, caseId: string): Promise<Probe[]> {
   for (const c of calls) {
     try {
       const r = await c.run();
+      const preview = (r.body as { preview?: string })?.preview;
       probes.push({
         key: c.key, label: c.label, need: c.need, unlocks: c.unlocks,
         ok: r.ok, status: r.status,
-        message: r.ok ? "通りました" : `${rmsError(r.body)}${rakutenHint(r.status, r.body)}`,
+        message: r.ok
+          ? `通りました${preview ? `　${preview}` : ""}`
+          : `${rmsError(r.body)}${rakutenHint(r.status, r.body)}`,
       });
     } catch (e) {
       probes.push({
