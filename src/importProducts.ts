@@ -30,6 +30,8 @@ export interface ParsedProduct {
   rakutenId: string | null;
   rakutenFulfillment: string | null;
   unitCost: number | null;
+  /** 買い方によって原価が変わるので、担当者が手で計算して入れる */
+  costManual: boolean;
   effectiveFrom: string;
   shippingCost: number;
   packagingCost: number;
@@ -94,6 +96,15 @@ function toInt(v: string): number | null {
   return Number.isFinite(n) ? Math.round(n) : NaN;
 }
 
+/**
+ * 「?」は「買い方によって原価が変わるので、あとで担当者が手で計算する」という印。
+ * 0 や空欄と混ぜると粗利を誤って計算してしまうので、別の状態として扱う
+ */
+const MANUAL_MARKS = ["?", "？", "要確認", "要計算", "手計算"];
+function isManualMark(v: string): boolean {
+  return MANUAL_MARKS.includes(v.trim());
+}
+
 function toDate(v: string): string | null {
   const s = v.trim().replace(/[/.]/g, "-");
   const m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
@@ -145,8 +156,11 @@ export function parseProductSheet(
     if (!r.name) msgs.push("商品名が空です");
     if (!r.amazonSku && !r.rakutenId) msgs.push("Amazon SKU と 楽天 商品管理番号 の両方が空です（どちらか一方は必要）");
 
-    const unitCost = toInt(r.unitCost ?? "");
-    if (Number.isNaN(unitCost)) msgs.push("仕入原価が数値ではありません");
+    const costManual = isManualMark(r.unitCost ?? "");
+    const unitCost = costManual ? null : toInt(r.unitCost ?? "");
+    if (!costManual && Number.isNaN(unitCost)) {
+      msgs.push("仕入原価が数値ではありません（買い方で原価が変わる商品は「?」と入れてください）");
+    }
     const shippingCost = toInt(r.shippingCost ?? "") ?? 0;
     if (Number.isNaN(shippingCost)) msgs.push("自社発送の送料が数値ではありません");
     const packagingCost = toInt(r.packagingCost ?? "") ?? 0;
@@ -192,6 +206,7 @@ export function parseProductSheet(
       rakutenId: r.rakutenId || null,
       rakutenFulfillment,
       unitCost,
+      costManual,
       effectiveFrom,
       shippingCost,
       packagingCost,
@@ -284,15 +299,19 @@ export async function importProducts(
       counts.listings++;
     }
 
-    if (r.unitCost !== null) {
+    // 「?」の行は、原価は入れずに「手計算が必要」という印だけを残す
+    if (r.unitCost !== null || r.costManual) {
       await db
         .prepare(
-          `INSERT INTO cost_history (id, product_id, effective_from, unit_cost, shipping_cost, packaging_cost)
-           VALUES (?,?,?,?,?,?)
+          `INSERT INTO cost_history
+             (id, product_id, effective_from, unit_cost, shipping_cost, packaging_cost, needs_manual)
+           VALUES (?,?,?,?,?,?,?)
            ON CONFLICT(product_id, effective_from)
-           DO UPDATE SET unit_cost = excluded.unit_cost, shipping_cost = excluded.shipping_cost, packaging_cost = excluded.packaging_cost`
+           DO UPDATE SET unit_cost = excluded.unit_cost, shipping_cost = excluded.shipping_cost,
+                         packaging_cost = excluded.packaging_cost, needs_manual = excluded.needs_manual`
         )
-        .bind(crypto.randomUUID(), productId, r.effectiveFrom, r.unitCost, r.shippingCost, r.packagingCost)
+        .bind(crypto.randomUUID(), productId, r.effectiveFrom, r.unitCost,
+              r.shippingCost, r.packagingCost, r.costManual ? 1 : 0)
         .run();
       counts.costs++;
     }

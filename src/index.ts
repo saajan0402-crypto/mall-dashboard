@@ -103,7 +103,9 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
              MAX(CASE WHEN l.mall = 'rakuten' THEN l.price END)        AS rakuten_price,
              MAX(CASE WHEN l.mall = 'rakuten' THEN l.check_status END) AS rakuten_check,
              (SELECT unit_cost FROM cost_history h WHERE h.product_id = p.id
-               ORDER BY h.effective_from DESC LIMIT 1) AS unit_cost
+               ORDER BY h.effective_from DESC LIMIT 1) AS unit_cost,
+             (SELECT needs_manual FROM cost_history h WHERE h.product_id = p.id
+               ORDER BY h.effective_from DESC LIMIT 1) AS cost_manual
         FROM products p
         JOIN cases c ON c.id = p.case_id
         LEFT JOIN product_listings l ON l.product_id = p.id
@@ -207,6 +209,8 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
          COALESCE(SUM(s.units), 0)   AS units,
          COALESCE(SUM(s.revenue), 0) AS revenue,
          COALESCE(SUM(s.returns), 0) AS returns,
+         -- 原価が未確定（マスタに「?」）の商品は 0 として混ぜない。
+         -- 0 にすると粗利が実態よりよく見えるので、件数だけ別に出して注記する
          COALESCE(SUM(COALESCE(
            (SELECT unit_cost FROM cost_history h
              WHERE h.product_id = s.product_id AND h.effective_from <= s.date
@@ -214,6 +218,10 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
            (SELECT unit_cost FROM cost_history h
              WHERE h.product_id = s.product_id ORDER BY h.effective_from ASC LIMIT 1),
            0) * s.units), 0) AS cost,
+         COALESCE(SUM(CASE WHEN (SELECT unit_cost FROM cost_history h
+                                  WHERE h.product_id = s.product_id
+                                  ORDER BY h.effective_from DESC LIMIT 1) IS NULL
+                           THEN s.revenue ELSE 0 END), 0) AS revenue_without_cost,
          COALESCE(SUM(COALESCE(s.fee_actual, s.fee_est)), 0) AS fees,
          SUM(CASE WHEN s.fee_actual IS NULL THEN 1 ELSE 0 END) AS rows_without_actual,
          COUNT(*) AS rows_total
@@ -263,6 +271,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       // 損益分岐ROAS = 1 ÷ 広告費を除いた粗利率
       breakEvenRoas: revenue && gross > 0 ? Math.round((revenue / gross) * 100) / 100 : null,
       mallNote: "Amazon のみ。楽天は手数料のAPIがないため、料率設定を入れてから対応します",
+      revenueWithoutCost: sales?.revenue_without_cost ?? 0,
       actual: { missing: sales?.rows_without_actual ?? 0, total: sales?.rows_total ?? 0 },
       breakdown,
     });

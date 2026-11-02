@@ -124,6 +124,9 @@
           <li>下の欄に貼り付けて「内容を確認」</li>
           <li>問題がなければ「取り込む」</li>
         </ol>
+        <p class="note" style="margin-bottom:10px">買い方によって原価が変わる商品は、仕入原価の欄に <strong>?</strong> と入れてください。
+          「要手計算」として記録し、<strong>粗利の計算からは外します</strong>（0円として計算すると粗利が実態よりよく見えるため）。
+          担当者が計算できたら、その値に書き換えてもう一度取り込んでください。</p>
         <textarea id="paste" placeholder="ここに貼り付けてください（1行目は見出し行）" spellcheck="false"></textarea>
         <div class="btns">
           <button class="act" id="btn-check">内容を確認</button>
@@ -499,14 +502,18 @@
       <td>${p.amazon_sku ? `<span class="tag pill-a">${esc(p.amazon_sku)}</span>` : "—"}</td>
       <td>${FFL[p.amazon_fulfillment] || "—"}</td>
       <td>${p.rakuten_id ? `<span class="tag pill-r">${esc(p.rakuten_id)}</span>` : "—"}${
-        p.rakuten_check === "not_found" ? `<div class="note" style="color:var(--risk)">楽天に見つかりません</div>` : ""}</td>
+        p.rakuten_check === "not_found" ? `<div class="note">楽天の出品に無し</div>` : ""}</td>
       <td>${FFL[p.rakuten_fulfillment] || "—"}</td>
       <td class="r">${p.rakuten_price == null ? "—" : yen(p.rakuten_price)}</td>
-      <td class="r">${yen(p.unit_cost)}</td>
+      <td class="r">${p.cost_manual
+        ? `<span class="tag warn" title="買い方によって原価が変わる商品です。担当者が手で計算して入れてください">要手計算</span>`
+        : yen(p.unit_cost)}</td>
       <td>${POLICY[p.ad_policy] || "—"}</td></tr>`).join("");
     const cases = await get("/api/cases");
-    $("case-summary").textContent = (cases.cases || [])
-      .map((c) => `${c.name} ${c.products}件`).join(" ／ ");
+    const manual = list.filter((p) => p.cost_manual).length;
+    $("case-summary").innerHTML = esc((cases.cases || [])
+      .map((c) => `${c.name} ${c.products}件`).join(" ／ "))
+      + (manual ? `　<span class="tag warn">原価の手計算待ち ${manual}件</span>` : "");
   }
 
   $("btn-rakuten-items").addEventListener("click", async () => {
@@ -1177,6 +1184,10 @@
     const shared = d.otherFees
       ? `<p class="note" style="margin-top:10px">「その他の費用」は商品に紐づかない費用です。
          注文単位の手数料、月額登録料、在庫保管料などが入ります。粗利からは引いてあります。</p>` : "";
+    const noCost = d.revenueWithoutCost
+      ? `<p class="note" style="margin-top:10px">このうち ${yen(d.revenueWithoutCost)} は、
+         原価が未確定（マスタに「?」）の商品の売上です。<strong>その分の原価は粗利に含めていません</strong>。
+         実際の粗利はこれより小さくなります。</p>` : "";
     const warn = d.actual.missing
       ? `<p class="note" style="margin-top:10px">${d.actual.total} 行のうち ${d.actual.missing} 行はまだ手数料の実額が入っていません（概算で計算しています）。
          「入金明細を取り込む」を押すか、翌朝の自動実行を待ってください。</p>` : "";
@@ -1189,7 +1200,7 @@
             <td class="r">${b.count}</td><td class="r">${yen(b.amount)}</td></tr>`).join("")}</tbody></table></div>`
       : "";
     $("summary").innerHTML = rows.map(([k, v]) =>
-      `<div class="row"><span>${k}</span><span class="v">${v}</span></div>`).join("") + mallNote + shared + warn + bd;
+      `<div class="row"><span>${k}</span><span class="v">${v}</span></div>`).join("") + mallNote + noCost + shared + warn + bd;
   }
 
   $("sales-case").addEventListener("change", () => { loadSales(); loadSummary(); loadBackfill(); });

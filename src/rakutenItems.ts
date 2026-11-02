@@ -141,16 +141,18 @@ export async function syncRakutenItems(env: ItemsEnv, caseId: string): Promise<I
   }
   await env.DB.batch(statements);
 
-  // 店舗にあるのにマスタに無い商品（登録漏れ）
+  // 店舗にあるのにマスタに無い商品。
+  // 廃番・セット・代理運用の対象外などが含まれるので、これは問題ではない。
+  // マスタ側を正として扱い、件数だけ参考に出す
   const registered = new Set(listings.map((l) => l.num));
-  const missingFromMaster = [...found.keys()].filter((n) => !registered.has(n));
+  const outOfScope = [...found.keys()].filter((n) => !registered.has(n));
 
   const notes: string[] = [];
   if (notFound.length) {
-    notes.push(`楽天に見つからない商品管理番号が ${notFound.length} 件：${notFound.slice(0, 10).join(", ")}`);
+    notes.push(`楽天の出品に無い番号が ${notFound.length} 件（廃番の可能性）：${notFound.slice(0, 10).join(", ")}`);
   }
-  if (missingFromMaster.length) {
-    notes.push(`店舗にあるのにマスタに無い商品が ${missingFromMaster.length} 件：${missingFromMaster.slice(0, 10).join(", ")}`);
+  if (outOfScope.length) {
+    notes.push(`店舗にはあるがマスタ外の商品が ${outOfScope.length} 件（参考）`);
   }
   // 1件も一致しないときは、店舗側の番号の例を出す。
   // 書式の食い違い（大文字小文字・前後の空白など）に気づけるようにするため
