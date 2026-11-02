@@ -108,6 +108,7 @@
     <button role="tab" id="t-sales" aria-selected="false">売上</button>
     <button role="tab" id="t-stock" aria-selected="false">在庫</button>
     <button role="tab" id="t-ads" aria-selected="false">広告</button>
+    <button role="tab" id="t-settings" aria-selected="false">設定</button>
     <button role="tab" id="t-conn" aria-selected="false">接続</button>
     <button role="tab" id="t-status" aria-selected="false">連携ステータス</button>
   </nav>
@@ -185,7 +186,7 @@
       </div>
     </div>
     <div>
-      <h2>月次のまとめ<span class="hint">Amazon のみ／手数料の実額ベース</span></h2>
+      <h2>月次のまとめ<span class="hint">両モール／Amazonは実額、楽天は料率からの概算</span></h2>
       <div class="card">
         <div class="btns" style="margin-top:0;margin-bottom:12px">
           <input type="month" id="sum-month" style="font:inherit;font-size:13px;padding:7px 10px;
@@ -363,6 +364,35 @@
     </div>
   </section>
 
+  <!-- 設定 -->
+  <section id="p-settings" class="hidden">
+    <div>
+      <h2>設定<span class="hint">会社共通 → 案件 → 案件×モール の順に継承します</span></h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0">
+          <select id="set-case" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
+            border-radius:5px;background:var(--surface-2);color:var(--ink)"></select>
+          <select id="set-mall" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
+            border-radius:5px;background:var(--surface-2);color:var(--ink)">
+            <option value="amazon">Amazon</option>
+            <option value="rakuten">楽天</option>
+          </select>
+          <span class="note" id="set-msg"></span>
+        </div>
+        <p class="note" style="margin-top:10px"><strong>空欄にすると、ひとつ上の階層から継承します。</strong>
+          0 と空欄は別の意味です。0は「本当に0」、空欄は「上に従う」です。
+          いま効いている値と、それがどの階層から来ているかを各欄の下に出しています。</p>
+      </div>
+    </div>
+
+    <div><h2>会社共通</h2><div class="card" id="set-company"></div></div>
+    <div><h2>案件ごと<span class="hint" id="set-case-name"></span></h2><div class="card" id="set-case-box"></div></div>
+    <div>
+      <h2>手数料の料率<span class="hint" id="set-mall-name"></span></h2>
+      <div class="card" id="set-mall-box"></div>
+    </div>
+  </section>
+
   <!-- 接続 -->
   <section id="p-conn" class="hidden">
     <div>
@@ -477,7 +507,7 @@
   const FFL = { fba: "FBA", own: "自社発送", mcf: "マルチチャネル" };
   const POLICY = { profit: "利益重視", share: "シェア獲得", nurture: "育成中" };
 
-  const tabs = [["t-master", "p-master"], ["t-sales", "p-sales"], ["t-stock", "p-stock"], ["t-ads", "p-ads"], ["t-conn", "p-conn"], ["t-status", "p-status"]];
+  const tabs = [["t-master", "p-master"], ["t-sales", "p-sales"], ["t-stock", "p-stock"], ["t-ads", "p-ads"], ["t-settings", "p-settings"], ["t-conn", "p-conn"], ["t-status", "p-status"]];
   tabs.forEach(([t, p]) => $(t).addEventListener("click", () => {
     tabs.forEach(([t2, p2]) => {
       $(t2).setAttribute("aria-selected", t2 === t ? "true" : "false");
@@ -487,6 +517,7 @@
     if (p === "p-sales") loadSales().then(loadSummary).then(loadBackfill);
     if (p === "p-stock") loadStock();
     if (p === "p-ads") loadAds();
+    if (p === "p-settings") loadSettings();
     if (p === "p-conn") loadConnections();
   }));
 
@@ -1170,15 +1201,27 @@
     const d = await get(`/api/summary?case_id=${encodeURIComponent(caseId)}&month=${$("sum-month").value}`);
     if (d.error) { $("summary").innerHTML = `<p class="note">${esc(d.error)}</p>`; return; }
 
+    const MALL_JA = { amazon: "Amazon", rakuten: "楽天" };
     const rows = [
       ["売上", yen(d.revenue)],
       ["返品", d.returns ? "-" + yen(d.returns) : "—"],
+      ["値引き（クーポン等）", d.discounts ? "-" + yen(d.discounts) : "—"],
       ["原価", "-" + yen(d.cost)],
-      ["手数料", "-" + yen(d.fees)],
+      ["手数料", "-" + yen(d.fees) + (d.feesEst ? `<span class="tag wait" style="margin-left:6px">うち概算 ${yen(d.feesEst)}</span>` : "")],
       ["その他の費用（商品に紐づかないもの）", d.otherFees ? "-" + yen(d.otherFees) : "—"],
       ["<strong>粗利</strong>", `<strong>${yen(d.gross)}</strong>${d.grossRate != null ? `（${d.grossRate}%）` : ""}`],
       ["損益分岐ROAS", d.breakEvenRoas != null ? d.breakEvenRoas + "倍" : "—"]
     ];
+    const mallTable = (d.byMall || []).length > 1
+      ? `<div class="tablewrap" style="margin-top:14px"><table style="min-width:520px">
+          <thead><tr><th>モール</th><th class="r">売上</th><th class="r">原価</th>
+            <th class="r">手数料</th><th class="r">粗利</th><th class="r">粗利率</th></tr></thead>
+          <tbody>${d.byMall.map((m) => `<tr>
+            <td><span class="tag ${m.mall === "rakuten" ? "pill-r" : "pill-a"}">${MALL_JA[m.mall] || m.mall}</span></td>
+            <td class="r">${yen(m.revenue)}</td><td class="r">${yen(m.cost)}</td>
+            <td class="r">${yen(m.fees)}</td><td class="r">${yen(m.gross)}</td>
+            <td class="r">${m.revenue ? (Math.round((m.gross / m.revenue) * 1000) / 10) + "%" : "—"}</td>
+            </tr>`).join("")}</tbody></table></div>` : "";
     const mallNote = d.mallNote
       ? `<p class="note" style="margin-top:10px">${esc(d.mallNote)}</p>` : "";
     const shared = d.otherFees
@@ -1200,7 +1243,7 @@
             <td class="r">${b.count}</td><td class="r">${yen(b.amount)}</td></tr>`).join("")}</tbody></table></div>`
       : "";
     $("summary").innerHTML = rows.map(([k, v]) =>
-      `<div class="row"><span>${k}</span><span class="v">${v}</span></div>`).join("") + mallNote + noCost + shared + warn + bd;
+      `<div class="row"><span>${k}</span><span class="v">${v}</span></div>`).join("") + mallTable + mallNote + noCost + shared + warn + bd;
   }
 
   $("sales-case").addEventListener("change", () => { loadSales(); loadSummary(); loadBackfill(); });
@@ -1516,6 +1559,91 @@
             <div class="note">${esc(x.message)}</div></td></tr>`).join("")}</tbody></table></div>`;
       renderCoverage(d.coverage);
       await loadAdRows();
+    } finally { btn.disabled = false; }
+  });
+
+  /* ---------- 設定 ---------- */
+  let setCasesLoaded = false;
+  const FROM_JA = { company: "会社共通", case: "案件", case_mall: "この欄", "既定": "既定値" };
+
+  function settingRows(list, scope) {
+    if (!list.length) return `<p class="note">この階層に設定できる項目はありません。</p>`;
+    return list.map((s) => `
+      <div class="row" style="align-items:flex-start">
+        <span style="flex:1">${esc(s.label)}
+          <span class="note" style="display:block">${esc(s.help)}</span></span>
+        <span style="text-align:right">
+          <input type="number" step="0.1" data-scope="${scope}" data-key="${esc(s.key)}"
+            value="${s.own == null ? "" : s.own}" placeholder="継承"
+            style="width:110px;text-align:right;padding:6px 9px;border:1px solid var(--line-strong);
+                   border-radius:5px;background:var(--surface-2);color:var(--ink);font-family:var(--mono)">
+          <span class="note" style="margin-left:6px">${s.unit === "percent" ? "%" : "日"}</span>
+          <div class="note" style="margin-top:3px">いま効いている値：${s.effective}${s.unit === "percent" ? "%" : "日"}
+            （${esc(FROM_JA[s.from] || s.from)}）</div>
+        </span>
+      </div>`).join("");
+  }
+
+  async function loadSettings() {
+    if (!setCasesLoaded) {
+      const cases = await get("/api/cases");
+      $("set-case").innerHTML = (cases.cases || [])
+        .map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
+      setCasesLoaded = true;
+    }
+    const caseId = $("set-case").value, mall = $("set-mall").value;
+    const d = await get(`/api/settings?case_id=${encodeURIComponent(caseId)}&mall=${mall}`);
+
+    $("set-company").innerHTML = settingRows(d.company || [], "company")
+      + `<div class="btns"><button class="act primary" data-save-set="company">保存</button></div>`;
+    $("set-case-name").textContent = $("set-case").selectedOptions[0]?.textContent || "";
+    $("set-case-box").innerHTML = settingRows(d.case || [], "case")
+      + `<div class="btns"><button class="act primary" data-save-set="case">保存</button></div>`;
+
+    const mallJa = mall === "rakuten" ? "楽天" : "Amazon";
+    $("set-mall-name").textContent = `${$("set-case-name").textContent} ／ ${mallJa}`;
+    const note = mall === "rakuten"
+      ? `<p class="note" style="margin-top:10px">楽天には手数料のAPIがありません。<strong>ここで入れた料率だけが手数料の根拠</strong>になります。
+         RMSの請求明細で実額を確認して、合うように調整してください。</p>`
+      : `<p class="note" style="margin-top:10px">Amazonは入金明細から実額が入ります。ここの料率は、
+         <strong>入金明細が届くまでの数日間の概算</strong>にだけ使われます。実額が入った日は上書きされます。</p>`;
+    $("set-mall-box").innerHTML =
+      `<div class="row"><span><strong>合計料率</strong>
+        <span class="note" style="display:block">売上にこの率を掛けた額を、概算の手数料として使います</span></span>
+        <span class="v"><strong>${d.feeRate == null ? "—" : d.feeRate.toFixed(1) + "%"}</strong></span></div>`
+      + settingRows(d.caseMall || [], "case_mall")
+      + `<div class="btns"><button class="act primary" data-save-set="case_mall">保存して過去分を計算し直す</button></div>`
+      + note;
+  }
+
+  $("set-case").addEventListener("change", loadSettings);
+  $("set-mall").addEventListener("change", loadSettings);
+
+  document.addEventListener("click", async (ev) => {
+    const btn = ev.target.closest && ev.target.closest("[data-save-set]");
+    if (!btn) return;
+    const scope = btn.dataset.saveSet;
+    const caseId = $("set-case").value, mall = $("set-mall").value;
+    const scopeId = scope === "company" ? "" : scope === "case" ? caseId : `${caseId}:${mall}`;
+
+    const values = {};
+    document.querySelectorAll(`input[data-scope="${scope}"]`).forEach((el) => {
+      const v = el.value.trim();
+      values[el.dataset.key] = v === "" ? null : Number(v);   // 空欄は継承
+    });
+
+    btn.disabled = true;
+    $("set-msg").textContent = "保存中…";
+    try {
+      const r = await fetch("/api/settings", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ scope, scopeId, values, caseId, mall })
+      });
+      const d = await r.json();
+      $("set-msg").innerHTML = d.ok
+        ? `<span class="tag ok">保存しました</span>${d.recalculated ? ` 過去分 ${d.recalculated} 行を計算し直しました` : ""}`
+        : `失敗：${esc(d.error || "")}`;
+      await loadSettings();
     } finally { btn.disabled = false; }
   });
 

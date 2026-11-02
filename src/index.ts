@@ -21,6 +21,7 @@ import { ingestRakutenSales, ingestRakutenInventory, pumpRakuten } from "./inges
 import { syncRakutenItems, pumpRakutenItems } from "./rakutenItems";
 import { importAdFile, adCoverage, adSummary, type ImportResult } from "./ingestAds";
 import { type AdLevel } from "./adImport";
+import { SETTINGS, resolveSettings, saveSettings, feeRate, recalcFeeEst, recalcAllFeeEst, type Scope } from "./settings";
 
 export interface Env {
   DB: D1Database;
@@ -195,7 +196,42 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     return json({ from, to, rows: results, daily: [...byDate.values()].sort((a, b) => (a.date < b.date ? 1 : -1)) });
   }
 
-  // 月次のまとめ。手数料の実額が入っている分はそれを使い、無い日は概算で埋める
+  /* ───────── 設定 ───────── */
+
+  if (path === "/api/settings") {
+    const u = new URL(req.url);
+    const caseId = u.searchParams.get("case_id") ?? undefined;
+    const mall = (u.searchParams.get("mall") ?? undefined) as "amazon" | "rakuten" | undefined;
+    const resolved = await resolveSettings(env.DB, { caseId, mall });
+    return json({
+      ...resolved,
+      defs: SETTINGS,
+      feeRate: caseId && mall ? await feeRate(env.DB, caseId, mall) : null,
+    });
+  }
+
+  if (path === "/api/settings" && req.method === "POST") {
+    const b = (await req.json()) as {
+      scope: Scope; scopeId?: string; values: Record<string, number | null>;
+      caseId?: string; mall?: "amazon" | "rakuten";
+    };
+    await saveSettings(env.DB, b.scope, b.scopeId ?? "", b.values ?? {}, viewer(req));
+
+    // 料率は構成の設定なので、過去にさかのぼって概算を計算し直す
+    const touchedFeeRate = Object.keys(b.values ?? {}).some(
+      (k) => SETTINGS.find((d) => d.key === k)?.isFeeRate
+    );
+    let recalculated = 0;
+    if (touchedFeeRate) {
+      recalculated = b.caseId && b.mall
+        ? await recalcFeeEst(env.DB, b.caseId, b.mall)
+        : await recalcAllFeeEst(env.DB);
+    }
+    return json({ ok: true, recalculated });
+  }
+
+  // 月次のまとめ。モールごとに出してから合計する。
+  // 手数料は実額があればそれを、無ければ料率からの概算を使う
   if (path === "/api/summary") {
     const u = new URL(req.url);
     const caseId = u.searchParams.get("case_id");
@@ -204,13 +240,12 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const to = `${month}-31`;
     if (!caseId) return json({ error: "案件を指定してください" }, 400);
 
-    const sales = await env.DB.prepare(
-      `SELECT
+    const { results: byMallRows } = await env.DB.prepare(
+      `SELECT s.mall,
          COALESCE(SUM(s.units), 0)   AS units,
          COALESCE(SUM(s.revenue), 0) AS revenue,
          COALESCE(SUM(s.returns), 0) AS returns,
-         -- 原価が未確定（マスタに「?」）の商品は 0 として混ぜない。
-         -- 0 にすると粗利が実態よりよく見えるので、件数だけ別に出して注記する
+         COALESCE(SUM(s.discounts), 0) AS discounts,
          COALESCE(SUM(COALESCE(
            (SELECT unit_cost FROM cost_history h
              WHERE h.product_id = s.product_id AND h.effective_from <= s.date
@@ -218,86 +253,61 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
            (SELECT unit_cost FROM cost_history h
              WHERE h.product_id = s.product_id ORDER BY h.effective_from ASC LIMIT 1),
            0) * s.units), 0) AS cost,
+         COALESCE(SUM(COALESCE(s.fee_actual, s.fee_est)), 0) AS fees,
+         COALESCE(SUM(CASE WHEN s.fee_actual IS NULL THEN COALESCE(s.fee_est,0) ELSE 0 END), 0) AS fees_est,
          COALESCE(SUM(CASE WHEN (SELECT unit_cost FROM cost_history h
                                   WHERE h.product_id = s.product_id
                                   ORDER BY h.effective_from DESC LIMIT 1) IS NULL
                            THEN s.revenue ELSE 0 END), 0) AS revenue_without_cost,
-         COALESCE(SUM(COALESCE(s.fee_actual, s.fee_est)), 0) AS fees,
          SUM(CASE WHEN s.fee_actual IS NULL THEN 1 ELSE 0 END) AS rows_without_actual,
          COUNT(*) AS rows_total
        FROM daily_sales s
-      WHERE s.case_id = ? AND s.mall = 'amazon' AND s.date BETWEEN ? AND ?`
+      WHERE s.case_id = ? AND s.date BETWEEN ? AND ?
+      GROUP BY s.mall`
     )
       .bind(caseId, from, to)
-      .first<Record<string, number>>();
+      .all<Record<string, number | string>>();
 
-    // 商品に紐づかない費用（注文単位の手数料・月額登録料など）
+    // 商品に紐づかない費用（注文単位の手数料・月額登録料など）。Amazon の入金明細から
     const other = await env.DB.prepare(
       `SELECT COALESCE(-SUM(amount), 0) AS amount FROM fee_events
-        WHERE case_id = ? AND mall = 'amazon' AND date BETWEEN ? AND ?
-          AND product_id IS NULL AND kind = 'fee'`
-    )
-      .bind(caseId, from, to)
-      .first<{ amount: number }>();
+        WHERE case_id = ? AND date BETWEEN ? AND ? AND product_id IS NULL AND kind = 'fee'`
+    ).bind(caseId, from, to).first<{ amount: number }>();
 
-    // 手数料の内訳。何にいくら取られているかを名前ごとに出す
     const { results: breakdownRaw } = await env.DB.prepare(
       `SELECT name, -SUM(amount) AS amount, COUNT(*) AS count FROM fee_events
-        WHERE case_id = ? AND mall = 'amazon' AND date BETWEEN ? AND ?
+        WHERE case_id = ? AND date BETWEEN ? AND ?
           AND kind IN ('fee', 'promotion', 'tax_withheld')
         GROUP BY name ORDER BY amount DESC`
-    )
-      .bind(caseId, from, to)
-      .all<{ name: string; amount: number; count: number }>();
+    ).bind(caseId, from, to).all<{ name: string; amount: number; count: number }>();
 
-    // 英語の識別子のままでは読めないので日本語を付ける。
-    // Amazon のレポートと突き合わせられるよう、元の名前も一緒に返す
-    const breakdown = breakdownRaw.map((b) => ({
-      ...b, label: feeLabel(b.name), known: isKnownFee(b.name),
+    const breakdown = breakdownRaw.map((b) => ({ ...b, label: feeLabel(b.name), known: isKnownFee(b.name) }));
+
+    const n = (v: unknown) => Number(v ?? 0);
+    const byMall = byMallRows.map((r) => ({
+      mall: String(r.mall),
+      units: n(r.units), revenue: n(r.revenue), returns: n(r.returns),
+      discounts: n(r.discounts), cost: n(r.cost), fees: n(r.fees), feesEst: n(r.fees_est),
+      revenueWithoutCost: n(r.revenue_without_cost),
+      rowsWithoutActual: n(r.rows_without_actual), rowsTotal: n(r.rows_total),
+      gross: n(r.revenue) - n(r.returns) - n(r.cost) - n(r.fees) - n(r.discounts),
     }));
 
-    const revenue = sales?.revenue ?? 0;
-    const returns = sales?.returns ?? 0;
-    const cost = sales?.cost ?? 0;
-    const fees = sales?.fees ?? 0;
+    const sum = (k: keyof (typeof byMall)[number]) => byMall.reduce((t, m) => t + Number(m[k] ?? 0), 0);
+    const revenue = sum("revenue");
     const otherFees = other?.amount ?? 0;
-    const gross = revenue - returns - cost - fees - otherFees;
+    const gross = sum("gross") - otherFees;
 
     return json({
-      month, caseId,
-      units: sales?.units ?? 0,
-      revenue, returns, cost, fees, otherFees, gross,
+      month, caseId, byMall,
+      units: sum("units"), revenue, returns: sum("returns"), discounts: sum("discounts"),
+      cost: sum("cost"), fees: sum("fees"), feesEst: sum("feesEst"), otherFees, gross,
       grossRate: revenue ? Math.round((gross / revenue) * 1000) / 10 : null,
-      // 損益分岐ROAS = 1 ÷ 広告費を除いた粗利率
       breakEvenRoas: revenue && gross > 0 ? Math.round((revenue / gross) * 100) / 100 : null,
-      mallNote: "Amazon のみ。楽天は手数料のAPIがないため、料率設定を入れてから対応します",
-      revenueWithoutCost: sales?.revenue_without_cost ?? 0,
-      actual: { missing: sales?.rows_without_actual ?? 0, total: sales?.rows_total ?? 0 },
+      revenueWithoutCost: sum("revenueWithoutCost"),
+      actual: { missing: sum("rowsWithoutActual"), total: sum("rowsTotal") },
       breakdown,
     });
-  }
-
-  /* ───────── 過去データの取り込み ───────── */
-
-  if (path === "/api/backfill" && req.method === "GET") {
-    const caseId = new URL(req.url).searchParams.get("case_id") ?? undefined;
-    return json({ progress: await backfillStatus(env, caseId) });
-  }
-
-  if (path === "/api/backfill" && req.method === "POST") {
-    const b = (await req.json().catch(() => ({}))) as {
-      caseId?: string; days?: number; action?: "start" | "run"; traffic?: boolean;
-    };
-    if (b.action === "start") {
-      if (!b.caseId) return json({ error: "案件を選んでください" }, 400);
-      try {
-        return json({ progress: await startBackfill(env, b.caseId, b.days ?? 365, { traffic: b.traffic }) });
-      } catch (e) {
-        return json({ error: String(e instanceof Error ? e.message : e) }, 400);
-      }
-    }
-    // 進める。画面から繰り返し呼ばれる
-    return json(await runBackfill(env, { caseId: b.caseId, budgetMs: 48000 }));
   }
 
   // 入金明細の取り込み
@@ -314,7 +324,9 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const b = (await req.json()) as { caseId?: string; date?: string; days?: number };
     const date = b.date ?? jstDate(1);
     if (b.caseId) {
-      return json({ results: [await advance(env, b.caseId, date, { wait: true, maxWaitMs: 55000, force: true })] });
+      const r = await advance(env, b.caseId, date, { wait: true, maxWaitMs: 55000, force: true });
+      await recalcFeeEst(env.DB, b.caseId, "amazon");
+      return json({ results: [r] });
     }
     return json({ results: await pump(env, { days: b.days ?? 7 }) });
   }
@@ -396,6 +408,8 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const results = [];
     if (b.kind !== "inventory") {
       results.push(await ingestRakutenSales(env, b.caseId, jstDate(b.days ?? 7), jstDate(0)));
+      // 楽天は手数料のAPIが無いので、料率からの概算をここで入れる
+      await recalcFeeEst(env.DB, b.caseId, "rakuten");
     }
     if (b.kind !== "sales") results.push(await ingestRakutenInventory(env, b.caseId));
     return json({ results });
@@ -585,6 +599,8 @@ export default {
         await pumpInventory(env);
         // 楽天。売上と在庫をまとめて取り込む
         await pumpRakuten(env, { days: 7 });
+        // 取り込んだぶんの概算手数料を入れ直す
+        await recalcAllFeeEst(env.DB);
         // 商品情報の照合は朝6時の実行だけ。価格はそう頻繁に変わらない
         if (event.cron === "0 21 * * *") await pumpRakutenItems(env);
         await notifyInventory(env);
