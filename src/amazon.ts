@@ -19,6 +19,30 @@ const ADS_BASE = "https://advertising-api-fe.amazon.com";
 export interface LwaEnv {
   AMAZON_LWA_CLIENT_ID?: string;
   AMAZON_LWA_CLIENT_SECRET?: string;
+  /**
+   * Ads API 用。Ads API は SP-API とは別の LWA セキュリティプロファイルで承認されることが多い。
+   * 未設定なら SP-API と同じクライアントを使う
+   */
+  AMAZON_ADS_CLIENT_ID?: string;
+  AMAZON_ADS_CLIENT_SECRET?: string;
+  /** 1つのログインで複数案件のプロフィールを扱うときの共通トークン */
+  AMAZON_ADS_REFRESH_TOKEN?: string;
+}
+
+/** Ads API で使うクライアント。専用のものがあればそちらを優先 */
+export function adsClient(env: LwaEnv): { id?: string; secret?: string; dedicated: boolean } {
+  const dedicated = Boolean(env.AMAZON_ADS_CLIENT_ID && env.AMAZON_ADS_CLIENT_SECRET);
+  return dedicated
+    ? { id: env.AMAZON_ADS_CLIENT_ID, secret: env.AMAZON_ADS_CLIENT_SECRET, dedicated }
+    : { id: env.AMAZON_LWA_CLIENT_ID, secret: env.AMAZON_LWA_CLIENT_SECRET, dedicated };
+}
+
+/** Ads API のアクセストークン。案件ごとのトークンがあればそれ、無ければ全案件共通のもの */
+export async function adsAccessToken(env: LwaEnv, caseToken?: string): Promise<string> {
+  const refresh = caseToken || env.AMAZON_ADS_REFRESH_TOKEN;
+  if (!refresh) throw new AmazonError("広告APIのリフレッシュトークンが未登録です", 0);
+  const c = adsClient(env);
+  return accessToken({ AMAZON_LWA_CLIENT_ID: c.id, AMAZON_LWA_CLIENT_SECRET: c.secret }, refresh);
 }
 
 export class AmazonError extends Error {
@@ -96,7 +120,7 @@ export async function adsapi(
     method: init.method ?? "GET",
     headers: {
       authorization: `Bearer ${token}`,
-      "Amazon-Advertising-API-ClientId": env.AMAZON_LWA_CLIENT_ID ?? "",
+      "Amazon-Advertising-API-ClientId": adsClient(env).id ?? "",
       ...(init.profileId ? { "Amazon-Advertising-API-Scope": init.profileId } : {}),
       accept: init.accept ?? "application/json",
       ...(init.body ? { "content-type": "application/json" } : {}),

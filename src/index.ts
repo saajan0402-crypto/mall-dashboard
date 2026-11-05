@@ -36,6 +36,11 @@ export interface Env {
   /** Amazon LWA のクライアント情報。全案件で共通なのでアプリ側に置く */
   AMAZON_LWA_CLIENT_ID?: string;
   AMAZON_LWA_CLIENT_SECRET?: string;
+  /** Ads API 用（任意）。SP-API と別のクライアントで承認されたときだけ入れる */
+  AMAZON_ADS_CLIENT_ID?: string;
+  AMAZON_ADS_CLIENT_SECRET?: string;
+  /** 全案件共通の広告APIリフレッシュトークン。案件はプロフィールIDで見分ける */
+  AMAZON_ADS_REFRESH_TOKEN?: string;
 }
 
 /** Cloudflare Access が付けるヘッダから、ログイン中の社員のメールを取り出す */

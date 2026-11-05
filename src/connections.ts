@@ -14,6 +14,9 @@ export interface ConnEnv {
   SECRET_KEY?: string;
   AMAZON_LWA_CLIENT_ID?: string;
   AMAZON_LWA_CLIENT_SECRET?: string;
+  AMAZON_ADS_CLIENT_ID?: string;
+  AMAZON_ADS_CLIENT_SECRET?: string;
+  AMAZON_ADS_REFRESH_TOKEN?: string;
 }
 
 export type Mall = "amazon" | "rakuten";
@@ -22,7 +25,9 @@ export type Mall = "amazon" | "rakuten";
 export const FIELDS: Record<Mall, Array<{ key: string; label: string; hint: string }>> = {
   amazon: [
     { key: "refresh_token", label: "リフレッシュトークン", hint: "Atzr| で始まる文字列。セラーセントラルの自己認可で発行" },
-    { key: "ads_refresh_token", label: "広告APIのリフレッシュトークン", hint: "Amazon Ads API の承認後に入力（任意）" },
+    { key: "ads_profile_id", label: "広告APIのプロフィールID", hint: "数字の列。案件（セラーアカウント）ごとに違う" },
+    { key: "ads_refresh_token", label: "広告APIのリフレッシュトークン（この案件だけ別のとき）",
+      hint: "通常は空欄。全案件共通のトークンは Cloudflare の AMAZON_ADS_REFRESH_TOKEN に入れる" },
     { key: "seller_id", label: "セラーID", hint: "任意。レポートの照合に使う" },
   ],
   rakuten: [
@@ -166,6 +171,9 @@ export async function listConnections(env: ConnEnv): Promise<unknown> {
     appLevel: {
       lwaClientId: Boolean(env.AMAZON_LWA_CLIENT_ID),
       lwaClientSecret: Boolean(env.AMAZON_LWA_CLIENT_SECRET),
+      adsClientId: Boolean(env.AMAZON_ADS_CLIENT_ID),
+      adsClientSecret: Boolean(env.AMAZON_ADS_CLIENT_SECRET),
+      adsRefreshToken: Boolean(env.AMAZON_ADS_REFRESH_TOKEN),
       encryption: Boolean(env.SECRET_KEY),
     },
   };

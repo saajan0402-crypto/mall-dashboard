@@ -10,7 +10,7 @@
  */
 
 import { readCreds, saveLicenseExpiry, type ConnEnv, type Mall } from "./connections";
-import { accessToken, spapi, adsapi, errorMessage as amzError, JP_MARKETPLACE, type LwaEnv } from "./amazon";
+import { accessToken, spapi, adsapi, adsAccessToken, adsClient, errorMessage as amzError, JP_MARKETPLACE, type LwaEnv } from "./amazon";
 import { rms, licenseExpiry, searchOrders, errorMessage as rmsError } from "./rakuten";
 
 export interface Probe {
@@ -79,6 +79,7 @@ async function probeAmazon(env: ConnEnv & LwaEnv, caseId: string): Promise<Probe
     });
   } catch (e) {
     const err = e as { message?: string; status?: number };
+    // SP-API が通らなくても、広告APIは別のトークンなので確かめる
     return [
       {
         key: "token",
@@ -89,6 +90,7 @@ async function probeAmazon(env: ConnEnv & LwaEnv, caseId: string): Promise<Probe
         status: err.status ?? 0,
         message: err.message ?? String(e),
       },
+      ...(await probeAds(env, creds)),
     ];
   }
 
@@ -285,41 +287,74 @@ async function probeAmazon(env: ConnEnv & LwaEnv, caseId: string): Promise<Probe
     }
   }
 
-  // 広告APIは承認後にトークンが入る。入っていなければ飛ばす
-  if (creds.ads_refresh_token) {
-    try {
-      const adsToken = await accessToken(env, creds.ads_refresh_token);
-      const r = await adsapi(env, adsToken, "/v2/profiles");
-      probes.push({
-        key: "ads_profiles",
-        label: "広告アカウント一覧の取得（Ads API）",
-        need: "Amazon Ads API の承認",
-        unlocks: "広告レポートの自動取得（CSV手動保存の廃止）",
-        ok: r.ok,
-        status: r.status,
-        message: r.ok ? "通りました" : amzError(r.body),
-      });
-    } catch (e) {
-      const err = e as { message?: string; status?: number };
-      probes.push({
-        key: "ads_profiles",
-        label: "広告アカウント一覧の取得（Ads API）",
-        need: "Amazon Ads API の承認",
-        unlocks: "広告レポートの自動取得（CSV手動保存の廃止）",
-        ok: false, status: err.status ?? 0, message: err.message ?? String(e),
-      });
-    }
-  } else {
-    probes.push({
-      key: "ads_profiles",
-      label: "広告アカウント一覧の取得（Ads API）",
-      need: "Amazon Ads API の承認",
-      unlocks: "広告レポートの自動取得（CSV手動保存の廃止）",
-      ok: false, status: 0, message: "広告APIのリフレッシュトークンが未登録です（審査中のため想定どおり）",
-    });
-  }
+  // 広告API。トークンは案件ごと（あれば）か全案件共通。プロフィールIDで案件を見分ける
+  probes.push(...(await probeAds(env, creds)));
 
   return probes;
+}
+
+/* ───────── Amazon 広告 ───────── */
+
+interface AdsProfile {
+  profileId: number; countryCode?: string; currencyCode?: string;
+  accountInfo?: { type?: string; name?: string; id?: string; marketplaceStringId?: string };
+}
+
+async function probeAds(env: ConnEnv & LwaEnv, creds: Record<string, string>): Promise<Probe[]> {
+  const base = { need: "Amazon Ads API の承認・登録", unlocks: "広告レポートの自動取得（CSV手動保存の廃止）" };
+  const out: Probe[] = [];
+  if (!creds.ads_refresh_token && !env.AMAZON_ADS_REFRESH_TOKEN) {
+    return [{ ...base, key: "ads_profiles", label: "広告アカウント一覧の取得（Ads API）", ok: false, status: 0,
+      message: "広告APIのリフレッシュトークンが未登録です（Cloudflare の AMAZON_ADS_REFRESH_TOKEN）" }];
+  }
+  let token: string;
+  try {
+    token = await adsAccessToken(env, creds.ads_refresh_token);
+  } catch (e) {
+    const err = e as { message?: string; status?: number };
+    const c = adsClient(env);
+    // トークンとクライアントの組み合わせ違いが一番多い
+    const hint = /invalid_grant|invalid_client|mismatch|unauthorized_client/i.test(err.message ?? "")
+      ? c.dedicated
+        ? "（トークンが AMAZON_ADS_CLIENT_ID とは別のクライアントで発行された可能性があります）"
+        : "（Ads API 用のクライアントが SP-API と別なら、AMAZON_ADS_CLIENT_ID / AMAZON_ADS_CLIENT_SECRET の登録が必要です）"
+      : "";
+    return [{ ...base, key: "ads_token", label: "広告APIのトークン発行", ok: false, status: err.status ?? 0,
+      message: (err.message ?? String(e)) + hint }];
+  }
+
+  const r = await adsapi(env, token, "/v2/profiles");
+  const list = (r.ok && Array.isArray(r.body) ? r.body : []) as AdsProfile[];
+  const fmt = (p: AdsProfile) =>
+    `${p.profileId}（${p.accountInfo?.name ?? "名前なし"}・${p.countryCode ?? "?"}・${p.accountInfo?.type ?? "?"}）`;
+  out.push({
+    ...base, key: "ads_profiles", label: "広告アカウント一覧の取得（Ads API）", ok: r.ok, status: r.status,
+    message: r.ok ? `通りました。このトークンで見えるプロフィール：${list.map(fmt).join(" ／ ") || "なし"}` : amzError(r.body),
+  });
+  if (!r.ok) return out;
+
+  const want = (creds.ads_profile_id ?? "").replace(/\s/g, "");
+  if (!want) {
+    out.push({ ...base, key: "ads_profile_match", label: "この案件のプロフィールID", ok: false, status: 0,
+      message: "プロフィールIDが未登録です。上の一覧から、この案件のセラーアカウントのIDを入れてください" });
+    return out;
+  }
+  const hit = list.find((p) => String(p.profileId) === want);
+  if (!hit) {
+    out.push({ ...base, key: "ads_profile_match", label: "この案件のプロフィールID", ok: false, status: 0,
+      message: `登録されたID ${want} は、このトークンで見えるプロフィールにありません。数字の写し間違いか、別のログインのトークンです` });
+    return out;
+  }
+  const jp = hit.countryCode === "JP";
+  // スコープを付けて1回呼び、そのプロフィールで実際に操作できるかまで確かめる（読み取りのみ）
+  const s = await adsapi(env, token, `/v2/profiles/${want}`, { profileId: want });
+  out.push({
+    ...base, key: "ads_profile_match", label: "この案件のプロフィールID", ok: jp && s.ok, status: s.status,
+    message: !s.ok ? `IDは一覧にありますが、そのプロフィールで呼べませんでした：${amzError(s.body)}`
+      : jp ? `確認できました：${fmt(hit)}`
+      : `確認できましたが日本のプロフィールではありません：${fmt(hit)}。日本（JP）のIDを入れてください`,
+  });
+  return out;
 }
 
 /* ───────── 楽天 ───────── */

@@ -824,7 +824,11 @@
       `<div class="row"><span>暗号化キー（SECRET_KEY）</span><span>${tag(a.encryption)}</span></div>` +
       `<div class="row"><span>Amazon LWA クライアントID</span><span>${tag(a.lwaClientId)}</span></div>` +
       `<div class="row"><span>Amazon LWA クライアントシークレット</span><span>${tag(a.lwaClientSecret)}</span></div>` +
-      `<p class="note" style="margin-top:10px">この3つは全案件で共通のため、Cloudflare の Settings → Runtime の Variables and Secrets に Secret として登録してください（名前：<code>SECRET_KEY</code> / <code>AMAZON_LWA_CLIENT_ID</code> / <code>AMAZON_LWA_CLIENT_SECRET</code>）。</p>` +
+      `<div class="row"><span>Amazon広告API リフレッシュトークン（全案件共通）</span><span>${tag(a.adsRefreshToken)}</span></div>` +
+      `<div class="row"><span>Amazon広告API クライアントID（SP-APIと別のときだけ）</span><span>${a.adsClientId ? tag(true) : `<span class="tag wait">SP-APIと共通</span>`}</span></div>` +
+      `<div class="row"><span>Amazon広告API クライアントシークレット（同上）</span><span>${a.adsClientSecret ? tag(true) : `<span class="tag wait">SP-APIと共通</span>`}</span></div>` +
+      `<p class="note" style="margin-top:10px">これらは全案件で共通のため、Cloudflare の Settings → Runtime の Variables and Secrets に Secret として登録してください（名前：<code>SECRET_KEY</code> / <code>AMAZON_LWA_CLIENT_ID</code> / <code>AMAZON_LWA_CLIENT_SECRET</code> / <code>AMAZON_ADS_REFRESH_TOKEN</code>、必要なら <code>AMAZON_ADS_CLIENT_ID</code> / <code>AMAZON_ADS_CLIENT_SECRET</code>）。
+        広告APIの<strong>プロフィールIDは案件ごとに違う</strong>ので、下の各案件の欄に入れてください。</p>` +
       `<hr style="border:none;border-top:1px solid var(--line);margin:16px 0">` +
       `<div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
          <strong style="font-size:13.5px">管理者</strong>
