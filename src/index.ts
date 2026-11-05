@@ -30,7 +30,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.10.2";
+const APP_VERSION = "0.10.3";
 
 export interface Env {
   DB: D1Database;
@@ -351,8 +351,8 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     if (!caseId) return json({ error: "案件を指定してください" }, 400);
     const per = await resolvePeriod(env.DB, caseId, periodQuery(u));
     const st = await resolveSettings(env.DB, { caseId, mall: "amazon" });
-    const tm = st.case.find((x) => x.key === "target_margin")?.effective ?? 30;
-    return json({ ...(await buildAdAdvice(env.DB, caseId, per.from, per.to, tm)), targetMargin: tm });
+    const am = st.case.find((x) => x.key === "ad_profit_margin")?.effective ?? 10;
+    return json({ ...(await buildAdAdvice(env.DB, caseId, per.from, per.to, am)), adMargin: am });
   }
 
   if (path === "/api/dashboard") {

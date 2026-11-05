@@ -61,7 +61,7 @@ export function renderCaseMarkdown(s: CaseSummary, opts: { url?: string } = {}):
   L.push("- 金額はすべて税込・円。社内の管理ツールがモールのAPIとCSVから集計した確定値で、ここで計算し直す必要はありません。");
   L.push("- **粗利（広告費前）＝ 売上 − 原価 − モール手数料 − 返品 − 値引き**。広告費はまだ引いていません。");
   L.push(`- **損益分岐ROAS ＝ 売上 ÷ 粗利（広告費前）**。この期間では **${be ?? "—"}**。広告のROASがこれを下回ると、その広告は売れるほど赤字です。`);
-  L.push(`- 目標の粗利率は ${s.settings.targetMargin}%、在庫アラートは残り ${s.settings.stockAlertDays} 日を基準にしています。`);
+  L.push(`- 目標粗利率（広告費を引く前）は ${s.settings.targetMargin}%、広告費を引いた後の目標利益率は ${s.settings.adMargin}%、在庫アラートは残り ${s.settings.stockAlertDays} 日を基準にしています。`);
   L.push("- 広告の成果は帰属期間がモールごとに違います（楽天RPP 30日／Amazon スポンサープロダクト 7日／スポンサーブランド 14日）。**モールをまたいでROASをそのまま比べないでください。**楽天は直近の数字があとから伸びます。");
   if (s.malls.includes("rakuten"))
     L.push(`- 楽天の手数料は、請求明細を入れるまでは料率（${s.settings.rakutenFeeRate ?? "—"}%）からの概算です。${s.settings.rakutenFeeFromDefault ? "料率はまだ既定値のままで、実態とずれている可能性があります。" : ""}`);
@@ -136,7 +136,7 @@ export function renderCaseMarkdown(s: CaseSummary, opts: { url?: string } = {}):
 
   L.push("## 広告の改善提案（ツール算出）");
   L.push("");
-  L.push(`目標ACoS ＝ 広告費前の粗利率 − 目標粗利率（${s.settings.targetMargin}%）を、商品マスタの広告方針（利益重視／シェア獲得／育成中）で調整して計算しています。1回の変更は −40%〜＋30% まで。`);
+  L.push(`目標ACoS ＝ 広告費前の粗利率 − 広告費を引いた後の目標利益率（${s.settings.adMargin}%）を、商品マスタの広告方針（利益重視／シェア獲得／育成中）で調整して計算しています。1回の変更は −40%〜＋30% まで。`);
   L.push(`件数：停止を検討 ${s.advice.counts.pause}／下げる ${s.advice.counts.down}／上げる ${s.advice.counts.up}／除外候補 ${s.advice.counts.negatives}／追加候補 ${s.advice.counts.harvest}／予算 ${s.advice.counts.budgets}（上位10件ずつ掲載）`);
   L.push("");
   L.push("### 入札の見直し");

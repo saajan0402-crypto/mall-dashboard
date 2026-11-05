@@ -201,7 +201,7 @@ export interface CaseSummary {
   warnings: string[];
   /** やること。画面とAIの両方に同じものを出す */
   todo: Todo[];
-  settings: { targetMargin: number; stockAlertDays: number; rakutenFeeRate: number | null; amazonFeeRate: number | null;
+  settings: { targetMargin: number; adMargin: number; stockAlertDays: number; rakutenFeeRate: number | null; amazonFeeRate: number | null;
     rakutenFeeFromDefault: boolean };
 }
 
@@ -326,6 +326,15 @@ function buildTodo(s: Omit<CaseSummary, "todo">): Todo[] {
 
   for (const r of s.inventory.filter((x) => x.level === "watch").slice(0, 5))
     out.push({ priority: "mid", area: "在庫", text: `${MALL_JA[r.mall] ?? r.mall}「${r.name}」（${r.sku}）の在庫に注意`, basis: r.reason });
+
+  // 目標粗利率は広告費を引く前の基準。下回る商品は価格・原価・手数料の見直し対象
+  const low = s.products.filter((p) => !p.costManual && p.grossRate != null && p.grossRate < s.settings.targetMargin && p.revenue > 0);
+  if (low.length)
+    out.push({
+      priority: "mid", area: "売上",
+      text: `粗利率が目標（${s.settings.targetMargin}%・広告費前）を下回る商品が ${low.length} 件。価格・原価・送料の設定を確認する（${low.slice(0, 3).map((p) => p.sku).join("、")}）`,
+      basis: low.slice(0, 3).map((p) => `${p.sku} ${p.grossRate}%`).join(" / "),
+    });
 
   for (const w of s.warnings) out.push({ priority: "info", area: "データ", text: w });
   const rank = { high: 0, mid: 1, info: 2 };
@@ -465,9 +474,10 @@ export async function buildCaseSummary(
     round1(list.filter((x) => x.isFeeRate).reduce((t, x) => t + x.effective, 0));
   const rakutenFeeFromDefault = sRak.caseMall.filter((x) => x.isFeeRate).every((x) => x.from === "既定");
   const targetMargin = val(sAmz.case, "target_margin", 30);
+  const adMargin = val(sAmz.case, "ad_profit_margin", 10);
 
   /* 広告の改善提案 */
-  const adv = await buildAdAdvice(db, caseId, from, to, targetMargin);
+  const adv = await buildAdAdvice(db, caseId, from, to, adMargin);
 
   /* 気をつけること */
   const warnings: string[] = [];
@@ -552,7 +562,7 @@ export async function buildCaseSummary(
     },
     products, inventory, freshness, warnings,
     settings: {
-      targetMargin,
+      targetMargin, adMargin,
       stockAlertDays: val(sAmz.case, "stock_alert_days", 14),
       rakutenFeeRate: malls.includes("rakuten") ? rate(sRak.caseMall) : null,
       amazonFeeRate: malls.includes("amazon") ? rate(sAmz.caseMall) : null,

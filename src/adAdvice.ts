@@ -2,8 +2,9 @@
  * 広告の改善提案（入札の上げ下げ・除外キーワード・追加キーワード・予算）
  *
  * 考え方
- *   - 目標は「広告費を引いたあとに目標粗利率が残ること」。
- *     目標ACoS ＝ 広告費を引く前の粗利率 − 目標粗利率（商品マスタの広告方針で調整）
+ *   - 目標は「広告費を引いたあとに、設定の『広告費を引いた後の目標利益率』が残ること」。
+ *     目標ACoS ＝ 広告費を引く前の粗利率 − 広告後の目標利益率（商品マスタの広告方針で調整）
+ *     ※「目標粗利率」は広告費を引く前の基準なので、ここでは使わない
  *       利益重視：上の式そのまま／シェア獲得：損益分岐まで使ってよい／育成中：損益分岐の1.3倍まで許す
  *   - 適正な入札 ＝ 今の入札 ×（クリック単価の上限 ÷ 今のクリック単価）
  *       クリック単価の上限 ＝ 1クリックあたりの売上 × 目標ACoS
@@ -90,9 +91,9 @@ const isAsin = (s: string) => /^b0[0-9a-z]{8}$/i.test(s.trim());
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
 
 export async function buildAdAdvice(
-  db: D1Database, caseId: string, from: string, to: string, targetMarginPct: number,
+  db: D1Database, caseId: string, from: string, to: string, adMarginPct: number,
 ): Promise<AdAdvice> {
-  const tm = targetMarginPct / 100;
+  const tm = adMarginPct / 100;
 
   /* 粗利率：モール別と商品別 */
   const pl = await periodSummary(db, caseId, from, to);
@@ -313,7 +314,7 @@ export async function buildAdAdvice(
     });
 
   const assumptions = [
-    `目標は「広告費を引いたあとに目標粗利率（${targetMarginPct}%）が残ること」。目標ACoS ＝ 広告費前の粗利率 − ${targetMarginPct}%`,
+    `目標は「広告費を引いたあとに ${adMarginPct}% の利益が残ること」（設定「広告費を引いた後の目標利益率」）。目標ACoS ＝ 広告費前の粗利率 − ${adMarginPct}%`,
     `商品マスタの広告方針で調整：${POLICY_JA.profit}＝上の式／${POLICY_JA.share}＝損益分岐まで／${POLICY_JA.nurture}＝損益分岐の1.3倍まで`,
     `粗利率は商品ごと（期間内の売上・原価・手数料から）。商品が特定できない広告はモール全体の粗利率を使います`,
     `1回の変更は −40%〜＋30% まで。クリックが ${MIN_CLICKS} 未満のものは判断していません`,

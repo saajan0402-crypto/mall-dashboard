@@ -31,6 +31,11 @@ export const SETTINGS: SettingDef[] = [
     help: "この値を下回る商品を注意として扱います", scopes: ["company", "case"],
   },
   {
+    key: "ad_profit_margin", label: "広告費を引いた後の目標利益率", unit: "percent", fallback: 10,
+    help: "広告の改善提案に使います。「利益重視」の商品は、広告費を引いた後にこの率が残るように入札を提案します（目標粗利率は広告費を引く前の基準）",
+    scopes: ["company", "case"],
+  },
+  {
     key: "stock_alert_days", label: "在庫アラート日数", unit: "days", fallback: 14,
     help: "残り日数がこれを下回ると欠品間近として通知します", scopes: ["company", "case"],
   },

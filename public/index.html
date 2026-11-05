@@ -161,7 +161,7 @@
 <body>
 <header>
   <div class="bar">
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.10.2</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.10.3</span></div>
     <div class="picks">
       <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
       <div class="range-pick" id="range-pick" title="">
@@ -742,7 +742,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.10.2";
+  const UI_VERSION = "0.10.3";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
@@ -2436,7 +2436,7 @@
       <tbody>${d.targets.map((t) => `<tr><td>${esc(t.label)}</td><td class="r">${t.gm == null ? "—（仮に30%）" : t.gm + "%"}</td>
         <td class="r">${t.acos}%</td><td class="r">${t.roas}</td></tr>`).join("")}</tbody></table></div>
       <p class="note" style="margin-top:6px">商品が特定できる広告は、その商品の粗利率と広告方針で個別に計算しています（表の「目標ROAS」の下に方針を表示）。
-        目標粗利率は設定タブで変えられます。</p>`;
+        「広告費を引いた後の目標利益率」は設定タブで変えられます（目標粗利率は広告費を引く前の基準なので、提案には使っていません）。</p>`;
   }
   async function loadAdvice() {
     const caseId = $("ads-case").value;
