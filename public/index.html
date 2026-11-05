@@ -95,16 +95,44 @@
   .msg ul{margin:7px 0 0;padding-left:1.2em}
   .empty{color:var(--muted);font-size:13px;padding:14px 0}
   .hidden{display:none!important}
+  /* ヘッダーの案件選択。ここで選んだ案件が全タブに効く */
+  .case-pick{display:flex;gap:8px;align-items:center}
+  .case-pick label{font-size:12px;color:var(--muted)}
+  .case-pick select{font:inherit;font-size:13.5px;font-weight:700;padding:6px 30px 6px 12px;min-width:180px;
+    border:1px solid var(--accent);border-radius:5px;background:var(--accent-soft);color:var(--accent);cursor:pointer}
+  nav{overflow-x:auto}
+  nav button{white-space:nowrap}
+  /* ダッシュボード */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+  @media (max-width:520px){ .kpis{grid-template-columns:1fr 1fr} .kpi .v{font-size:19px} }
+  .kpi{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px 16px}
+  .kpi .k{font-size:12px;color:var(--muted)}
+  .kpi .v{font-size:22px;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+  .kpi .s{font-size:12px;color:var(--ink-2);margin-top:2px}
+  .up{color:var(--ok)} .down{color:var(--risk)}
+  .todo{display:grid;gap:0}
+  .todo .t{display:grid;grid-template-columns:auto auto 1fr;gap:10px;align-items:baseline;
+    padding:10px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+  .todo .t:last-child{border-bottom:none}
+  .todo .b{grid-column:3;font-size:12px;color:var(--muted);margin-top:-6px}
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr));gap:18px}
+  .grid2>*{min-width:0}
+  /* 表が広くても画面全体が横に伸びないようにする（表の中だけ横スクロール） */
+  main{grid-template-columns:minmax(0,1fr)} main>section{min-width:0}
+  .ai-out{font-family:var(--mono);font-size:12px;word-break:break-all;background:var(--surface-2);
+    border:1px solid var(--line);border-radius:5px;padding:8px 10px;margin-top:10px}
 </style>
 </head>
 <body>
 <header>
   <div class="bar">
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.8</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.9</span></div>
+    <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
     <div class="who" id="who"></div>
   </div>
   <nav role="tablist">
-    <button role="tab" id="t-master" aria-selected="true">商品マスタ</button>
+    <button role="tab" id="t-dash" aria-selected="true">ダッシュボード</button>
+    <button role="tab" id="t-master" aria-selected="false">商品マスタ</button>
     <button role="tab" id="t-sales" aria-selected="false">売上</button>
     <button role="tab" id="t-stock" aria-selected="false">在庫</button>
     <button role="tab" id="t-ads" aria-selected="false">広告</button>
@@ -116,7 +144,109 @@
 
 <main>
   <!-- 商品マスタ -->
-  <section id="p-master">
+  <!-- ダッシュボード -->
+  <section id="p-dash">
+    <div>
+      <h2>概要<span class="hint" id="dash-asof"></span></h2>
+      <div class="kpis" id="dash-kpis"></div>
+    </div>
+    <div>
+      <h2>要対応<span class="hint">ツールが決まった基準で拾ったもの／優先度の高い順</span></h2>
+      <div class="card"><div class="todo" id="dash-todo"></div></div>
+    </div>
+    <div class="chart">
+      <h3>日別の売上</h3>
+      <p class="sub" id="dash-trend-sub">直近30日・両モール合計</p>
+      <div id="dash-trend"></div>
+    </div>
+    <div class="grid2">
+      <div><h2>今月の損益<span class="hint">広告費を引く前</span></h2><div id="dash-pl"></div></div>
+      <div><h2>データの鮮度</h2><div class="card" id="dash-fresh"></div></div>
+    </div>
+    <div>
+      <h2>広告<span class="hint" id="dash-ads-hint"></span></h2>
+      <div id="dash-ads"></div>
+    </div>
+    <div>
+      <h2>キャンペーン別<span class="hint">直近30日・広告費の多い順</span></h2>
+      <div class="tablewrap"><table>
+        <thead><tr><th>モール</th><th>種類</th><th>キャンペーン</th><th class="r">広告費</th><th class="r">広告経由売上</th>
+          <th class="r">ROAS</th><th>採算</th><th class="r">予算内の時間</th></tr></thead>
+        <tbody id="dash-camp"></tbody></table></div>
+    </div>
+    <div class="grid2">
+      <div>
+        <h2>売上ゼロの検索語<span class="hint">除外キーワードの候補</span></h2>
+        <div class="tablewrap"><table style="min-width:420px">
+          <thead><tr><th>検索語</th><th>種類</th><th class="r">広告費</th><th class="r">クリック</th></tr></thead>
+          <tbody id="dash-wasted"></tbody></table></div>
+      </div>
+      <div>
+        <h2>成果の出ている検索語<span class="hint">注文2件以上</span></h2>
+        <div class="tablewrap"><table style="min-width:420px">
+          <thead><tr><th>検索語</th><th>種類</th><th class="r">ROAS</th><th class="r">注文</th></tr></thead>
+          <tbody id="dash-winning"></tbody></table></div>
+      </div>
+    </div>
+    <div>
+      <h2>商品別<span class="hint">直近30日・売上の多い順</span></h2>
+      <div class="tablewrap"><table>
+        <thead><tr><th>SKU</th><th>商品名</th><th class="r">販売数</th><th class="r">売上</th>
+          <th class="r">粗利（広告費前）</th><th class="r">粗利率</th><th class="r">広告費</th></tr></thead>
+        <tbody id="dash-products"></tbody></table></div>
+    </div>
+
+    <div>
+      <h2>AIに分析させる<span class="hint">ChatGPT・Claude などのチャットに貼る</span></h2>
+      <div class="card">
+        <p class="note" style="margin-bottom:12px">このダッシュボードの内容を、AIが読める文章（表つき）にして渡します。
+          渡し方は2通りあります。<strong>どちらも金額はこのツールが確定させた値</strong>なので、AIに計算をやり直させずに済みます。</p>
+
+        <h3 style="font-size:13px;margin:0 0 6px">① 共有URLを貼る<span class="note" style="font-weight:400;margin-left:8px">開くたびに最新の数字で作り直されます</span></h3>
+        <div class="btns" style="margin-top:0">
+          <select id="share-days" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
+            border-radius:5px;background:var(--surface-2);color:var(--ink)">
+            <option value="1">1日で無効</option>
+            <option value="7" selected>7日で無効</option>
+            <option value="30">30日で無効</option>
+            <option value="90">90日で無効</option>
+          </select>
+          <input id="share-label" placeholder="メモ（例：週次レビュー用）" autocomplete="off"
+            style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);border-radius:5px;
+                   background:var(--surface-2);color:var(--ink);min-width:220px">
+          <button class="act primary" id="btn-share">URLを発行</button>
+          <span class="note" id="share-msg"></span>
+        </div>
+        <div id="share-new"></div>
+        <div id="share-list" style="margin-top:12px"></div>
+        <p class="note" style="margin-top:8px"><strong>URLを知っている人は、ログインなしでこの案件のレポートを読めます。</strong>
+          社外に貼らない・用が済んだら「無効にする」を押す、を徹底してください。読めるのはこのレポートだけで、
+          接続情報や他の画面・他の案件には届きません。</p>
+        <details style="margin-top:8px">
+          <summary style="cursor:pointer;font-size:12.5px;color:var(--accent)">AIが「開けない」と言うとき（初回だけ必要な設定）</summary>
+          <p class="note" style="margin-top:8px">このアプリは Cloudflare Access で守られているので、そのままでは外のAIが読めません。
+            <strong>/share/ だけを Access の対象外にする設定</strong>が一度だけ必要です。</p>
+          <ol class="steps" style="margin-top:6px">
+            <li>Cloudflare Zero Trust → Access → Applications → <strong>Add an application</strong> → Self-hosted</li>
+            <li>Application domain に、いまのアプリと同じドメインを入れ、Path に <code>share</code> と入れる</li>
+            <li>Policy を1つ作り、Action を <strong>Bypass</strong>、Include を <strong>Everyone</strong> にして保存</li>
+            <li>ここで発行したURLをシークレットウィンドウで開き、ログイン画面が出ずにレポートが表示されればOK</li>
+          </ol>
+          <p class="note">パスを指定したアプリはドメイン全体のアプリより優先されるので、/share/ 以外は今まで通りログインが必要なままです。
+            それでもAIが読めない場合は、下の②を使ってください。</p>
+        </details>
+
+        <h3 style="font-size:13px;margin:18px 0 6px">② データを直接コピーして貼る<span class="note" style="font-weight:400;margin-left:8px">URLを外に出さない方法</span></h3>
+        <div class="btns" style="margin-top:0">
+          <button class="act" id="btn-copy-md">依頼文＋データをコピー</button>
+          <span class="note" id="copy-msg"></span>
+        </div>
+        <p class="note" style="margin-top:8px">その時点の数字を文章ごとコピーします。AIのチャット欄に貼り付けて送るだけです。</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="p-master" class="hidden">
     <div>
       <h2>商品マスタの取り込み<span class="hint">スプレッドシートからコピーして貼り付け</span></h2>
       <div class="card">
@@ -163,7 +293,7 @@
       <h2>日次売上<span class="hint">Amazon 売上・トラフィックレポート／前日まで</span></h2>
       <div class="card" style="margin-bottom:16px">
         <div class="btns" style="margin-top:0">
-          <select id="sales-case" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
+          <select id="sales-case" class="hidden" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
             border-radius:5px;background:var(--surface-2);color:var(--ink)"></select>
           <input type="date" id="sales-date" style="font:inherit;font-size:13px;padding:7px 10px;
             border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink)">
@@ -214,7 +344,7 @@
           <span class="note" id="bf-msg"></span>
         </div>
         <div id="bf-progress" style="margin-top:12px"></div>
-        <p class="note" style="margin-top:10px">上の案件の選択に従います。
+        <p class="note" style="margin-top:10px">ヘッダーで選んだ案件が対象です。
           <strong>画面を閉じても構いません。</strong>5分ごとのバッチが裏で進め続けます。
           開いたままにしておくと、そのぶん早く終わります。</p>
         <p class="note" style="margin-top:6px">3段階で進みます。
@@ -301,7 +431,7 @@
       <h2>FBA在庫<span class="hint" id="stock-asof"></span></h2>
       <div class="card" style="margin-bottom:16px">
         <div class="btns" style="margin-top:0">
-          <select id="stock-case" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
+          <select id="stock-case" class="hidden" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
             border-radius:5px;background:var(--surface-2);color:var(--ink)"></select>
           <button class="act primary" id="btn-stock">在庫を取り込む</button>
           <button class="act" id="btn-sns">定期おトク便を取り込む</button>
@@ -341,7 +471,7 @@
       <h2>広告レポートの取り込み<span class="hint">楽天RPP・Amazon広告（CSV）</span></h2>
       <div class="card">
         <div class="btns" style="margin-top:0">
-          <select id="ads-case" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
+          <select id="ads-case" class="hidden" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
             border-radius:5px;background:var(--surface-2);color:var(--ink)"></select>
           <input type="file" id="ads-files" multiple accept=".csv,.tsv,text/csv"
             style="font:inherit;font-size:13px;color:var(--ink-2)">
@@ -399,7 +529,7 @@
       <h2>設定<span class="hint">会社共通 → 案件 → 案件×モール の順に継承します</span></h2>
       <div class="card">
         <div class="btns" style="margin-top:0">
-          <select id="set-case" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
+          <select id="set-case" class="hidden" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
             border-radius:5px;background:var(--surface-2);color:var(--ink)"></select>
           <select id="set-mall" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
             border-radius:5px;background:var(--surface-2);color:var(--ink)">
@@ -536,25 +666,61 @@
   const FFL = { fba: "FBA", own: "自社発送", mcf: "マルチチャネル" };
   const POLICY = { profit: "利益重視", share: "シェア獲得", nurture: "育成中" };
 
-  const tabs = [["t-master", "p-master"], ["t-sales", "p-sales"], ["t-stock", "p-stock"], ["t-ads", "p-ads"], ["t-settings", "p-settings"], ["t-conn", "p-conn"], ["t-status", "p-status"]];
+  const tabs = [["t-dash", "p-dash"], ["t-master", "p-master"], ["t-sales", "p-sales"], ["t-stock", "p-stock"], ["t-ads", "p-ads"], ["t-settings", "p-settings"], ["t-conn", "p-conn"], ["t-status", "p-status"]];
   tabs.forEach(([t, p]) => $(t).addEventListener("click", () => {
     tabs.forEach(([t2, p2]) => {
       $(t2).setAttribute("aria-selected", t2 === t ? "true" : "false");
       $(p2).classList.toggle("hidden", p2 !== p);
     });
-    if (p === "p-status") loadStatus();
-    if (p === "p-sales") loadSales().then(loadSummary).then(loadCharges).then(loadBackfill);
-    if (p === "p-stock") loadStock();
-    if (p === "p-ads") loadAds();
-    if (p === "p-settings") loadSettings();
-    if (p === "p-conn") loadConnections();
+    loadPanel(p);
   }));
+
+  function loadPanel(p) {
+    if (p === "p-dash") return loadDashboard();
+    if (p === "p-master") return loadProducts();
+    if (p === "p-status") return loadStatus();
+    if (p === "p-sales") return loadSales().then(loadSummary).then(loadCharges).then(loadBackfill);
+    if (p === "p-stock") return loadStock();
+    if (p === "p-ads") return loadAds();
+    if (p === "p-settings") return loadSettings();
+    if (p === "p-conn") return loadConnections();
+  }
+  const activePanel = () => (tabs.find(([t]) => $(t).getAttribute("aria-selected") === "true") || tabs[0])[1];
+
+  /* ---------- 案件の選択（ヘッダー） ---------- */
+  // 各タブの中にあった案件の選択欄は残してあり（非表示）、ヘッダーの選択をそこへ写す。
+  // こうしておくと、各タブの読み込み処理は今まで通り自分の選択欄を見るだけで済む
+  let currentCase = "";
+  const CASE_SELECTS = ["sales-case", "stock-case", "ads-case", "set-case"];
+  const caseName = () => $("g-case").selectedOptions[0]?.textContent || "";
+  function applyCase() {
+    CASE_SELECTS.forEach((id) => {
+      const el = $(id);
+      if (el && [...el.options].some((o) => o.value === currentCase)) el.value = currentCase;
+    });
+  }
+  async function initCases() {
+    const d = await get("/api/cases");
+    const list = d.cases || [];
+    let saved = "";
+    try { saved = localStorage.getItem("mall.case") || ""; } catch (e) { saved = ""; }
+    $("g-case").innerHTML = list.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("")
+      || `<option value="">（案件がありません）</option>`;
+    currentCase = list.some((c) => c.id === saved) ? saved : (list[0]?.id || "");
+    $("g-case").value = currentCase;
+  }
+  $("g-case").addEventListener("change", () => {
+    currentCase = $("g-case").value;
+    try { localStorage.setItem("mall.case", currentCase); } catch (e) { /* 保存できなくても動く */ }
+    applyCase();
+    loadPanel(activePanel());
+  });
 
   async function get(path) { const r = await fetch(path); return r.json(); }
 
   /* ---------- 商品一覧 ---------- */
   async function loadProducts() {
-    const d = await get("/api/products");
+    const d = await get("/api/products" + (currentCase ? `?case_id=${encodeURIComponent(currentCase)}` : ""));
     const list = d.products || [];
     $("no-products").classList.toggle("hidden", list.length > 0);
     $("products").innerHTML = list.map((p) => `<tr>
@@ -681,7 +847,7 @@
            <span class="note" id="admin-msg"></span>
          </div></div>`;
 
-    $("conn-list").innerHTML = (d.cases || []).map((c) => `
+    $("conn-list").innerHTML = (d.cases || []).filter((c) => !currentCase || c.id === currentCase).map((c) => `
       <div class="card" style="margin-bottom:14px">
         <h2 style="margin-bottom:14px">${esc(c.name)}</h2>
         ${["amazon", "rakuten"].map((m) => {
@@ -1040,6 +1206,7 @@
       $("sales-date").value = d.toISOString().slice(0, 10);
       $("sum-month").value = d.toISOString().slice(0, 7);
       salesCasesLoaded = true;
+      applyCase();
     }
     const caseId = $("sales-case").value;
     const d = await get("/api/sales" + (caseId ? `?case_id=${encodeURIComponent(caseId)}` : ""));
@@ -1251,7 +1418,7 @@
             <td><span class="tag ${m.mall === "rakuten" ? "pill-r" : "pill-a"}">${MALL_JA[m.mall] || m.mall}</span></td>
             <td class="r">${yen(m.revenue)}</td><td class="r">${yen(m.cost)}</td>
             <td class="r">${yen(m.fees)}</td><td class="r">${yen(m.gross)}</td>
-            <td class="r">${m.revenue ? (Math.round((m.gross / m.revenue) * 1000) / 10) + "%" : "—"}</td>
+            <td class="r">${m.revenue - m.revenueWithoutCost > 0 ? (Math.round((m.gross / (m.revenue - m.revenueWithoutCost)) * 1000) / 10) + "%" : "—"}</td>
             </tr>`).join("")}</tbody></table></div>` : "";
     const mallNote = d.mallNote
       ? `<p class="note" style="margin-top:10px">${esc(d.mallNote)}</p>` : "";
@@ -1260,8 +1427,8 @@
          注文単位の手数料、月額登録料、在庫保管料などが入ります。粗利からは引いてあります。</p>` : "";
     const noCost = d.revenueWithoutCost
       ? `<p class="note" style="margin-top:10px">このうち ${yen(d.revenueWithoutCost)} は、
-         原価が未確定（マスタに「?」）の商品の売上です。<strong>その分の原価は粗利に含めていません</strong>。
-         実際の粗利はこれより小さくなります。</p>` : "";
+         原価が分からない商品（マスタに「?」・原価未登録）の売上です。<strong>粗利と粗利率は、この分を除いて計算しています</strong>
+         （0円として数えると粗利がよく見えすぎるため）。原価が入れば自動で含まれます。</p>` : "";
     const warn = d.actual.missing
       ? `<p class="note" style="margin-top:10px">${d.actual.total} 行のうち ${d.actual.missing} 行はまだ手数料の実額が入っていません（概算で計算しています）。
          「入金明細を取り込む」を押すか、翌朝の自動実行を待ってください。</p>` : "";
@@ -1470,6 +1637,7 @@
       $("stock-case").innerHTML = `<option value="">全案件</option>` +
         (cases.cases || []).map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
       stockCasesLoaded = true;
+      applyCase();
     }
     const caseId = $("stock-case").value;
     const d = await get("/api/inventory" + (caseId ? `?case_id=${encodeURIComponent(caseId)}` : ""));
@@ -1566,6 +1734,7 @@
       $("ads-case").innerHTML = (cases.cases || [])
         .map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
       adsCasesLoaded = true;
+      applyCase();
     }
     await loadCoverage();
     await loadAdRows();
@@ -1724,6 +1893,7 @@
       $("set-case").innerHTML = (cases.cases || [])
         .map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
       setCasesLoaded = true;
+      applyCase();
     }
     const caseId = $("set-case").value, mall = $("set-mall").value;
     const d = await get(`/api/settings?case_id=${encodeURIComponent(caseId)}&mall=${mall}`);
@@ -1799,7 +1969,7 @@
     $("health").innerHTML = rows.map(([k, t, v]) =>
       `<div class="row"><span>${k}</span><span class="v">${v} ${t}</span></div>`).join("");
 
-    const g = await get("/api/ingests");
+    const g = await get("/api/ingests" + (currentCase ? `?case_id=${encodeURIComponent(currentCase)}` : ""));
     $("ingests").innerHTML = (g.ingests || []).map((x) => `<tr>
       <td>${esc(x.created_at)}</td><td>${esc(x.kind)}</td><td>${esc(x.mall) || "—"}</td>
       <td class="r">${x.rows}</td>
@@ -1821,11 +1991,202 @@
   $("btn-slack-stock").addEventListener("click", (e) => slackPost("/api/notify/inventory", e.target));
   $("btn-slack-license").addEventListener("click", (e) => slackPost("/api/notify/license", e.target));
 
+  /* ---------- ダッシュボード ---------- */
+  const MALL_JA = { amazon: "Amazon", rakuten: "楽天" };
+  const ADTYPE_JA = { sp: "SP", sb: "SB", sd: "SD", rpp: "RPP" };
+  const PRI = { high: ["ng", "今週中"], mid: ["warn", "余裕があれば"], info: ["wait", "把握"] };
+  const pctS = (v) => (v == null ? "—" : `${v}%`);
+  const mallTag = (m) => `<span class="tag ${m === "amazon" ? "pill-a" : "pill-r"}">${esc(MALL_JA[m] || m)}</span>`;
+  const kpi = (k, v, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub || "&nbsp;"}</div></div>`;
+  const emptyRow = (cols, msg) => `<tr><td colspan="${cols}" style="color:var(--muted)">${msg}</td></tr>`;
+
+  async function loadDashboard() {
+    if (!currentCase) {
+      $("dash-kpis").innerHTML = `<p class="note">案件がまだありません。商品マスタを取り込むと案件が作られます。</p>`;
+      return;
+    }
+    $("dash-asof").textContent = "読み込み中…";
+    const s = await get(`/api/dashboard?case_id=${encodeURIComponent(currentCase)}`);
+    if (s.error) { $("dash-asof").textContent = s.error; return; }
+    $("dash-asof").textContent = `${s.asOf} まで／作成 ${s.generatedAt}`;
+
+    const sl = s.sales, m = s.monthToDate, l30 = s.last30;
+    const ad30 = s.ads.last30.reduce((t, a) => t + a.cost, 0);
+    const adSales30 = s.ads.last30.reduce((t, a) => t + a.sales, 0);
+    const chg = sl.changeRate == null ? "前週比 —"
+      : `前週比 <span class="${sl.changeRate >= 0 ? "up" : "down"}">${sl.changeRate >= 0 ? "+" : ""}${sl.changeRate}%</span>`;
+    $("dash-kpis").innerHTML = [
+      kpi("昨日の売上", yen(sl.yesterday.revenue), `${sl.yesterday.units}個`),
+      kpi("直近7日の売上", yen(sl.last7.revenue), chg),
+      kpi("今月の粗利", yen(m.gross), `広告費前・粗利率 ${pctS(m.grossRate)}`),
+      kpi("直近30日の広告費", s.ads.last30.length ? yen(ad30) : "—",
+        s.ads.last30.length ? `ROAS ${ad30 ? Math.round(adSales30 / ad30 * 100) / 100 : "—"}／損益分岐 ${l30.breakEvenRoas ?? "—"}` : "広告データ未取り込み"),
+      kpi("TACoS（直近7日）", pctS(s.ads.tacos7), "広告費 ÷ 総売上"),
+      kpi("広告費を引いた利益", yen(s.ads.profitAfterAds30), "直近30日"),
+    ].join("");
+
+    $("dash-todo").innerHTML = (s.todo || []).map((t) => `<div class="t">
+        <span class="tag ${PRI[t.priority][0]}">${PRI[t.priority][1]}</span>
+        <span class="note">${esc(t.area)}</span>
+        <span>${esc(t.text)}</span>
+        ${t.basis ? `<span class="b">${esc(t.basis)}</span>` : ""}</div>`).join("")
+      || `<p class="note">いま対応が必要なものは見つかりませんでした。</p>`;
+
+    // 30日ぶんの枠を作り、データの無い日は空けておく（0円とは区別する）
+    const md = (x) => String(x).slice(5).replace("-", "/");
+    const byDate = new Map(sl.trend.map((t) => [t.date, t]));
+    const days = [];
+    for (let i = 30; i >= 1; i--) {
+      const d = new Date(Date.now() + 9 * 3600 * 1000 - i * 86400000).toISOString().slice(0, 10);
+      const t = byDate.get(d);
+      days.push({
+        label: md(d), value: t ? t.revenue : 0,
+        tip: t ? `<div><strong>${esc(d)}</strong></div><div><span class="k">売上</span><span class="v">${yen(t.revenue)}</span></div>
+                  <div><span class="k">販売数</span><span class="v">${t.units}</span></div>`
+               : `<div><strong>${esc(d)}</strong></div><div class="k">データなし</div>`
+      });
+    }
+    $("dash-trend-sub").textContent = `直近30日・${s.malls.map((x) => MALL_JA[x] || x).join("＋") || "全モール"}の合計　${yen(l30.revenue)}`;
+    columnChart($("dash-trend"), days, yen);
+
+    const plRows = m.byMall.map((x) => `<tr><td>${mallTag(x.mall)}</td><td class="r">${yen(x.revenue)}</td>
+      <td class="r">${yen(x.cost)}</td><td class="r">${yen(x.fees)}${x.feesEst > 0 ? `<span class="tag wait" style="margin-left:5px">概算</span>` : ""}</td>
+      <td class="r">${yen(x.gross)}</td><td class="r">${x.revenue - x.revenueWithoutCost > 0 ? (Math.round(x.gross / (x.revenue - x.revenueWithoutCost) * 1000) / 10) + "%" : "—"}</td></tr>`).join("");
+    $("dash-pl").innerHTML = `<div class="tablewrap"><table style="min-width:440px">
+      <thead><tr><th>モール</th><th class="r">売上</th><th class="r">原価</th><th class="r">手数料</th><th class="r">粗利</th><th class="r">粗利率</th></tr></thead>
+      <tbody>${plRows || emptyRow(6, "今月の売上はまだありません。")}
+      ${m.byMall.length > 1 ? `<tr><td><strong>合計</strong></td><td class="r">${yen(m.revenue)}</td><td class="r">${yen(m.cost)}</td>
+        <td class="r">${yen(m.fees)}</td><td class="r"><strong>${yen(m.gross)}</strong></td><td class="r">${pctS(m.grossRate)}</td></tr>` : ""}
+      </tbody></table></div>
+      ${m.revenueWithoutCost ? `<p class="note" style="margin-top:6px">原価が分からない商品の売上 ${yen(m.revenueWithoutCost)} は、粗利と粗利率から除いています。</p>` : ""}
+      <p class="note" style="margin-top:6px">損益分岐ROAS（直近30日）：<strong>${l30.breakEvenRoas ?? "—"}</strong>　ROASがこれを下回る広告は、売れるほど赤字です。</p>`;
+
+    $("dash-fresh").innerHTML = (s.freshness || []).map((f) => `<div class="row"><span>${esc(f.label)}</span>
+      <span class="v">${f.latest ? `${esc(f.latest)} <span class="tag ${f.daysAgo > 3 ? "ng" : f.daysAgo > 1 ? "warn" : "ok"}">${f.daysAgo}日前</span>`
+        : `<span class="tag wait">未取り込み</span>`}</span></div>`).join("") || `<p class="note">接続済みのモールがありません。</p>`;
+
+    $("dash-ads-hint").textContent = "帰属期間がモールで違うので、ROASはモールをまたいで比べない";
+    const adRow = (a, span) => `<tr><td>${span}</td><td>${mallTag(a.mall)}</td><td class="r">${yen(a.cost)}</td><td class="r">${yen(a.sales)}</td>
+      <td class="r">${a.roas ?? "—"}</td><td class="r">${a.clicks.toLocaleString("ja-JP")}</td><td class="r">${a.orders.toLocaleString("ja-JP")}</td><td>${esc(a.attribution) || "—"}</td></tr>`;
+    $("dash-ads").innerHTML = `<div class="tablewrap"><table>
+      <thead><tr><th>期間</th><th>モール</th><th class="r">広告費</th><th class="r">広告経由売上</th><th class="r">ROAS</th>
+        <th class="r">クリック</th><th class="r">注文</th><th>帰属期間</th></tr></thead>
+      <tbody>${[...s.ads.last7.map((a) => adRow(a, "直近7日")), ...s.ads.last30.map((a) => adRow(a, "直近30日"))].join("")
+        || emptyRow(8, "広告レポートがまだ取り込まれていません（広告タブから）。")}</tbody></table></div>`;
+
+    $("dash-camp").innerHTML = s.ads.campaigns.slice(0, 12).map((c) => `<tr><td>${mallTag(c.mall)}</td>
+      <td>${esc(ADTYPE_JA[c.adType] || c.adType || "—")}</td><td>${esc(c.name)}</td>
+      <td class="r">${yen(c.cost)}</td><td class="r">${yen(c.sales)}</td><td class="r">${c.roas ?? "—"}</td>
+      <td>${c.roas == null ? "—" : c.belowBreakEven ? `<span class="tag ng">赤字</span>` : `<span class="tag ok">黒字</span>`}</td>
+      <td class="r">${c.budgetCoverage == null ? "—" : c.budgetCoverage + "%"}</td></tr>`).join("") || emptyRow(8, "キャンペーン別のデータがありません。");
+
+    $("dash-wasted").innerHTML = s.ads.wastedTerms.map((w) => `<tr><td>${esc(w.term)}</td><td>${esc(ADTYPE_JA[w.adType] || w.adType)}</td>
+      <td class="r">${yen(w.cost)}</td><td class="r">${w.clicks}</td></tr>`).join("") || emptyRow(4, "該当なし");
+    $("dash-winning").innerHTML = s.ads.winningTerms.map((w) => `<tr><td>${esc(w.term)}</td><td>${esc(ADTYPE_JA[w.adType] || w.adType)}</td>
+      <td class="r">${w.roas}</td><td class="r">${w.orders}</td></tr>`).join("") || emptyRow(4, "該当なし");
+
+    $("dash-products").innerHTML = s.products.map((p) => `<tr><td>${esc(p.sku)}</td><td>${esc(p.name)}</td>
+      <td class="r">${p.units}</td><td class="r">${yen(p.revenue)}</td>
+      <td class="r">${p.costManual ? `<span class="tag warn">要手計算</span>` : yen(p.gross)}</td>
+      <td class="r">${p.costManual ? "—" : pctS(p.grossRate)}</td><td class="r">${yen(p.adCost)}</td></tr>`).join("") || emptyRow(7, "直近30日の売上がありません。");
+
+    loadShares();
+  }
+
+  /* ---------- AIに渡す ---------- */
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* 下の方法で */ }
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    ta.remove();
+    return ok;
+  }
+
+  async function loadShares() {
+    const r = await fetch(`/api/share?case_id=${encodeURIComponent(currentCase)}`);
+    if (r.status === 403) { $("share-list").innerHTML = `<p class="note">共有URLの発行は管理者のみです。</p>`; $("btn-share").disabled = true; return; }
+    const d = await r.json();
+    const links = d.links || [];
+    $("share-list").innerHTML = links.length ? `<div class="tablewrap"><table style="min-width:640px">
+      <thead><tr><th>メモ</th><th>発行</th><th>有効期限</th><th class="r">読まれた回数</th><th>最後に読まれた</th><th>状態</th><th></th></tr></thead>
+      <tbody>${links.map((l) => `<tr>
+        <td>${esc(l.label) || "—"}</td><td>${esc(l.createdAt.slice(0, 16))}<div class="note">${esc(l.createdBy || "")}</div></td>
+        <td>${esc(l.expiresAt.slice(0, 16))}</td><td class="r">${l.accessCount}</td><td>${esc((l.lastAccessAt || "—").slice(0, 16))}</td>
+        <td><span class="tag ${l.active ? "ok" : "wait"}">${l.active ? "有効" : l.revokedAt ? "無効化済み" : "期限切れ"}</span></td>
+        <td>${l.active ? `${l.url ? `<button class="act" data-share-copy="${esc(l.url)}" style="padding:3px 10px;font-size:12px">依頼文をコピー</button> ` : ""}
+          <button class="act" data-share-revoke="${esc(l.id)}" style="padding:3px 10px;font-size:12px">無効にする</button>` : ""}</td>
+      </tr>`).join("")}</tbody></table></div>
+      <p class="note" style="margin-top:6px">時刻はUTCです。「読まれた回数」が想定より多いときは、無効にして発行し直してください。</p>` : "";
+  }
+
+  $("btn-share").addEventListener("click", async () => {
+    const btn = $("btn-share");
+    btn.disabled = true;
+    $("share-msg").textContent = "発行中…";
+    try {
+      const r = await fetch("/api/share", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ caseId: currentCase, days: Number($("share-days").value), label: $("share-label").value })
+      });
+      const d = await r.json();
+      if (!r.ok) { $("share-msg").textContent = d.error || "発行できませんでした"; return; }
+      const copied = await copyText(d.prompt);
+      $("share-msg").innerHTML = copied ? `<span class="tag ok">コピーしました</span> AIのチャット欄に貼り付けて送ってください` : "下の依頼文をコピーしてください";
+      $("share-new").innerHTML = `<div class="ai-out">${esc(d.url)}</div>
+        <textarea readonly style="min-height:140px;margin-top:8px">${esc(d.prompt)}</textarea>`;
+      $("share-label").value = "";
+      await loadShares();
+    } finally { btn.disabled = false; }
+  });
+
+  $("share-list").addEventListener("click", async (e) => {
+    const c = e.target.closest("[data-share-copy]");
+    if (c) {
+      const d = await get(`/api/share/prompt?case_id=${encodeURIComponent(currentCase)}&url=${encodeURIComponent(c.dataset.shareCopy)}`);
+      const ok = await copyText(d.prompt);
+      $("share-msg").innerHTML = ok ? `<span class="tag ok">コピーしました</span>` : "コピーできませんでした";
+      return;
+    }
+    const v = e.target.closest("[data-share-revoke]");
+    if (v) {
+      await fetch("/api/share/revoke", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: v.dataset.shareRevoke }) });
+      $("share-new").innerHTML = "";
+      $("share-msg").textContent = "無効にしました。そのURLはもう開けません";
+      await loadShares();
+    }
+  });
+
+  $("btn-copy-md").addEventListener("click", async () => {
+    $("copy-msg").textContent = "作成中…";
+    const r = await fetch(`/api/dashboard/markdown?case_id=${encodeURIComponent(currentCase)}`);
+    const md = await r.text();
+    const text = [
+      `以下は、私たちが運用しているEC案件「${caseName()}」の最新の運用データです。分析してください。`,
+      "",
+      "お願いしたいこと：",
+      "1. 状況の要約（3行以内）",
+      "2. 今週やるべきこと（優先度の高い順に最大7件。それぞれ「何を・どれくらい・なぜ（根拠の数字）・期待できる効果」）",
+      "3. 判断に足りないデータや、確認したほうがいいこと",
+      "",
+      "────────",
+      "",
+      md
+    ].join("\n");
+    const ok = await copyText(text);
+    $("copy-msg").innerHTML = ok ? `<span class="tag ok">コピーしました</span> AIのチャット欄に貼り付けて送ってください（${text.length.toLocaleString("ja-JP")}文字）`
+      : "コピーできませんでした。ブラウザの設定でクリップボードを許可してください";
+  });
+
   /* ---------- 起動 ---------- */
   (async () => {
     const me = await get("/api/me");
     $("who").textContent = me.email || "";
-    await loadProducts();
+    await initCases();
+    await loadDashboard();
   })();
 })();
 </script>

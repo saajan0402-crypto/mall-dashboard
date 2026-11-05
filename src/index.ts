@@ -12,7 +12,6 @@ import { ensureAdmin, addAdmin, removeAdmin, setAdminAll, listConnections, saveC
 import { diagnose } from "./diagnose";
 import { advance, pump, jstDate } from "./ingestSales";
 import { ingestFinances, pumpFinances } from "./ingestFinances";
-import { feeLabel, isKnownFee } from "./feeNames";
 import { ingestInventory, pumpInventory, inventoryStatus, notifyInventory } from "./ingestInventory";
 import { ingestSns, pumpSns } from "./ingestSns";
 import { startBackfill, runBackfill, backfillStatus } from "./backfill";
@@ -22,6 +21,9 @@ import { syncRakutenItems, pumpRakutenItems } from "./rakutenItems";
 import { importAdFile, adCoverage, adSummary, type ImportResult, type SummaryLevel } from "./ingestAds";
 import { SETTINGS, resolveSettings, saveSettings, feeRate, recalcFeeEst, recalcAllFeeEst, type Scope } from "./settings";
 import { parseChargeCsv, saveCharges, listCharges, type ChargeRow } from "./mallCharges";
+import { buildCaseSummary, periodSummary } from "./caseSummary";
+import { renderCaseMarkdown, requestPrompt } from "./caseReport";
+import { createShareLink, listShareLinks, revokeShareLink, resolveShareToken } from "./shareLinks";
 
 export interface Env {
   DB: D1Database;
@@ -196,6 +198,29 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     return json({ from, to, rows: results, daily: [...byDate.values()].sort((a, b) => (a.date < b.date ? 1 : -1)) });
   }
 
+  /* ───────── 過去データの取り込み ───────── */
+
+  // 進み具合。画面を開き直しても続きが見えるように、状態はDBに持っている
+  if (path === "/api/backfill" && req.method === "GET") {
+    const caseId = new URL(req.url).searchParams.get("case_id") ?? undefined;
+    return json({ progress: await backfillStatus(env, caseId) });
+  }
+
+  // start：期間を決めて始める／run：画面を開いている間、少しずつ進める
+  if (path === "/api/backfill" && req.method === "POST") {
+    const b = (await req.json().catch(() => ({}))) as { action?: "start" | "run"; caseId?: string; days?: number; traffic?: boolean };
+    if (b.action === "start") {
+      if (!b.caseId) return json({ error: "案件を選んでください" }, 400);
+      try {
+        return json({ progress: await startBackfill(env, b.caseId, Number(b.days ?? 365), { traffic: b.traffic !== false }) });
+      } catch (e) {
+        return json({ error: String(e instanceof Error ? e.message : e) }, 400);
+      }
+    }
+    const r = await runBackfill(env, { caseId: b.caseId, budgetMs: 25000 });
+    return json(r);
+  }
+
   /* ───────── 請求明細（実額） ───────── */
 
   if (path === "/api/charges" && req.method === "GET") {
@@ -272,87 +297,71 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     return json({ ok: true, recalculated });
   }
 
-  // 月次のまとめ。モールごとに出してから合計する。
-  // 手数料は実額があればそれを、無ければ料率からの概算を使う
+  // 月次のまとめ。計算はダッシュボードと共通（caseSummary.periodSummary）
   if (path === "/api/summary") {
     const u = new URL(req.url);
     const caseId = u.searchParams.get("case_id");
     const month = u.searchParams.get("month") ?? jstDate(1).slice(0, 7);
-    const from = `${month}-01`;
-    const to = `${month}-31`;
     if (!caseId) return json({ error: "案件を指定してください" }, 400);
+    const p = await periodSummary(env.DB, caseId, `${month}-01`, `${month}-31`);
+    return json({ month, caseId, ...p });
+  }
 
-    const { results: byMallRows } = await env.DB.prepare(
-      `SELECT s.mall,
-         COALESCE(SUM(s.units), 0)   AS units,
-         COALESCE(SUM(s.revenue), 0) AS revenue,
-         COALESCE(SUM(s.returns), 0) AS returns,
-         COALESCE(SUM(s.discounts), 0) AS discounts,
-         COALESCE(SUM(COALESCE(
-           (SELECT unit_cost FROM cost_history h
-             WHERE h.product_id = s.product_id AND h.effective_from <= s.date
-             ORDER BY h.effective_from DESC LIMIT 1),
-           (SELECT unit_cost FROM cost_history h
-             WHERE h.product_id = s.product_id ORDER BY h.effective_from ASC LIMIT 1),
-           0) * s.units), 0) AS cost,
-         COALESCE(SUM(COALESCE(s.fee_actual, s.fee_est)), 0) AS fees,
-         COALESCE(SUM(CASE WHEN s.fee_actual IS NULL THEN COALESCE(s.fee_est,0) ELSE 0 END), 0) AS fees_est,
-         COALESCE(SUM(CASE WHEN s.fee_source = 'allocated' THEN COALESCE(s.fee_actual,0) ELSE 0 END), 0) AS fees_allocated,
-         COALESCE(SUM(CASE WHEN (SELECT unit_cost FROM cost_history h
-                                  WHERE h.product_id = s.product_id
-                                  ORDER BY h.effective_from DESC LIMIT 1) IS NULL
-                           THEN s.revenue ELSE 0 END), 0) AS revenue_without_cost,
-         SUM(CASE WHEN s.fee_actual IS NULL THEN 1 ELSE 0 END) AS rows_without_actual,
-         COUNT(*) AS rows_total
-       FROM daily_sales s
-      WHERE s.case_id = ? AND s.date BETWEEN ? AND ?
-      GROUP BY s.mall`
-    )
-      .bind(caseId, from, to)
-      .all<Record<string, number | string>>();
+  /* ───────── ダッシュボード・AI用レポート ───────── */
 
-    // 商品に紐づかない費用（注文単位の手数料・月額登録料など）。Amazon の入金明細から
-    const other = await env.DB.prepare(
-      `SELECT COALESCE(-SUM(amount), 0) AS amount FROM fee_events
-        WHERE case_id = ? AND date BETWEEN ? AND ? AND product_id IS NULL AND kind = 'fee'`
-    ).bind(caseId, from, to).first<{ amount: number }>();
+  if (path === "/api/dashboard") {
+    const caseId = new URL(req.url).searchParams.get("case_id");
+    if (!caseId) return json({ error: "案件を指定してください" }, 400);
+    const s = await buildCaseSummary(env.DB, caseId);
+    if (!s) return json({ error: "案件が見つかりません" }, 404);
+    return json(s);
+  }
 
-    const { results: breakdownRaw } = await env.DB.prepare(
-      `SELECT name, -SUM(amount) AS amount, COUNT(*) AS count FROM fee_events
-        WHERE case_id = ? AND date BETWEEN ? AND ?
-          AND kind IN ('fee', 'promotion', 'tax_withheld')
-        GROUP BY name ORDER BY amount DESC`
-    ).bind(caseId, from, to).all<{ name: string; amount: number; count: number }>();
+  // 画面の「データを直接コピー」用。共有URLを使わずにAIへ渡せる
+  if (path === "/api/dashboard/markdown") {
+    const caseId = new URL(req.url).searchParams.get("case_id");
+    if (!caseId) return json({ error: "案件を指定してください" }, 400);
+    const s = await buildCaseSummary(env.DB, caseId);
+    if (!s) return json({ error: "案件が見つかりません" }, 404);
+    return new Response(renderCaseMarkdown(s), { headers: { "content-type": "text/markdown; charset=utf-8" } });
+  }
 
-    const breakdown = breakdownRaw.map((b) => ({ ...b, label: feeLabel(b.name), known: isKnownFee(b.name) }));
+  // 共有URLの発行・一覧・無効化（管理者のみ）
+  if (path.startsWith("/api/share")) {
+    const mallsOf = async (caseId: string) => (await env.DB
+      .prepare("SELECT mall FROM case_malls WHERE case_id = ? AND credentials_enc IS NOT NULL ORDER BY mall")
+      .bind(caseId).all<{ mall: string }>()).results.map((r) => r.mall);
+    const email = viewer(req);
+    const { isAdmin } = await ensureAdmin(env.DB, email);
+    if (!isAdmin) return json({ error: "共有URLの発行は管理者のみです" }, 403);
+    const origin = new URL(req.url).origin;
 
-    const n = (v: unknown) => Number(v ?? 0);
-    const byMall = byMallRows.map((r) => ({
-      mall: String(r.mall),
-      units: n(r.units), revenue: n(r.revenue), returns: n(r.returns),
-      discounts: n(r.discounts), cost: n(r.cost), fees: n(r.fees), feesEst: n(r.fees_est),
-      feesAllocated: n(r.fees_allocated),
-      revenueWithoutCost: n(r.revenue_without_cost),
-      rowsWithoutActual: n(r.rows_without_actual), rowsTotal: n(r.rows_total),
-      gross: n(r.revenue) - n(r.returns) - n(r.cost) - n(r.fees) - n(r.discounts),
-    }));
-
-    const sum = (k: keyof (typeof byMall)[number]) => byMall.reduce((t, m) => t + Number(m[k] ?? 0), 0);
-    const revenue = sum("revenue");
-    const otherFees = other?.amount ?? 0;
-    const gross = sum("gross") - otherFees;
-
-    return json({
-      month, caseId, byMall,
-      units: sum("units"), revenue, returns: sum("returns"), discounts: sum("discounts"),
-      cost: sum("cost"), fees: sum("fees"), feesEst: sum("feesEst"),
-      feesAllocated: sum("feesAllocated"), otherFees, gross,
-      grossRate: revenue ? Math.round((gross / revenue) * 1000) / 10 : null,
-      breakEvenRoas: revenue && gross > 0 ? Math.round((revenue / gross) * 100) / 100 : null,
-      revenueWithoutCost: sum("revenueWithoutCost"),
-      actual: { missing: sum("rowsWithoutActual"), total: sum("rowsTotal") },
-      breakdown,
-    });
+    if (path === "/api/share" && req.method === "GET") {
+      const caseId = new URL(req.url).searchParams.get("case_id");
+      if (!caseId) return json({ links: [] });
+      return json({ links: await listShareLinks(env, origin, caseId) });
+    }
+    if (path === "/api/share" && req.method === "POST") {
+      const b = (await req.json()) as { caseId?: string; days?: number; label?: string };
+      if (!b.caseId) return json({ error: "案件を指定してください" }, 400);
+      try {
+        const link = await createShareLink(env, origin, b.caseId, Number(b.days ?? 7), b.label?.trim() || null, email);
+        const c = await env.DB.prepare("SELECT name FROM cases WHERE id = ?").bind(b.caseId).first<{ name: string }>();
+        return json({ ...link, prompt: requestPrompt(c?.name ?? "", link.url, await mallsOf(b.caseId)) });
+      } catch (e) {
+        return json({ error: String(e instanceof Error ? e.message : e) }, 400);
+      }
+    }
+    if (path === "/api/share/revoke" && req.method === "POST") {
+      const b = (await req.json()) as { id?: string };
+      return json({ ok: b.id ? await revokeShareLink(env.DB, b.id) : false });
+    }
+    if (path === "/api/share/prompt") {
+      const u = new URL(req.url);
+      const caseId = u.searchParams.get("case_id") ?? "";
+      const c = await env.DB.prepare("SELECT name FROM cases WHERE id = ?").bind(caseId).first<{ name: string }>();
+      return json({ prompt: requestPrompt(c?.name ?? "", u.searchParams.get("url") ?? "", await mallsOf(caseId)) });
+    }
   }
 
   // 入金明細の取り込み
@@ -589,19 +598,49 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
 
   // 連携ステータス。止まっていることに気づけるようにするための画面の裏側
   if (path === "/api/ingests") {
-    const { results } = await env.DB.prepare(
-      `SELECT id, case_id, mall, kind, rows, status, error, created_at
-         FROM ingests ORDER BY created_at DESC LIMIT 50`
-    ).all();
+    // 案件を選んでいるときは、その案件と全体のバッチ（案件なし）の記録だけ
+    const caseId = new URL(req.url).searchParams.get("case_id");
+    const sql = `SELECT id, case_id, mall, kind, rows, status, error, created_at
+         FROM ingests ${caseId ? "WHERE case_id = ? OR case_id IS NULL" : ""} ORDER BY created_at DESC LIMIT 50`;
+    const { results } = await (caseId ? env.DB.prepare(sql).bind(caseId) : env.DB.prepare(sql)).all();
     return json({ ingests: results });
   }
 
   return json({ error: "not found", path }, 404);
 }
 
+/** 共有URLの中身。集計済みのレポートだけを返し、それ以外には一切触れさせない */
+async function shareResponse(req: Request, env: Env, url: URL): Promise<Response> {
+  const headers = {
+    "x-robots-tag": "noindex, nofollow, noarchive",
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+  };
+  if (req.method !== "GET" && req.method !== "HEAD") return new Response("Method Not Allowed", { status: 405, headers });
+  const token = url.pathname.slice("/share/".length).replace(/\.(md|json|txt)$/, "");
+  try {
+    const link = await resolveShareToken(env.DB, token);
+    // 期限切れと存在しないURLは見分けがつかないようにする
+    if (!link) return new Response("このURLは無効か、有効期限が切れています。\n", { status: 404, headers: { ...headers, "content-type": "text/plain; charset=utf-8" } });
+    const s = await buildCaseSummary(env.DB, link.caseId);
+    if (!s) return new Response("Not Found\n", { status: 404, headers });
+    if (url.pathname.endsWith(".json") || url.searchParams.get("format") === "json") {
+      return new Response(JSON.stringify(s, null, 2), { headers: { ...headers, "content-type": "application/json; charset=utf-8" } });
+    }
+    // text/plain にしておくと、どのAIの読み込み機能でもそのまま読める
+    return new Response(renderCaseMarkdown(s, { url: `${url.origin}${url.pathname}` }),
+      { headers: { ...headers, "content-type": "text/plain; charset=utf-8" } });
+  } catch {
+    return new Response("一時的に読み込めませんでした。少し待ってからもう一度開いてください。\n", { status: 500, headers: { ...headers, "content-type": "text/plain; charset=utf-8" } });
+  }
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
+    // 共有URL。ここだけは Cloudflare Access の外から読める（Access 側で /share を Bypass にする）
+    if (url.pathname.startsWith("/share/")) return shareResponse(req, env, url);
     if (url.pathname.startsWith("/api/")) {
       try {
         return await api(req, env, url.pathname);
