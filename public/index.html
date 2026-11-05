@@ -126,7 +126,7 @@
 <body>
 <header>
   <div class="bar">
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.9.2</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.9.3</span></div>
     <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
     <div class="who" id="who"></div>
   </div>
@@ -468,7 +468,27 @@
   <!-- 広告 -->
   <section id="p-ads" class="hidden">
     <div>
-      <h2>広告レポートの取り込み<span class="hint">楽天RPP・Amazon広告（CSV）</span></h2>
+      <h2>Amazon広告の自動取り込み<span class="hint">Ads API／毎朝6時に直近14日を取り直す</span></h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0">
+          <button class="act primary" id="btn-adsapi-recent">直近14日を今すぐ取り込む</button>
+          <button class="act" id="btn-adsapi-backfill">過去分を取り込む（最大95日）</button>
+          <button class="act" id="btn-adsapi-pump">進み具合を更新</button>
+          <span class="note" id="adsapi-msg"></span>
+        </div>
+        <div id="adsapi-jobs" style="margin-top:12px"></div>
+        <p class="note" style="margin-top:10px">取り込むのは SP（キャンペーン別・商品別・キーワード別・検索用語）と SB（キャンペーン別・検索用語）の6種類です。
+          <strong>レポートはAmazon側で出来上がるまで数分〜数十分かかります。</strong>押したあと画面を閉じても、5分ごとのバッチが裏で取りに行きます。</p>
+        <p class="note" style="margin-top:6px">広告経由の売上はクリックから7日（SP）／14日（SB）の間あとから増えるので、毎朝14日ぶんを取り直して最新の値に置き換えます。
+          Amazonが過去のデータを持っているのは SP が95日、SB が60日までです。それより前はCSVで入れたものが残ります。</p>
+        <p class="note" style="margin-top:6px">同じ日・同じ種類は、APIの値がCSVで入れた値を置き換えます。
+          APIでは「予算内に収まっていた時間」と「掲載枠別」は取れないので、必要なときだけCSVで補ってください。
+          配信の無かった日は行が無いため、下の取り込み状況では空白に見えます。</p>
+      </div>
+    </div>
+
+    <div>
+      <h2>広告レポートの取り込み（CSV）<span class="hint">楽天RPP／Amazonで API が取れない種類</span></h2>
       <div class="card">
         <div class="btns" style="margin-top:0">
           <select id="ads-case" class="hidden" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
@@ -661,7 +681,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.9.2";
+  const UI_VERSION = "0.9.3";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
@@ -1742,9 +1762,54 @@
       adsCasesLoaded = true;
       applyCase();
     }
-    await loadCoverage();
+    await Promise.all([loadCoverage(), loadAdsApi()]);
     await loadAdRows();
   }
+
+  /* ---------- Amazon広告 API ---------- */
+  const JOB_ST = { queued: ["wait", "順番待ち"], requested: ["warn", "Amazonで作成中"], imported: ["ok", "取り込み済み"], error: ["ng", "失敗"] };
+  function renderAdsApi(d) {
+    const c = d.counts || {};
+    const jobs = d.jobs || [];
+    if (!jobs.length) { $("adsapi-jobs").innerHTML = `<p class="note">まだ取り込んでいません。</p>`; return; }
+    const waiting = (c.queued || 0) + (c.requested || 0);
+    $("adsapi-jobs").innerHTML = `<div class="btns" style="margin:0 0 8px">${
+        Object.entries(JOB_ST).map(([k, [cls, ja]]) => c[k] ? `<span class="tag ${cls}">${ja} ${c[k]}</span>` : "").join(" ")}
+        ${waiting ? `<span class="note">裏で進めています。数分おきに「進み具合を更新」を押すと反映されます</span>` : ""}</div>
+      <div class="tablewrap"><table style="min-width:640px">
+        <thead><tr><th>種類</th><th>期間</th><th>状態</th><th class="r">行数</th><th>備考</th><th>更新（UTC）</th></tr></thead>
+        <tbody>${jobs.slice(0, 18).map((j) => `<tr><td>${esc(j.label)}</td><td>${esc(j.start_date)}〜${esc(j.end_date)}</td>
+          <td><span class="tag ${(JOB_ST[j.status] || ["wait"])[0]}">${esc((JOB_ST[j.status] || [0, j.status])[1])}</span></td>
+          <td class="r">${j.rows ?? "—"}</td><td style="white-space:normal;min-width:220px">${esc(j.error) || ""}</td>
+          <td>${esc(String(j.updated_at).slice(5, 16))}</td></tr>`).join("")}</tbody></table></div>`;
+  }
+  async function loadAdsApi() {
+    const caseId = $("ads-case").value;
+    if (!caseId) return;
+    renderAdsApi(await get(`/api/ads/api-status?case_id=${encodeURIComponent(caseId)}`));
+  }
+  async function adsApiPull(mode, btn) {
+    const caseId = $("ads-case").value;
+    btn.disabled = true;
+    $("adsapi-msg").textContent = mode === "pump" ? "確認中…" : "Amazonに依頼しています…（30秒ほど）";
+    try {
+      const r = await fetch("/api/ads/api-pull", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ caseId, mode }) });
+      const d = await r.json();
+      if (!r.ok) { $("adsapi-msg").textContent = d.error || "失敗しました"; return; }
+      renderAdsApi(d);
+      $("adsapi-msg").textContent = [
+        d.queued ? `${d.queued}件を依頼に積みました` : "",
+        d.imported ? `${d.imported}件を取り込みました` : "",
+        d.errors ? `${d.errors}件が失敗（表の備考を確認）` : "",
+        ...(d.skipped || [])
+      ].filter(Boolean).join("／") || "変化はありません（Amazonで作成中です）";
+      if (d.imported) { await loadCoverage(); await loadAdRows(); }
+    } finally { btn.disabled = false; }
+  }
+  $("btn-adsapi-recent").addEventListener("click", (e) => adsApiPull("recent", e.target));
+  $("btn-adsapi-backfill").addEventListener("click", (e) => adsApiPull("backfill", e.target));
+  $("btn-adsapi-pump").addEventListener("click", (e) => adsApiPull("pump", e.target));
 
   function renderCoverage(coverage) {
     if (!coverage || !coverage.length) { $("ads-coverage").innerHTML = `<p class="note">まだ取り込んでいません。</p>`; return; }

@@ -123,7 +123,7 @@ export async function adsapi(
   env: LwaEnv,
   token: string,
   path: string,
-  init: { method?: string; body?: unknown; profileId?: string; accept?: string } = {}
+  init: { method?: string; body?: unknown; profileId?: string; accept?: string; contentType?: string } = {}
 ): Promise<ApiResult> {
   const res = await fetch(ADS_BASE + path, {
     method: init.method ?? "GET",
@@ -132,7 +132,7 @@ export async function adsapi(
       "Amazon-Advertising-API-ClientId": (adsClient(env).id ?? "").trim(),
       ...(init.profileId ? { "Amazon-Advertising-API-Scope": init.profileId } : {}),
       accept: init.accept ?? "application/json",
-      ...(init.body ? { "content-type": "application/json" } : {}),
+      ...(init.body ? { "content-type": init.contentType ?? "application/json" } : {}),
     },
     body: init.body ? JSON.stringify(init.body) : undefined,
   });
@@ -155,5 +155,8 @@ export function errorMessage(body: unknown): string {
     return [e.code, e.message].filter(Boolean).join(": ").slice(0, 300);
   }
   if (b?.message) return String(b.message).slice(0, 300);
+  // Ads API は { code, detail } の形で返す
+  const d = body as { code?: string; detail?: string; details?: string };
+  if (d?.detail || d?.details) return [d.code, d.detail ?? d.details].filter(Boolean).join(": ").slice(0, 300);
   return JSON.stringify(body).slice(0, 300);
 }

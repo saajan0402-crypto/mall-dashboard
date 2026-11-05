@@ -6,7 +6,7 @@
  * 抜けを見せないと、気づかないまま分析が歪む。
  */
 
-import { parseAdFile, decodeCsv, levelLabel, type AdLevel, type AdRow, type SearchTermRow } from "./adImport";
+import { parseAdFile, decodeCsv, levelLabel, type AdLevel, type AdRow, type SearchTermRow, type ParsedAdFile } from "./adImport";
 
 export interface AdsEnv {
   DB: D1Database;
@@ -58,13 +58,41 @@ export async function importAdFile(
   const r2Key = `raw/${parsed.mall}/ads/${caseId}/${parsed.kind}-${parsed.level}/${parsed.periodStart}_${Date.now()}.csv`;
   await env.FILES.put(r2Key, bytes, { httpMetadata: { contentType: "text/csv" } });
 
+  const saved = await saveParsedAds(env, caseId, parsed, { fileName, r2Key, source: "csv" });
+  return { ...base, ok: true, rows: saved.rows, unknown: saved.unknown, message: saved.message };
+}
+
+/**
+ * 読み取った広告データを保存する。CSV と API の両方がここを通る。
+ * 同じ日・同じ粒度・同じ広告の種類は消してから入れるので、何度入れても二重にならない
+ */
+export async function saveParsedAds(
+  env: AdsEnv,
+  caseId: string,
+  parsed: Pick<ParsedAdFile, "mall" | "kind" | "level" | "periodStart" | "periodEnd" | "rows" | "terms">,
+  meta: {
+    fileName: string; r2Key: string | null; source: "csv" | "api";
+    /**
+     * API用。依頼した期間をまるごと消してから入れる。
+     * 配信の無かった日は行が返ってこないので、日ごとに消す方式だと古い値が残ってしまう
+     */
+    clearRange?: { from: string; to: string; adType: string };
+  },
+): Promise<{ rows: number; unknown: string[]; message: string }> {
+  const fileName = meta.fileName;
   const statements: D1PreparedStatement[] = [];
   const unknown = new Set<string>();
   let count = 0;
 
   if (parsed.kind === "search_terms") {
     // 検索用語：日 × 広告の種類 で入れ直す
-    const keys = new Set(parsed.terms.map((t) => `${t.date}\u0000${t.adType}`));
+    const keys = meta.clearRange ? new Set<string>() : new Set(parsed.terms.map((t) => `${t.date}\u0000${t.adType}`));
+    if (meta.clearRange) {
+      statements.push(
+        env.DB.prepare("DELETE FROM daily_search_terms WHERE case_id = ? AND mall = ? AND date BETWEEN ? AND ? AND ad_type = ?")
+          .bind(caseId, parsed.mall, meta.clearRange.from, meta.clearRange.to, meta.clearRange.adType)
+      );
+    }
     for (const k of keys) {
       const [date, adType] = k.split("\u0000");
       statements.push(
@@ -94,7 +122,13 @@ export async function importAdFile(
     // 広告：日 × 粒度 × 広告の種類 で入れ直す。
     // SP と SB を別々のファイルで入れても、互いを消さないようにするため
     const map = await listingMap(env.DB, caseId, parsed.mall);
-    const keys = new Set(parsed.rows.map((r) => `${r.date}\u0000${r.adType ?? ""}`));
+    const keys = meta.clearRange ? new Set<string>() : new Set(parsed.rows.map((r) => `${r.date}\u0000${r.adType ?? ""}`));
+    if (meta.clearRange) {
+      statements.push(
+        env.DB.prepare("DELETE FROM daily_ads WHERE case_id = ? AND mall = ? AND date BETWEEN ? AND ? AND level = ? AND ad_type IS ?")
+          .bind(caseId, parsed.mall, meta.clearRange.from, meta.clearRange.to, parsed.level, meta.clearRange.adType)
+      );
+    }
     for (const k of keys) {
       const [date, adType] = k.split("\u0000");
       statements.push(
@@ -113,7 +147,7 @@ export async function importAdFile(
                (case_id, mall, date, level, campaign, ad_group, keyword, match_type, external_id, product_id,
                 impressions, clicks, cost, orders, sales, bid, suggested_cpc, new_clicks, new_sales,
                 ad_type, portfolio, budget, budget_coverage, attribution_days, source, source_file)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'csv', ?)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
              ON CONFLICT(case_id, mall, date, level, campaign, ad_group, keyword, match_type, external_id)
              DO UPDATE SET impressions = impressions + excluded.impressions, clicks = clicks + excluded.clicks,
                            cost = cost + excluded.cost, orders = orders + excluded.orders, sales = sales + excluded.sales`
@@ -123,28 +157,29 @@ export async function importAdFile(
             r.externalId, productId, r.impressions, r.clicks, r.cost, r.orders, r.sales,
             r.bid, r.suggestedCpc, r.newClicks, r.newSales,
             r.adType ?? null, r.portfolio ?? null, r.budget ?? null, r.budgetCoverage ?? null,
-            r.attributionDays ?? null, fileName
+            r.attributionDays ?? null, meta.source, fileName
           )
       );
     }
     count = parsed.rows.length;
   }
 
-  await env.DB.batch(statements);
+  // 大きいファイルでも D1 の1回あたりの上限に当たらないよう、分けて流す（先頭は削除文）
+  for (let i = 0; i < statements.length; i += 400) await env.DB.batch(statements.slice(i, i + 400));
 
   await env.DB.prepare(
     `INSERT INTO ad_files (id, case_id, mall, level, period_start, period_end, rows, file_name, r2_key)
      VALUES (?,?,?,?,?,?,?,?,?)`
   ).bind(crypto.randomUUID(), caseId, parsed.mall,
          parsed.kind === "search_terms" ? "search_term" : parsed.level,
-         parsed.periodStart, parsed.periodEnd, count, fileName, r2Key).run();
+         parsed.periodStart, parsed.periodEnd, count, fileName, meta.r2Key).run();
 
   const days = new Set((parsed.kind === "search_terms" ? parsed.terms : parsed.rows).map((r) => r.date)).size;
   const note = unknown.size
     ? `商品マスタに無い番号が ${unknown.size} 件：${[...unknown].slice(0, 5).join(", ")}`
     : "";
   return {
-    ...base, ok: true, rows: count, unknown: [...unknown],
+    rows: count, unknown: [...unknown],
     message: `${count}行 / ${days}日分を取り込みました${note ? `（${note}）` : ""}`,
   };
 }

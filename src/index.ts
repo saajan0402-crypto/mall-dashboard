@@ -23,13 +23,14 @@ import { SETTINGS, resolveSettings, saveSettings, feeRate, recalcFeeEst, recalcA
 import { parseChargeCsv, saveCharges, listCharges, type ChargeRow } from "./mallCharges";
 import { buildCaseSummary, periodSummary } from "./caseSummary";
 import { renderCaseMarkdown, requestPrompt } from "./caseReport";
+import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./adsApi";
 import { createShareLink, listShareLinks, revokeShareLink, resolveShareToken } from "./shareLinks";
 
 /**
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.9.2";
+const APP_VERSION = "0.9.3";
 
 export interface Env {
   DB: D1Database;
@@ -449,6 +450,27 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     return json({ results, coverage: await adCoverage(env.DB, caseId) });
   }
 
+  /* Amazon Ads API の自動取り込み */
+  if (path === "/api/ads/api-status") {
+    const caseId = new URL(req.url).searchParams.get("case_id");
+    if (!caseId) return json({ jobs: [], counts: {} });
+    return json(await adsJobStatus(env.DB, caseId));
+  }
+
+  // recent＝直近14日／backfill＝取れるだけ過去（SP 95日・SB 60日）。積んだらその場で少し進める
+  if (path === "/api/ads/api-pull" && req.method === "POST") {
+    const b = (await req.json().catch(() => ({}))) as { caseId?: string; mode?: "recent" | "backfill" | "pump" };
+    if (!b.caseId) return json({ error: "案件を選んでください" }, 400);
+    let queued = { queued: 0, cases: 0, skipped: [] as string[] };
+    if (b.mode === "recent") queued = await queueAdsReports(env, { caseId: b.caseId, from: jstDate(14), to: jstDate(1), purpose: "manual" });
+    if (b.mode === "backfill") queued = await queueAdsReports(env, { caseId: b.caseId, from: jstDate(94), to: jstDate(15), purpose: "backfill" });
+    if (b.mode !== "pump" && queued.cases === 0) {
+      return json({ error: "この案件は広告APIの設定がありません（接続タブでプロフィールIDを入れてください）" }, 400);
+    }
+    const stat = await pumpAdsReports(env, { caseId: b.caseId, budgetMs: 25000 });
+    return json({ ...queued, ...stat, ...(await adsJobStatus(env.DB, b.caseId)) });
+  }
+
   if (path === "/api/ads/coverage") {
     const u = new URL(req.url);
     const caseId = u.searchParams.get("case_id");
@@ -680,11 +702,16 @@ export default {
     if (event.cron === "*/5 * * * *") {
       ctx.waitUntil(
         (async () => {
+          // 広告レポートは出来上がるまで数分〜数十分かかるので、ここで少しずつ取りに行く
+          const ads = await env.DB
+            .prepare("SELECT COUNT(*) AS n FROM ads_report_jobs WHERE status IN ('queued', 'requested')")
+            .first<{ n: number }>();
+          if (ads?.n) await pumpAdsReports(env, { budgetMs: 60000 });
           const pending = await env.DB
             .prepare("SELECT COUNT(*) AS n FROM backfill WHERE status = 'running'")
             .first<{ n: number }>();
           if (!pending?.n) return;
-          await runBackfill(env, { budgetMs: 240000 });
+          await runBackfill(env, { budgetMs: 180000 });
         })()
       );
       return;
@@ -702,6 +729,11 @@ export default {
         await pumpInventory(env);
         // 楽天。売上と在庫をまとめて取り込む
         await pumpRakuten(env, { days: 7 });
+        // Amazon広告：直近14日ぶんの依頼を積む（6時の回だけ）。取りに行くのは5分ごとの実行
+        if (event.cron === "0 21 * * *") {
+          await queueDailyAds(env);
+          await pumpAdsReports(env, { budgetMs: 30000 });
+        }
         // 取り込んだぶんの概算手数料を入れ直す
         await recalcAllFeeEst(env.DB);
         // 商品情報の照合は朝6時の実行だけ。価格はそう頻繁に変わらない
