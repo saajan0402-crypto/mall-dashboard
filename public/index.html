@@ -126,7 +126,7 @@
 <body>
 <header>
   <div class="bar">
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.9</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.9.2</span></div>
     <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
     <div class="who" id="who"></div>
   </div>
@@ -660,6 +660,8 @@
 <script>
 (function () {
   "use strict";
+  /** サーバー側の APP_VERSION と同じ値にする */
+  const UI_VERSION = "0.9.2";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
@@ -2189,6 +2191,16 @@
   (async () => {
     const me = await get("/api/me");
     $("who").textContent = me.email || "";
+    if (me.deployment) $("ver").title = `デプロイ ${me.deployment.id}${me.deployment.at ? "（" + me.deployment.at + "）" : ""}`;
+    // 画面だけ新しく、サーバーが古いまま（またはその逆）になっていないか
+    if (me.version !== UI_VERSION) {
+      const bar = document.createElement("div");
+      bar.className = "msg ng";
+      bar.style.cssText = "max-width:1080px;margin:10px auto 0;";
+      bar.innerHTML = `<strong>画面とサーバーの版が食い違っています</strong>（画面 ${esc(UI_VERSION)}／サーバー ${esc(me.version || "不明（古い版）")}）。
+        Cloudflare の Deployments で、最新のビルドが 100% で動いているか確認してください。`;
+      document.querySelector("header").after(bar);
+    }
     await initCases();
     await loadDashboard();
   })();
