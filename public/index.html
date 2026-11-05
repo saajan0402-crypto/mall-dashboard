@@ -138,7 +138,7 @@
 <body>
 <header>
   <div class="bar">
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.10.0</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.10.1</span></div>
     <div class="picks">
       <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
       <div class="range-pick" id="range-pick" title="">
@@ -230,49 +230,17 @@
     <div>
       <h2>AIに分析させる<span class="hint">ChatGPT・Claude などのチャットに貼る</span></h2>
       <div class="card">
-        <p class="note" style="margin-bottom:12px">このダッシュボードの内容を、AIが読める文章（表つき）にして渡します。
-          渡し方は2通りあります。<strong>どちらも金額はこのツールが確定させた値</strong>なので、AIに計算をやり直させずに済みます。</p>
-
-        <h3 style="font-size:13px;margin:0 0 6px">① 共有URLを貼る<span class="note" style="font-weight:400;margin-left:8px">開くたびに最新の数字で作り直されます。期間はいまヘッダーで選んでいるもの（「直近30日」などは開いた日から数え直します）</span></h3>
+        <p class="note" style="margin-bottom:12px">いまの案件・期間の内容を、AIが読める文章（依頼文＋表つきのデータ）にします。
+          金額はこのツールが確定させた値なので、AIに計算をやり直させずに済みます。</p>
         <div class="btns" style="margin-top:0">
-          <select id="share-days" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
-            border-radius:5px;background:var(--surface-2);color:var(--ink)">
-            <option value="1">1日で無効</option>
-            <option value="7" selected>7日で無効</option>
-            <option value="30">30日で無効</option>
-            <option value="90">90日で無効</option>
-          </select>
-          <input id="share-label" placeholder="メモ（例：週次レビュー用）" autocomplete="off"
-            style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);border-radius:5px;
-                   background:var(--surface-2);color:var(--ink);min-width:220px">
-          <button class="act primary" id="btn-share">URLを発行</button>
-          <span class="note" id="share-msg"></span>
-        </div>
-        <div id="share-new"></div>
-        <div id="share-list" style="margin-top:12px"></div>
-        <p class="note" style="margin-top:8px"><strong>URLを知っている人は、ログインなしでこの案件のレポートを読めます。</strong>
-          社外に貼らない・用が済んだら「無効にする」を押す、を徹底してください。読めるのはこのレポートだけで、
-          接続情報や他の画面・他の案件には届きません。</p>
-        <details style="margin-top:8px">
-          <summary style="cursor:pointer;font-size:12.5px;color:var(--accent)">AIが「開けない」と言うとき（初回だけ必要な設定）</summary>
-          <p class="note" style="margin-top:8px">このアプリは Cloudflare Access で守られているので、そのままでは外のAIが読めません。
-            <strong>/share/ だけを Access の対象外にする設定</strong>が一度だけ必要です。</p>
-          <ol class="steps" style="margin-top:6px">
-            <li>Cloudflare Zero Trust → Access → Applications → <strong>Add an application</strong> → Self-hosted</li>
-            <li>Application domain に、いまのアプリと同じドメインを入れ、Path に <code>share</code> と入れる</li>
-            <li>Policy を1つ作り、Action を <strong>Bypass</strong>、Include を <strong>Everyone</strong> にして保存</li>
-            <li>ここで発行したURLをシークレットウィンドウで開き、ログイン画面が出ずにレポートが表示されればOK</li>
-          </ol>
-          <p class="note">パスを指定したアプリはドメイン全体のアプリより優先されるので、/share/ 以外は今まで通りログインが必要なままです。
-            それでもAIが読めない場合は、下の②を使ってください。</p>
-        </details>
-
-        <h3 style="font-size:13px;margin:18px 0 6px">② データを直接コピーして貼る<span class="note" style="font-weight:400;margin-left:8px">URLを外に出さない方法</span></h3>
-        <div class="btns" style="margin-top:0">
-          <button class="act" id="btn-copy-md">依頼文＋データをコピー</button>
+          <button class="act primary" id="btn-ai-make">AI用の文章を作る</button>
+          <button class="act" id="btn-ai-copy" disabled>全文をコピー</button>
+          <button class="act" id="btn-ai-save" disabled>ファイルで保存（.md）</button>
           <span class="note" id="copy-msg"></span>
         </div>
-        <p class="note" style="margin-top:8px">その時点の数字を文章ごとコピーします。AIのチャット欄に貼り付けて送るだけです。</p>
+        <textarea id="ai-text" readonly spellcheck="false" class="hidden" style="margin-top:12px;min-height:320px"></textarea>
+        <p class="note" style="margin-top:8px">「全文をコピー」が効かないブラウザでは、欄の中をクリックして <strong>Ctrl+A → Ctrl+C</strong>（Macは ⌘A → ⌘C）でコピーできます。
+          長すぎてチャットに貼れないときは「ファイルで保存」して、そのファイルをAIのチャットに添付してください。</p>
       </div>
     </div>
   </section>
@@ -736,7 +704,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.10.0";
+  const UI_VERSION = "0.10.1";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
@@ -2308,7 +2276,6 @@
       <td class="r">${p.costManual ? `<span class="tag warn">要手計算</span>` : yen(p.gross)}</td>
       <td class="r">${p.costManual ? "—" : pctS(p.grossRate)}</td><td class="r">${yen(p.adCost)}</td></tr>`).join("") || emptyRow(7, "この期間の売上がありません。");
 
-    loadShares();
   }
 
   /* ---------- 広告の改善提案 ---------- */
@@ -2419,93 +2386,61 @@
   });
 
   /* ---------- AIに渡す ---------- */
-  async function copyText(text) {
-    try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* 下の方法で */ }
-    const ta = document.createElement("textarea");
-    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
-    document.body.appendChild(ta); ta.select();
-    let ok = false;
-    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
-    ta.remove();
-    return ok;
-  }
+  // 文章は画面に出してから写す。ボタンを押してから時間がたつとクリップボードを拒否するブラウザがあるため、
+  // 作る操作とコピーする操作を分けている
+  function aiFileName() { return `AI分析用_${caseName()}_${range.from}_${range.to}.md`; }
 
-  async function loadShares() {
-    const r = await fetch(`/api/share?case_id=${encodeURIComponent(currentCase)}`);
-    if (r.status === 403) { $("share-list").innerHTML = `<p class="note">共有URLの発行は管理者のみです。</p>`; $("btn-share").disabled = true; return; }
-    const d = await r.json();
-    const links = d.links || [];
-    $("share-list").innerHTML = links.length ? `<div class="tablewrap"><table style="min-width:640px">
-      <thead><tr><th>メモ</th><th>期間</th><th>発行</th><th>有効期限</th><th class="r">読まれた回数</th><th>最後に読まれた</th><th>状態</th><th></th></tr></thead>
-      <tbody>${links.map((l) => `<tr>
-        <td>${esc(l.label) || "—"}</td><td>${l.range && l.range.preset === "custom" ? `${esc(l.range.from)}〜${esc(l.range.to)}`
-          : esc($("g-preset").querySelector(`option[value="${(l.range && l.range.preset) || "last30"}"]`)?.textContent || "直近30日")}</td><td>${esc(l.createdAt.slice(0, 16))}<div class="note">${esc(l.createdBy || "")}</div></td>
-        <td>${esc(l.expiresAt.slice(0, 16))}</td><td class="r">${l.accessCount}</td><td>${esc((l.lastAccessAt || "—").slice(0, 16))}</td>
-        <td><span class="tag ${l.active ? "ok" : "wait"}">${l.active ? "有効" : l.revokedAt ? "無効化済み" : "期限切れ"}</span></td>
-        <td>${l.active ? `${l.url ? `<button class="act" data-share-copy="${esc(l.url)}" style="padding:3px 10px;font-size:12px">依頼文をコピー</button> ` : ""}
-          <button class="act" data-share-revoke="${esc(l.id)}" style="padding:3px 10px;font-size:12px">無効にする</button>` : ""}</td>
-      </tr>`).join("")}</tbody></table></div>
-      <p class="note" style="margin-top:6px">時刻はUTCです。「読まれた回数」が想定より多いときは、無効にして発行し直してください。</p>` : "";
-  }
-
-  $("btn-share").addEventListener("click", async () => {
-    const btn = $("btn-share");
+  $("btn-ai-make").addEventListener("click", async () => {
+    const btn = $("btn-ai-make");
     btn.disabled = true;
-    $("share-msg").textContent = "発行中…";
+    $("copy-msg").textContent = "作成中…";
     try {
-      const r = await fetch("/api/share", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ caseId: currentCase, days: Number($("share-days").value), label: $("share-label").value,
-          preset: range.preset, from: range.from, to: range.to })
-      });
-      const d = await r.json();
-      if (!r.ok) { $("share-msg").textContent = d.error || "発行できませんでした"; return; }
-      const copied = await copyText(d.prompt);
-      $("share-msg").innerHTML = copied ? `<span class="tag ok">コピーしました</span> AIのチャット欄に貼り付けて送ってください` : "下の依頼文をコピーしてください";
-      $("share-new").innerHTML = `<div class="ai-out">${esc(d.url)}</div>
-        <textarea readonly style="min-height:140px;margin-top:8px">${esc(d.prompt)}</textarea>`;
-      $("share-label").value = "";
-      await loadShares();
+      const r = await fetch(`/api/dashboard/markdown?case_id=${encodeURIComponent(currentCase)}&${rangeQS()}`);
+      if (!r.ok) { $("copy-msg").textContent = "作成できませんでした"; return; }
+      const md = await r.text();
+      const text = [
+        `以下は、私たちが運用しているEC案件「${caseName()}」の運用データ（${range.from}〜${range.to}）です。分析してください。`,
+        "",
+        "お願いしたいこと：",
+        "1. 状況の要約（3行以内）",
+        "2. 今週やるべきこと（優先度の高い順に最大7件。それぞれ「何を・どれくらい・なぜ（根拠の数字）・期待できる効果」）",
+        "3. 判断に足りないデータや、確認したほうがいいこと",
+        "",
+        "前提：金額はツールが確定させた値なので計算し直さなくて大丈夫です。損益分岐ROASを下回る広告は赤字です。",
+        "入札や予算の変更は担当者が手で行います。",
+        "",
+        "────────",
+        "",
+        md
+      ].join("\n");
+      const ta = $("ai-text");
+      ta.value = text;
+      ta.classList.remove("hidden");
+      ta.focus(); ta.select(); ta.scrollTop = 0;
+      $("btn-ai-copy").disabled = false; $("btn-ai-save").disabled = false;
+      $("copy-msg").textContent = `${text.length.toLocaleString("ja-JP")}文字。下の欄に出しました`;
     } finally { btn.disabled = false; }
   });
 
-  $("share-list").addEventListener("click", async (e) => {
-    const c = e.target.closest("[data-share-copy]");
-    if (c) {
-      const d = await get(`/api/share/prompt?case_id=${encodeURIComponent(currentCase)}&url=${encodeURIComponent(c.dataset.shareCopy)}`);
-      const ok = await copyText(d.prompt);
-      $("share-msg").innerHTML = ok ? `<span class="tag ok">コピーしました</span>` : "コピーできませんでした";
-      return;
+  $("btn-ai-copy").addEventListener("click", async () => {
+    const ta = $("ai-text");
+    ta.focus(); ta.select();
+    let ok = false;
+    try { await navigator.clipboard.writeText(ta.value); ok = true; } catch (e) {
+      try { ok = document.execCommand("copy"); } catch (e2) { ok = false; }
     }
-    const v = e.target.closest("[data-share-revoke]");
-    if (v) {
-      await fetch("/api/share/revoke", { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: v.dataset.shareRevoke }) });
-      $("share-new").innerHTML = "";
-      $("share-msg").textContent = "無効にしました。そのURLはもう開けません";
-      await loadShares();
-    }
+    $("copy-msg").innerHTML = ok
+      ? `<span class="tag ok">コピーしました</span> AIのチャット欄に貼り付けて送ってください`
+      : "このブラウザではボタンでコピーできません。欄が選択された状態なので、そのまま Ctrl+C（Macは ⌘C）を押してください";
   });
 
-  $("btn-copy-md").addEventListener("click", async () => {
-    $("copy-msg").textContent = "作成中…";
-    const r = await fetch(`/api/dashboard/markdown?case_id=${encodeURIComponent(currentCase)}&${rangeQS()}`);
-    const md = await r.text();
-    const text = [
-      `以下は、私たちが運用しているEC案件「${caseName()}」の最新の運用データです。分析してください。`,
-      "",
-      "お願いしたいこと：",
-      "1. 状況の要約（3行以内）",
-      "2. 今週やるべきこと（優先度の高い順に最大7件。それぞれ「何を・どれくらい・なぜ（根拠の数字）・期待できる効果」）",
-      "3. 判断に足りないデータや、確認したほうがいいこと",
-      "",
-      "────────",
-      "",
-      md
-    ].join("\n");
-    const ok = await copyText(text);
-    $("copy-msg").innerHTML = ok ? `<span class="tag ok">コピーしました</span> AIのチャット欄に貼り付けて送ってください（${text.length.toLocaleString("ja-JP")}文字）`
-      : "コピーできませんでした。ブラウザの設定でクリップボードを許可してください";
+  $("btn-ai-save").addEventListener("click", () => {
+    const blob = new Blob([$("ai-text").value], { type: "text/markdown;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = aiFileName();
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   });
 
   /* ---------- 起動 ---------- */

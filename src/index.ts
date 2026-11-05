@@ -23,15 +23,14 @@ import { SETTINGS, resolveSettings, saveSettings, feeRate, recalcFeeEst, recalcA
 import { parseChargeCsv, saveCharges, listCharges, type ChargeRow } from "./mallCharges";
 import { buildCaseSummary, periodSummary, dataRange, resolvePeriod } from "./caseSummary";
 import { buildAdAdvice } from "./adAdvice";
-import { renderCaseMarkdown, requestPrompt } from "./caseReport";
+import { renderCaseMarkdown } from "./caseReport";
 import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./adsApi";
-import { createShareLink, listShareLinks, revokeShareLink, resolveShareToken } from "./shareLinks";
 
 /**
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.10.0";
+const APP_VERSION = "0.10.1";
 
 export interface Env {
   DB: D1Database;
@@ -375,44 +374,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     return new Response(renderCaseMarkdown(s), { headers: { "content-type": "text/markdown; charset=utf-8" } });
   }
 
-  // 共有URLの発行・一覧・無効化（管理者のみ）
-  if (path.startsWith("/api/share")) {
-    const mallsOf = async (caseId: string) => (await env.DB
-      .prepare("SELECT mall FROM case_malls WHERE case_id = ? AND credentials_enc IS NOT NULL ORDER BY mall")
-      .bind(caseId).all<{ mall: string }>()).results.map((r) => r.mall);
-    const email = viewer(req);
-    const { isAdmin } = await ensureAdmin(env.DB, email);
-    if (!isAdmin) return json({ error: "共有URLの発行は管理者のみです" }, 403);
-    const origin = new URL(req.url).origin;
 
-    if (path === "/api/share" && req.method === "GET") {
-      const caseId = new URL(req.url).searchParams.get("case_id");
-      if (!caseId) return json({ links: [] });
-      return json({ links: await listShareLinks(env, origin, caseId) });
-    }
-    if (path === "/api/share" && req.method === "POST") {
-      const b = (await req.json()) as { caseId?: string; days?: number; label?: string; preset?: string; from?: string; to?: string };
-      if (!b.caseId) return json({ error: "案件を指定してください" }, 400);
-      try {
-        const link = await createShareLink(env, origin, b.caseId, Number(b.days ?? 7), b.label?.trim() || null, email,
-          { preset: b.preset, from: b.from, to: b.to });
-        const c = await env.DB.prepare("SELECT name FROM cases WHERE id = ?").bind(b.caseId).first<{ name: string }>();
-        return json({ ...link, prompt: requestPrompt(c?.name ?? "", link.url, await mallsOf(b.caseId)) });
-      } catch (e) {
-        return json({ error: String(e instanceof Error ? e.message : e) }, 400);
-      }
-    }
-    if (path === "/api/share/revoke" && req.method === "POST") {
-      const b = (await req.json()) as { id?: string };
-      return json({ ok: b.id ? await revokeShareLink(env.DB, b.id) : false });
-    }
-    if (path === "/api/share/prompt") {
-      const u = new URL(req.url);
-      const caseId = u.searchParams.get("case_id") ?? "";
-      const c = await env.DB.prepare("SELECT name FROM cases WHERE id = ?").bind(caseId).first<{ name: string }>();
-      return json({ prompt: requestPrompt(c?.name ?? "", u.searchParams.get("url") ?? "", await mallsOf(caseId)) });
-    }
-  }
 
   // 入金明細の取り込み
   if (path === "/api/ingest/finances" && req.method === "POST") {
@@ -685,38 +647,9 @@ function periodQuery(u: URL) {
   return { preset: u.searchParams.get("preset"), from: u.searchParams.get("from"), to: u.searchParams.get("to") };
 }
 
-/** 共有URLの中身。集計済みのレポートだけを返し、それ以外には一切触れさせない */
-async function shareResponse(req: Request, env: Env, url: URL): Promise<Response> {
-  const headers = {
-    "x-robots-tag": "noindex, nofollow, noarchive",
-    "cache-control": "no-store",
-    "referrer-policy": "no-referrer",
-    "x-content-type-options": "nosniff",
-  };
-  if (req.method !== "GET" && req.method !== "HEAD") return new Response("Method Not Allowed", { status: 405, headers });
-  const token = url.pathname.slice("/share/".length).replace(/\.(md|json|txt)$/, "");
-  try {
-    const link = await resolveShareToken(env.DB, token);
-    // 期限切れと存在しないURLは見分けがつかないようにする
-    if (!link) return new Response("このURLは無効か、有効期限が切れています。\n", { status: 404, headers: { ...headers, "content-type": "text/plain; charset=utf-8" } });
-    const s = await buildCaseSummary(env.DB, link.caseId, link.range);
-    if (!s) return new Response("Not Found\n", { status: 404, headers });
-    if (url.pathname.endsWith(".json") || url.searchParams.get("format") === "json") {
-      return new Response(JSON.stringify(s, null, 2), { headers: { ...headers, "content-type": "application/json; charset=utf-8" } });
-    }
-    // text/plain にしておくと、どのAIの読み込み機能でもそのまま読める
-    return new Response(renderCaseMarkdown(s, { url: `${url.origin}${url.pathname}` }),
-      { headers: { ...headers, "content-type": "text/plain; charset=utf-8" } });
-  } catch {
-    return new Response("一時的に読み込めませんでした。少し待ってからもう一度開いてください。\n", { status: 500, headers: { ...headers, "content-type": "text/plain; charset=utf-8" } });
-  }
-}
-
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
-    // 共有URL。ここだけは Cloudflare Access の外から読める（Access 側で /share を Bypass にする）
-    if (url.pathname.startsWith("/share/")) return shareResponse(req, env, url);
     if (url.pathname.startsWith("/api/")) {
       try {
         return await api(req, env, url.pathname);
