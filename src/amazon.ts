@@ -59,11 +59,12 @@ export async function accessToken(env: LwaEnv, refreshToken: string): Promise<st
   const res = await fetch("https://api.amazon.com/auth/o2/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
+    // 貼り付けたときに前後の空白や改行が混ざることがあるので、ここで落とす
     body: new URLSearchParams({
       grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: env.AMAZON_LWA_CLIENT_ID,
-      client_secret: env.AMAZON_LWA_CLIENT_SECRET,
+      refresh_token: refreshToken.trim(),
+      client_id: env.AMAZON_LWA_CLIENT_ID.trim(),
+      client_secret: env.AMAZON_LWA_CLIENT_SECRET.trim(),
     }),
   });
   const body = (await res.json().catch(() => ({}))) as {
@@ -72,7 +73,15 @@ export async function accessToken(env: LwaEnv, refreshToken: string): Promise<st
     error_description?: string;
   };
   if (!res.ok || !body.access_token) {
-    throw new AmazonError(body.error_description ?? body.error ?? `HTTP ${res.status}`, res.status);
+    // エラーコードで原因の当たりがつくので、日本語の手がかりを添える
+    const HINT: Record<string, string> = {
+      invalid_client: "クライアントIDかシークレットが違います（写し間違い・シークレットの再発行で古いものが失効、など）",
+      unauthorized_client: "このリフレッシュトークンは別のクライアントIDで発行されています",
+      invalid_grant: "リフレッシュトークンが無効です（取り消し・写し間違い・別のクライアントで発行）",
+    };
+    const code = body.error ?? "";
+    const desc = body.error_description ?? `HTTP ${res.status}`;
+    throw new AmazonError(`${code ? code + "：" : ""}${desc}${HINT[code] ? `。${HINT[code]}` : ""}`, res.status);
   }
   return body.access_token;
 }
@@ -120,7 +129,7 @@ export async function adsapi(
     method: init.method ?? "GET",
     headers: {
       authorization: `Bearer ${token}`,
-      "Amazon-Advertising-API-ClientId": adsClient(env).id ?? "",
+      "Amazon-Advertising-API-ClientId": (adsClient(env).id ?? "").trim(),
       ...(init.profileId ? { "Amazon-Advertising-API-Scope": init.profileId } : {}),
       accept: init.accept ?? "application/json",
       ...(init.body ? { "content-type": "application/json" } : {}),
