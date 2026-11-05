@@ -8,6 +8,7 @@
 import { feeLabel, isKnownFee } from "./feeNames";
 import { inventoryStatus, type InventoryRow } from "./ingestInventory";
 import { resolveSettings } from "./settings";
+import { applyTodoStatus, doneInMonth, isoWeek, textKey, type TodoStatus, type DoneItem } from "./todos";
 import { buildAdAdvice, type BidAdvice, type NegativeAdvice, type HarvestAdvice } from "./adAdvice";
 
 /** 日本時間で n 日前の日付 */
@@ -130,7 +131,7 @@ export interface AdTotal {
  * モールごとの広告費と広告経由売上。
  * 粒度を混ぜると同じ費用を何度も数えるので、モールごとに1つの粒度だけを使う
  */
-async function adTotals(db: D1Database, caseId: string, from: string, to: string): Promise<AdTotal[]> {
+export async function adTotals(db: D1Database, caseId: string, from: string, to: string): Promise<AdTotal[]> {
   const { results } = await db.prepare(
     `SELECT mall, level, SUM(cost) AS cost, SUM(sales) AS sales, SUM(clicks) AS clicks, SUM(orders) AS orders,
             GROUP_CONCAT(DISTINCT ad_type) AS types, GROUP_CONCAT(DISTINCT attribution_days) AS attr
@@ -201,6 +202,8 @@ export interface CaseSummary {
   warnings: string[];
   /** やること。画面とAIの両方に同じものを出す */
   todo: Todo[];
+  /** 今月「対応済み」にしたこと（お客様向けレポート用） */
+  doneThisMonth: DoneItem[];
   settings: { targetMargin: number; adMargin: number; stockAlertDays: number; rakutenFeeRate: number | null; amazonFeeRate: number | null;
     rakutenFeeFromDefault: boolean };
 }
@@ -258,12 +261,18 @@ export async function resolvePeriod(
 }
 
 export interface Todo {
+  /** 状態（対応済みなど）を結びつけるための鍵 */
+  key: string;
   /** high＝今週中、mid＝余裕があれば、info＝把握しておくこと */
   priority: "high" | "mid" | "info";
   area: "在庫" | "広告" | "売上" | "データ";
   text: string;
   /** 判断の根拠になった数字 */
   basis?: string;
+  status?: TodoStatus;
+  statusBy?: string | null;
+  statusAt?: string | null;
+  note?: string | null;
 }
 
 const yenS = (v: number) => "¥" + Math.round(v).toLocaleString("ja-JP");
@@ -273,41 +282,42 @@ const TYPE_JA: Record<string, string> = { sp: "SP", sb: "SB", sd: "SD", rpp: "RP
 /**
  * 決まりきった判断はここで出す。AIに任せるのはその先（優先順位づけ・打ち手の具体化）
  */
-const ac0 = (s: Omit<CaseSummary, "todo">) => s.advice.counts;
+const ac0 = (s: Omit<CaseSummary, "todo" | "doneThisMonth">) => s.advice.counts;
 
-function buildTodo(s: Omit<CaseSummary, "todo">): Todo[] {
+function buildTodo(s: Omit<CaseSummary, "todo" | "doneThisMonth">): Todo[] {
   const out: Todo[] = [];
+  const wk = isoWeek();
   const be = s.pl.breakEvenRoas;
 
   // 売れている商品の在庫切れを先に出す。売れていない商品の在庫0は廃番のことが多い
   const outs = s.inventory.filter((x) => x.level === "out")
     .sort((a, b) => (b.velocity ?? 0) - (a.velocity ?? 0));
   for (const r of outs.slice(0, 8))
-    out.push({ priority: (r.velocity ?? 0) > 0 || (r.subscriptions ?? 0) > 0 ? "high" : "mid", area: "在庫",
+    out.push({ key: `stock:${r.mall}:${r.sku}`, priority: (r.velocity ?? 0) > 0 || (r.subscriptions ?? 0) > 0 ? "high" : "mid", area: "在庫",
       text: `${MALL_JA[r.mall] ?? r.mall}「${r.name}」（${r.sku}）が在庫切れ。補充の手配を確認する`, basis: r.reason });
   if (outs.length > 8)
-    out.push({ priority: "mid", area: "在庫", text: `ほかにも在庫切れが ${outs.length - 8} 件あります（在庫タブで確認）` });
+    out.push({ key: `stock_more:${wk}`, priority: "mid", area: "在庫", text: `ほかにも在庫切れが ${outs.length - 8} 件あります（在庫タブで確認）` });
   for (const r of s.inventory.filter((x) => x.level === "risk"))
-    out.push({ priority: "high", area: "在庫", text: `${MALL_JA[r.mall] ?? r.mall}「${r.name}」（${r.sku}）が欠品間近。発注・納品のタイミングを決める`, basis: r.reason });
+    out.push({ key: `stock:${r.mall}:${r.sku}`, priority: "high", area: "在庫", text: `${MALL_JA[r.mall] ?? r.mall}「${r.name}」（${r.sku}）が欠品間近。発注・納品のタイミングを決める`, basis: r.reason });
 
   const below = s.ads.campaigns.filter((c) => c.belowBreakEven && c.cost >= 3000);
   for (const c of below.slice(0, 5))
     out.push({
-      priority: "high", area: "広告",
+      key: `ad_be:${c.mall}:${c.name}`, priority: "high", area: "広告",
       text: `${MALL_JA[c.mall] ?? c.mall}${c.adType ? " " + (TYPE_JA[c.adType] ?? c.adType) : ""}「${c.name}」は広告で赤字。入札・対象キーワードを見直す`,
       basis: `期間の広告費 ${yenS(c.cost)} / ROAS ${c.roas} ＜ 損益分岐 ${be}`,
     });
 
   if (ac0(s).negatives)
     out.push({
-      priority: s.advice.impact.wastedCost >= 10000 ? "high" : "mid", area: "広告",
+      key: `ad_neg:${wk}`, priority: s.advice.impact.wastedCost >= 10000 ? "high" : "mid", area: "広告",
       text: `除外キーワードの候補が ${s.advice.counts.negatives} 件あります（上位：${s.advice.topNegatives.slice(0, 3).map((w) => w.searchTerm).join("、")}）`,
       basis: s.advice.impact.wastedCost ? `売上0の検索語に期間内 ${yenS(s.advice.impact.wastedCost)}` : undefined,
     });
 
   if (s.sales.changeRate != null && s.sales.changeRate <= -15)
     out.push({
-      priority: "high", area: "売上",
+      key: `sales_drop:${wk}`, priority: "high", area: "売上",
       text: `売上が直前の${s.period.days}日より大きく落ちている。在庫・価格・広告の停止・検索順位のどれが原因か確認する`,
       basis: `前期間比 ${s.sales.changeRate}%（${yenS(s.sales.prev.revenue)} → ${yenS(s.sales.total.revenue)}）`,
     });
@@ -315,28 +325,28 @@ function buildTodo(s: Omit<CaseSummary, "todo">): Todo[] {
   const ac = s.advice.counts;
   if (ac.pause + ac.down + ac.up)
     out.push({
-      priority: ac.pause ? "high" : "mid", area: "広告",
+      key: `ad_bids:${wk}`, priority: ac.pause ? "high" : "mid", area: "広告",
       text: `入札の見直し候補：停止を検討 ${ac.pause}件・下げる ${ac.down}件・上げる ${ac.up}件（広告タブの「改善提案」に具体的な金額）`,
       basis: s.advice.impact.bidDownCost ? `下げる・停止の対象に期間内 ${yenS(s.advice.impact.bidDownCost)} を使っている` : undefined,
     });
   if (ac.harvest)
-    out.push({ priority: "mid", area: "広告", text: `完全一致で追加する候補の検索語が ${ac.harvest} 件あります（広告タブの「改善提案」）` });
+    out.push({ key: `ad_harvest:${wk}`, priority: "mid", area: "広告", text: `完全一致で追加する候補の検索語が ${ac.harvest} 件あります（広告タブの「改善提案」）` });
   if (ac.budgets)
-    out.push({ priority: "mid", area: "広告", text: `予算切れで売上を逃しているキャンペーンが ${ac.budgets} 件あります（広告タブの「改善提案」）` });
+    out.push({ key: `ad_budget:${wk}`, priority: "mid", area: "広告", text: `予算切れで売上を逃しているキャンペーンが ${ac.budgets} 件あります（広告タブの「改善提案」）` });
 
   for (const r of s.inventory.filter((x) => x.level === "watch").slice(0, 5))
-    out.push({ priority: "mid", area: "在庫", text: `${MALL_JA[r.mall] ?? r.mall}「${r.name}」（${r.sku}）の在庫に注意`, basis: r.reason });
+    out.push({ key: `stock:${r.mall}:${r.sku}`, priority: "mid", area: "在庫", text: `${MALL_JA[r.mall] ?? r.mall}「${r.name}」（${r.sku}）の在庫に注意`, basis: r.reason });
 
   // 目標粗利率は広告費を引く前の基準。下回る商品は価格・原価・手数料の見直し対象
   const low = s.products.filter((p) => !p.costManual && p.grossRate != null && p.grossRate < s.settings.targetMargin && p.revenue > 0);
   if (low.length)
     out.push({
-      priority: "mid", area: "売上",
+      key: `low_margin:${jst(0).slice(0, 7)}`, priority: "mid", area: "売上",
       text: `粗利率が目標（${s.settings.targetMargin}%・広告費前）を下回る商品が ${low.length} 件。価格・原価・送料の設定を確認する（${low.slice(0, 3).map((p) => p.sku).join("、")}）`,
       basis: low.slice(0, 3).map((p) => `${p.sku} ${p.grossRate}%`).join(" / "),
     });
 
-  for (const w of s.warnings) out.push({ priority: "info", area: "データ", text: w });
+  for (const w of s.warnings) out.push({ key: `info:${textKey(w)}`, priority: "info", area: "データ", text: w });
   const rank = { high: 0, mid: 1, info: 2 };
   return out.map((t, i) => ({ t, i })).sort((a, b) => rank[a.t.priority] - rank[b.t.priority] || a.i - b.i).map((x) => x.t);
 }
@@ -346,6 +356,7 @@ const daysBetween = (a: string, b: string) => Math.round((Date.parse(b) - Date.p
 export async function buildCaseSummary(
   db: D1Database, caseId: string,
   q: { preset?: string | null; from?: string | null; to?: string | null } = {},
+  opts: { trackTodos?: boolean } = {},
 ): Promise<CaseSummary | null> {
   const c = await db.prepare("SELECT id, name FROM cases WHERE id = ?").bind(caseId).first<{ id: string; name: string }>();
   if (!c) return null;
@@ -513,7 +524,7 @@ export async function buildCaseSummary(
   if (!prevComplete && per.preset !== "all")
     warnings.push(`比べる直前の期間（${prevFrom}〜${prevTo}）の売上データが${n(prevAgg?.n) ? "一部しか無い" : "無い"}ため、前期間比は出していません`);
 
-  const base: Omit<CaseSummary, "todo"> = {
+  const base: Omit<CaseSummary, "todo" | "doneThisMonth"> = {
     caseId, caseName: c.name,
     period: { from, to, days, preset: per.preset },
     prev: { from: prevFrom, to: prevTo },
@@ -569,5 +580,9 @@ export async function buildCaseSummary(
       rakutenFeeFromDefault,
     },
   };
-  return { ...base, todo: buildTodo(base) };
+  // 同じ鍵が2つ出ないようにする（在庫の「注意」と「欠品間近」が同じ商品で重なるなど）
+  const seen = new Set<string>();
+  const todos = buildTodo(base).filter((t) => (seen.has(t.key) ? false : (seen.add(t.key), true)));
+  const todo = await applyTodoStatus(db, caseId, todos, { write: opts.trackTodos !== false });
+  return { ...base, todo, doneThisMonth: await doneInMonth(db, caseId, today.slice(0, 7)) };
 }

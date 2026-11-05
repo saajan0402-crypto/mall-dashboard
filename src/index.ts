@@ -19,18 +19,21 @@ import { notifyLicenseExpiry, expiringLicenses } from "./licenseAlert";
 import { ingestRakutenSales, ingestRakutenInventory, pumpRakuten } from "./ingestRakuten";
 import { syncRakutenItems, pumpRakutenItems } from "./rakutenItems";
 import { importAdFile, adCoverage, adSummary, type ImportResult, type SummaryLevel } from "./ingestAds";
-import { SETTINGS, resolveSettings, saveSettings, feeRate, recalcFeeEst, recalcAllFeeEst, type Scope } from "./settings";
+import { SETTINGS, settingsLog, resolveSettings, saveSettings, feeRate, recalcFeeEst, recalcAllFeeEst, type Scope } from "./settings";
 import { parseChargeCsv, saveCharges, listCharges, type ChargeRow } from "./mallCharges";
 import { buildCaseSummary, periodSummary, dataRange, resolvePeriod } from "./caseSummary";
 import { buildAdAdvice } from "./adAdvice";
 import { renderCaseMarkdown } from "./caseReport";
+import { postSlack, listCaseSlack, saveCaseSlack } from "./slack";
+import { sendDailySummaries } from "./dailySummary";
+import { setTodoStatus, doneInMonth, skippedTodos, STATUS_JA, type TodoStatus } from "./todos";
 import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./adsApi";
 
 /**
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.10.3";
+const APP_VERSION = "0.11.0";
 
 export interface Env {
   DB: D1Database;
@@ -308,7 +311,15 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       scope: Scope; scopeId?: string; values: Record<string, number | null>;
       caseId?: string; mall?: "amazon" | "rakuten";
     };
-    await saveSettings(env.DB, b.scope, b.scopeId ?? "", b.values ?? {}, viewer(req));
+    const changes = await saveSettings(env.DB, b.scope, b.scopeId ?? "", b.values ?? {}, viewer(req));
+    // 誰が・何を・いくつからいくつに変えたかを Slack に残す（制限ではなく見える化で防ぐ）
+    if (changes.length) {
+      const caseId = b.scope === "company" ? null : (b.scopeId ?? "").split(":")[0];
+      const fmt = (v: number | null, unit: string) => (v == null ? "（上の階層に従う）" : `${v}${unit === "percent" ? "%" : "日"}`);
+      const where = b.scope === "company" ? "会社共通" : b.scope === "case" ? "案件" : `案件×${(b.scopeId ?? "").endsWith(":rakuten") ? "楽天" : "Amazon"}`;
+      await postSlack(env, caseId, [`:gear: *設定が変更されました*（${where}／${viewer(req) ?? "不明なユーザー"}）`,
+        ...changes.map((c) => `• ${c.label}：${fmt(c.old, c.unit)} → ${fmt(c.new, c.unit)}`)].join("\n")).catch(() => null);
+    }
 
     // 料率は構成の設定なので、過去にさかのぼって概算を計算し直す
     const touchedFeeRate = Object.keys(b.values ?? {}).some(
@@ -320,7 +331,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
         ? await recalcFeeEst(env.DB, b.caseId, b.mall)
         : await recalcAllFeeEst(env.DB);
     }
-    return json({ ok: true, recalculated });
+    return json({ ok: true, recalculated, changed: changes.length });
   }
 
   // 月次のまとめ。計算はダッシュボードと共通（caseSummary.periodSummary）
@@ -512,22 +523,47 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
 
   // 登録した Webhook がちゃんと届くかをこの画面から確かめられるようにする
   if (path === "/api/slack/test" && req.method === "POST") {
-    if (!env.SLACK_WEBHOOK_URL) {
-      return json({ ok: false, message: "SLACK_WEBHOOK_URL が未設定です（Cloudflare の Runtime の Secret に登録してください）" }, 400);
-    }
+    const b = (await req.json().catch(() => ({}))) as { caseId?: string };
     const who = viewer(req) ?? "不明なユーザー";
-    const res = await fetch(env.SLACK_WEBHOOK_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        text: `:white_check_mark: モール横断ダッシュボードからのテスト送信です（${who}／${todayJst()}）`,
-      }),
-    });
-    const body = await res.text();
-    return json({
-      ok: res.ok,
-      message: res.ok ? "送信しました。Slack を確認してください" : `Slack に拒否されました：HTTP ${res.status} ${body.slice(0, 200)}`,
-    });
+    const r = await postSlack(env, b.caseId ?? null, `:white_check_mark: モール横断ダッシュボードからのテスト送信です（${who}／${todayJst()}）`);
+    return json({ ok: r.ok, message: r.ok
+      ? `送信しました（${r.where === "case" ? "案件のチャンネル" : "全体のチャンネル"}）。Slack を確認してください` : r.message });
+  }
+
+  // 日次サマリを今すぐ送る（確認用）
+  if (path === "/api/slack/daily" && req.method === "POST") {
+    const b = (await req.json().catch(() => ({}))) as { caseId?: string };
+    const results = await sendDailySummaries(env, b.caseId);
+    return json({ ok: results.every((r) => r.ok), results });
+  }
+
+  /* ───────── 要対応の状態 ───────── */
+
+  if (path === "/api/todo" && req.method === "POST") {
+    const b = (await req.json()) as { caseId?: string; key?: string; status?: TodoStatus; text?: string; basis?: string;
+      area?: string; priority?: string; note?: string };
+    if (!b.caseId || !b.key || !b.status) return json({ error: "案件・項目・状態を指定してください" }, 400);
+    try {
+      await setTodoStatus(env.DB, b.caseId, { key: b.key, status: b.status, text: b.text, basis: b.basis ?? null,
+        area: b.area, priority: b.priority, note: b.note?.trim() || null }, viewer(req));
+      return json({ ok: true, status: b.status, label: STATUS_JA[b.status] });
+    } catch (e) {
+      return json({ error: String(e instanceof Error ? e.message : e) }, 400);
+    }
+  }
+
+  // ある月に対応したこと（お客様向けレポートの素材）
+  if (path === "/api/todo/done") {
+    const u = new URL(req.url);
+    const caseId = u.searchParams.get("case_id");
+    if (!caseId) return json({ items: [] });
+    const month = u.searchParams.get("month") ?? todayJst().slice(0, 7);
+    return json({ month, items: await doneInMonth(env.DB, caseId, month), skipped: await skippedTodos(env.DB, caseId) });
+  }
+
+  // 設定の変更履歴
+  if (path === "/api/settings/log") {
+    return json({ log: await settingsLog(env.DB, 50) });
   }
 
   // ライセンスキーの期限
@@ -542,7 +578,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       message: r.sent
         ? `${r.count} 件の期限を通知しました`
         : r.count
-          ? `期限が近いものが ${r.count} 件ありますが、SLACK_WEBHOOK_URL が未設定のため送れません`
+          ? `期限が近いものが ${r.count} 件ありますが、Slack の送り先（案件のチャンネルか全体の SLACK_WEBHOOK_URL）が無いため送れません`
           : "期限が近いライセンスキーはありません",
     });
   }
@@ -555,7 +591,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       message: r.sent
         ? `${r.count} 件のアラートを送りました`
         : r.count
-          ? `対象が ${r.count} 件ありますが、SLACK_WEBHOOK_URL が未設定のため送れません`
+          ? `対象が ${r.count} 件ありますが、Slack の送り先（案件のチャンネルか全体の SLACK_WEBHOOK_URL）が無いため送れません`
           : "いま流すアラートはありません（欠品・欠品間近なし）",
     });
   }
@@ -608,6 +644,23 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
           .run();
       }
       return json({ results });
+    }
+
+    // 案件ごとの Slack 通知先
+    if (path === "/api/connections/slack" && req.method === "GET") {
+      if (!isAdmin) return json({ error: "forbidden" }, 403);
+      return json(await listCaseSlack(env));
+    }
+    if (path === "/api/connections/slack" && req.method === "POST") {
+      if (!isAdmin) return json({ error: "forbidden" }, 403);
+      const b = (await req.json()) as { caseId?: string; webhook?: string; channel?: string; dailySummary?: boolean };
+      if (!b.caseId) return json({ error: "案件を指定してください" }, 400);
+      try {
+        await saveCaseSlack(env, b.caseId, { webhook: b.webhook, channel: b.channel, dailySummary: b.dailySummary }, email);
+        return json({ ok: true, ...(await listCaseSlack(env)) });
+      } catch (e) {
+        return json({ error: String(e instanceof Error ? e.message : e) }, 400);
+      }
     }
 
     // 管理者の管理。追加・削除と「全員管理者」の切り替え
@@ -709,6 +762,8 @@ export default {
         await notifyInventory(env);
         // 期限通知は朝6時の実行だけ。7時の実行でもう一度流さないため
         if (event.cron === "0 21 * * *") await notifyLicenseExpiry(env);
+        // 日次サマリは7時の実行で送る。6時の実行で依頼したレポート（セッション数など）が揃ってから
+        if (event.cron === "0 22 * * *") await sendDailySummaries(env);
         // 過去データの取り込みは5分ごとの実行に任せている
         const rows = results.reduce((n, r) => n + (r.rows ?? 0), 0)
           + fin.reduce((n, r) => n + (r.rows ?? 0), 0);

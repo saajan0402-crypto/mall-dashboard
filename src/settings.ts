@@ -160,16 +160,33 @@ export async function resolveSettings(
 }
 
 /** 保存。空欄（null）はその階層の値を消す＝上から継承する */
+export interface SettingChange { key: string; label: string; unit: string; old: number | null; new: number | null }
+
+/**
+ * 設定を保存する。画面は同じ階層の値をまとめて送ってくるので、変わったものだけを書いて履歴に残す。
+ * 戻り値は変わった項目（Slack への通知に使う）
+ */
 export async function saveSettings(
   db: D1Database,
   scope: Scope,
   scopeId: string,
   values: Record<string, number | null>,
   by: string | null
-): Promise<void> {
+): Promise<SettingChange[]> {
+  const { results: cur } = await db.prepare("SELECT key, value FROM settings WHERE scope = ? AND scope_id = ?")
+    .bind(scope, scopeId).all<{ key: string; value: string }>();
+  const before = new Map(cur.map((r) => [r.key, Number(JSON.parse(r.value))]));
+  const caseId = scope === "company" ? null : scopeId.split(":")[0];
+  const caseName = caseId
+    ? (await db.prepare("SELECT name FROM cases WHERE id = ?").bind(caseId).first<{ name: string }>())?.name ?? null : null;
+
   const statements: D1PreparedStatement[] = [];
+  const changes: SettingChange[] = [];
   for (const [key, value] of Object.entries(values)) {
-    if (!SETTINGS.some((d) => d.key === key)) continue;        // 知らないキーは入れない
+    const def = SETTINGS.find((d) => d.key === key);
+    if (!def) continue;                                         // 知らないキーは入れない
+    const old = before.has(key) ? before.get(key)! : null;
+    if (old === value || (old == null && value == null)) continue;   // 変わっていない
     if (value === null) {
       statements.push(
         db.prepare("DELETE FROM settings WHERE scope = ? AND scope_id = ? AND key = ?")
@@ -187,12 +204,31 @@ export async function saveSettings(
     }
     statements.push(
       db.prepare(
-        `INSERT INTO settings_log (id, scope, scope_id, key, old_value, new_value, changed_by)
-         VALUES (?,?,?,?,NULL,?,?)`
-      ).bind(crypto.randomUUID(), scope, scopeId, key, value === null ? "(継承)" : String(value), by)
+        `INSERT INTO settings_log (id, scope, scope_id, key, old_value, new_value, changed_by, case_name)
+         VALUES (?,?,?,?,?,?,?,?)`
+      ).bind(crypto.randomUUID(), scope, scopeId, key,
+        old == null ? "(継承)" : String(old), value === null ? "(継承)" : String(value), by, caseName)
     );
+    changes.push({ key, label: def.label, unit: def.unit, old, new: value });
   }
   if (statements.length) await db.batch(statements);
+  return changes;
+}
+
+/** 設定の変更履歴（新しい順） */
+export async function settingsLog(db: D1Database, limit = 50) {
+  const { results } = await db.prepare(
+    `SELECT scope, scope_id, key, old_value, new_value, changed_by, changed_at, case_name
+       FROM settings_log ORDER BY changed_at DESC LIMIT ?`
+  ).bind(limit).all<Record<string, string | null>>();
+  return results.map((r) => ({
+    ...r,
+    label: SETTINGS.find((d) => d.key === r.key)?.label
+      ?? (String(r.key).startsWith("connection:") ? `接続情報（${String(r.key).endsWith("rakuten") ? "楽天" : "Amazon"}）` : r.key),
+    where: r.scope === "company" ? "会社共通"
+      : r.scope === "case" ? (r.case_name ?? r.scope_id)
+      : `${r.case_name ?? String(r.scope_id).split(":")[0]}／${String(r.scope_id).endsWith(":rakuten") ? "楽天" : "Amazon"}`,
+  }));
 }
 
 /* ───────── 手数料の概算 ───────── */

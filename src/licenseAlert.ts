@@ -6,9 +6,12 @@
  * 期限の2週間前から毎朝Slackに流して、更新を忘れないようにする。
  */
 
+import { postSlack, type SlackEnv } from "./slack";
+
 export interface LicenseEnv {
   DB: D1Database;
   SLACK_WEBHOOK_URL?: string;
+  SECRET_KEY?: string;
 }
 
 export interface LicenseRow {
@@ -44,7 +47,7 @@ export async function expiringLicenses(db: D1Database, withinDays = 14): Promise
 /** 期限が近い鍵があれば Slack に流す */
 export async function notifyLicenseExpiry(env: LicenseEnv): Promise<{ sent: boolean; count: number }> {
   const rows = await expiringLicenses(env.DB);
-  if (!rows.length || !env.SLACK_WEBHOOK_URL) return { sent: false, count: rows.length };
+  if (!rows.length) return { sent: false, count: 0 };
 
   const lines = rows.map((r) => {
     if (r.daysLeft < 0) {
@@ -56,16 +59,14 @@ export async function notifyLicenseExpiry(env: LicenseEnv): Promise<{ sent: bool
     return `:warning: *${r.caseName}* の楽天ライセンスキーは ${r.expiresOn} に期限が切れます（あと${r.daysLeft}日）`;
   });
 
-  await fetch(env.SLACK_WEBHOOK_URL, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      text: [
-        "*楽天ライセンスキーの期限*",
-        ...lines,
-        "RMS → 店舗様向け情報・サービス → WEB APIサービス → 利用設定 → アプリ一覧 から更新し、アプリの接続画面で登録し直してください。",
-      ].join("\n"),
-    }),
-  });
-  return { sent: true, count: rows.length };
+  // 案件ごとに、その案件のチャンネルへ（未登録なら全体のチャンネルへ）
+  let sent = false;
+  for (const [i, r] of rows.entries()) {
+    const res = await postSlack(env as SlackEnv, r.caseId, [
+      "*楽天ライセンスキーの期限*", lines[i],
+      "RMS → 店舗様向け情報・サービス → WEB APIサービス → 利用設定 → アプリ一覧 から更新し、アプリの接続画面で登録し直してください。",
+    ].join("\n"));
+    sent = sent || res.ok;
+  }
+  return { sent, count: rows.length };
 }

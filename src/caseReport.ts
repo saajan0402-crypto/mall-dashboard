@@ -83,7 +83,17 @@ export function renderCaseMarkdown(s: CaseSummary, opts: { url?: string } = {}):
   L.push("");
   L.push("決まった基準（在庫日数・損益分岐ROAS・売上ゼロの広告など）で機械的に拾ったものです。優先順位の付け直しや、ここに無い論点の指摘は歓迎です。");
   L.push("");
-  L.push(table(["優先度", "分野", "内容", "根拠"], s.todo.map((t) => [PRI[t.priority], t.area, t.text, t.basis ?? ""])));
+  const ST: Record<string, string> = { open: "未対応", done: "対応済み", skip: "今はしない" };
+  L.push(table(["優先度", "分野", "内容", "根拠", "状態"], s.todo.map((t) => [PRI[t.priority], t.area, t.text, t.basis ?? "",
+    `${ST[t.status ?? "open"]}${t.note ? `（${t.note}）` : ""}`])));
+  L.push("");
+  L.push("「対応済み」「今はしない」は担当者が判断済みのものです。提案は「未対応」を中心にしてください。");
+  if (s.doneThisMonth.length) {
+    L.push("");
+    L.push("### 今月すでに対応したこと");
+    L.push("");
+    L.push(table(["日付", "分野", "内容", "メモ"], s.doneThisMonth.map((d) => [d.day, d.area ?? "", d.title, d.note ?? ""])));
+  }
   L.push("");
 
   L.push("## 損益（モール別）");

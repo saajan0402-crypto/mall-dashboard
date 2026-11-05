@@ -146,10 +146,20 @@
   .kpi .s{font-size:12px;color:var(--ink-2);margin-top:2px}
   .up{color:var(--ok)} .down{color:var(--risk)}
   .todo{display:grid;gap:0}
-  .todo .t{display:grid;grid-template-columns:auto auto 1fr;gap:10px;align-items:baseline;
+  .todo .t{display:grid;grid-template-columns:auto auto 1fr auto;gap:10px;align-items:baseline;
     padding:10px 0;border-bottom:1px solid var(--line);font-size:13.5px}
   .todo .t:last-child{border-bottom:none}
   .todo .b{grid-column:3;font-size:12px;color:var(--muted);margin-top:-6px}
+  .todo .st{grid-column:4;grid-row:1}
+  .todo .st select{font:inherit;font-size:12px;padding:3px 6px;border:1px solid var(--line-strong);border-radius:5px;
+    background:var(--surface-2);color:var(--ink)}
+  .todo .st select.done{border-color:var(--ok);color:var(--ok)}
+  .todo .st select.skip{color:var(--muted)}
+  .todo .t.is-done span:not(.tag):not(.st),.todo .t.is-skip span:not(.tag):not(.st){color:var(--muted)}
+  .todo .who{grid-column:3;font-size:11.5px;color:var(--muted);margin-top:-6px}
+  .todo-more summary{cursor:pointer;font-size:12.5px;color:var(--accent);padding:8px 0}
+  @media (max-width:640px){ .todo .t{grid-template-columns:auto 1fr} .todo .t .note{display:none}
+    .todo .b,.todo .who{grid-column:2} .todo .st{grid-column:2;grid-row:auto} }
   .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr));gap:18px}
   .grid2>*{min-width:0}
   /* 表が広くても画面全体が横に伸びないようにする（表の中だけ横スクロール） */
@@ -161,7 +171,7 @@
 <body>
 <header>
   <div class="bar">
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.10.3</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.11.0</span></div>
     <div class="picks">
       <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
       <div class="range-pick" id="range-pick" title="">
@@ -222,6 +232,20 @@
     <div>
       <h2>要対応<span class="hint">ツールが決まった基準で拾ったもの／優先度の高い順</span></h2>
       <div class="card"><div class="todo" id="dash-todo"></div></div>
+    </div>
+    <div>
+      <h2>対応の記録<span class="hint">「対応済み」にしたものが月ごとに貯まります。お客様向けレポートの素材に</span></h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0">
+          <label class="note" for="done-month">月</label>
+          <input type="month" id="done-month" style="font:inherit;font-size:13px;padding:6px 10px;border:1px solid var(--line-strong);
+            border-radius:5px;background:var(--surface-2);color:var(--ink)">
+          <button class="act" id="btn-done-text">レポート用の文章にする</button>
+          <span class="note" id="done-msg"></span>
+        </div>
+        <div id="done-list" style="margin-top:10px"></div>
+        <textarea id="done-text" readonly class="hidden" style="margin-top:10px;min-height:160px"></textarea>
+      </div>
     </div>
     <div class="chart">
       <h3>日別の売上</h3>
@@ -703,6 +727,7 @@
       </details>
 
       <div id="conn-list"></div>
+      <div id="conn-slack"></div>
     </div>
   </section>
 
@@ -717,12 +742,25 @@
       <div class="card">
         <div class="btns" style="margin-top:0">
           <button class="act" id="btn-slack-test">テスト送信</button>
+          <button class="act" id="btn-slack-daily">日次サマリを今すぐ送る</button>
           <button class="act" id="btn-slack-stock">在庫アラートを今すぐ送る</button>
           <button class="act" id="btn-slack-license">ライセンス期限を今すぐ送る</button>
           <span class="note" id="slack-msg"></span>
         </div>
-        <p class="note" style="margin-top:10px">毎朝6時と7時のバッチで、欠品・欠品間近があれば自動で流れます。
+        <p class="note" style="margin-top:10px"><strong>送り先は案件ごと</strong>です（設定 → 接続 の「Slack の通知先」）。案件に登録が無いときは全体のチャンネル（SLACK_WEBHOOK_URL）に案件名つきで送ります。
+          ここのボタンは、ヘッダーで選んでいる案件として送ります。</p>
+        <p class="note" style="margin-top:6px"><strong>毎朝7時に日次サマリ</strong>（前日の売上・粗利・広告費、今月の累計、未対応の「今週中」の要対応）を送ります。
+          毎朝6時と7時のバッチで、欠品・欠品間近があれば自動で流れます。
           楽天ライセンスキーの期限は、2週間前から毎朝6時に通知します（90日ごとに更新が必要です）。</p>
+      </div>
+    </div>
+    <div>
+      <h2>設定の変更履歴<span class="hint">新しい順に50件／変更は案件のSlackにも流れます</span></h2>
+      <div class="tablewrap" style="margin-bottom:22px">
+        <table>
+          <thead><tr><th>日時（UTC）</th><th>対象</th><th>項目</th><th>変更前</th><th>変更後</th><th>変更した人</th></tr></thead>
+          <tbody id="settings-log"></tbody>
+        </table>
       </div>
     </div>
     <div>
@@ -742,7 +780,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.10.3";
+  const UI_VERSION = "0.11.0";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
@@ -1040,6 +1078,7 @@
            <span class="note" id="admin-msg"></span>
          </div></div>`;
 
+    loadConnSlack();
     $("conn-list").innerHTML = (d.cases || []).filter((c) => !currentCase || c.id === currentCase).map((c) => `
       <div class="card" style="margin-bottom:14px">
         <h2 style="margin-bottom:14px">${esc(c.name)}</h2>
@@ -2234,6 +2273,10 @@
     $("health").innerHTML = rows.map(([k, t, v]) =>
       `<div class="row"><span>${k}</span><span class="v">${v} ${t}</span></div>`).join("");
 
+    const lg = await get("/api/settings/log");
+    $("settings-log").innerHTML = (lg.log || []).map((x) => `<tr><td>${esc(String(x.changed_at).slice(0, 16))}</td>
+      <td>${esc(x.where)}</td><td>${esc(x.label)}</td><td>${esc(x.old_value ?? "")}</td><td>${esc(x.new_value ?? "")}</td>
+      <td>${esc(x.changed_by || "—")}</td></tr>`).join("") || `<tr><td colspan="6" style="color:var(--muted)">まだ変更の記録がありません。</td></tr>`;
     const g = await get("/api/ingests" + (currentCase ? `?case_id=${encodeURIComponent(currentCase)}` : ""));
     $("ingests").innerHTML = (g.ingests || []).map((x) => `<tr>
       <td>${esc(x.created_at)}</td><td>${esc(x.kind)}</td><td>${esc(x.mall) || "—"}</td>
@@ -2247,11 +2290,14 @@
     btn.disabled = true;
     $("slack-msg").textContent = "送信中…";
     try {
-      const r = await fetch(path, { method: "POST" });
+      const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ caseId: currentCase || undefined }) });
       const d = await r.json();
-      $("slack-msg").innerHTML = `<span class="tag ${d.ok ? "ok" : "ng"}">${d.ok ? "OK" : "NG"}</span> ${esc(d.message)}`;
+      const msg = d.message || (d.results || []).map((x) => x.message).join(" ／ ") || "";
+      $("slack-msg").innerHTML = `<span class="tag ${d.ok ? "ok" : "ng"}">${d.ok ? "OK" : "NG"}</span> ${esc(msg)}`;
     } finally { btn.disabled = false; }
   }
+  $("btn-slack-daily").addEventListener("click", (e) => slackPost("/api/slack/daily", e.target));
   $("btn-slack-test").addEventListener("click", (e) => slackPost("/api/slack/test", e.target));
   $("btn-slack-stock").addEventListener("click", (e) => slackPost("/api/notify/inventory", e.target));
   $("btn-slack-license").addEventListener("click", (e) => slackPost("/api/notify/license", e.target));
@@ -2291,12 +2337,8 @@
       kpi("広告費を引いた利益", yen(s.ads.profitAfterAds), "粗利 − 広告費"),
     ].join("");
 
-    $("dash-todo").innerHTML = (s.todo || []).map((t) => `<div class="t">
-        <span class="tag ${PRI[t.priority][0]}">${PRI[t.priority][1]}</span>
-        <span class="note">${esc(t.area)}</span>
-        <span>${esc(t.text)}</span>
-        ${t.basis ? `<span class="b">${esc(t.basis)}</span>` : ""}</div>`).join("")
-      || `<p class="note">いま対応が必要なものは見つかりませんでした。</p>`;
+    renderTodos(s.todo || []);
+    loadDone();
 
     // 期間の枠を作り、データの無い日は空けておく（0円とは区別する）。長い期間は週・月にまとめる
     const byDate = new Map(sl.trend.map((t) => [t.date, t]));
@@ -2359,6 +2401,147 @@
       <td class="r">${p.costManual ? "—" : pctS(p.grossRate)}</td><td class="r">${yen(p.adCost)}</td></tr>`).join("") || emptyRow(7, "この期間の売上がありません。");
 
   }
+
+  /* ---------- 接続：Slack の通知先 ---------- */
+  async function loadConnSlack() {
+    const r = await fetch("/api/connections/slack");
+    if (!r.ok) { $("conn-slack").innerHTML = ""; return; }
+    const d = await r.json();
+    const c = (d.cases || []).find((x) => x.caseId === currentCase);
+    if (!c) { $("conn-slack").innerHTML = ""; return; }
+    const inp = "width:100%;padding:7px 10px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);font-size:12.5px";
+    $("conn-slack").innerHTML = `<div class="card" style="margin-bottom:14px">
+      <h2 style="margin-bottom:12px">Slack の通知先<span class="hint">${esc(c.caseName)}</span></h2>
+      <label style="display:block;margin-bottom:9px"><span style="display:block;font-size:12.5px;color:var(--ink-2)">チャンネル名（表示用）</span>
+        <input id="sl-channel" value="${esc(c.channel || "")}" placeholder="#案件名-通知 など" style="${inp}"></label>
+      <label style="display:block;margin-bottom:9px"><span style="display:block;font-size:12.5px;color:var(--ink-2)">Incoming Webhook URL
+        ${c.webhook ? `<span class="tag ok" style="margin-left:6px">${esc(c.webhook)}</span>` : `<span class="tag wait" style="margin-left:6px">未登録（全体のチャンネルに送ります）</span>`}</span>
+        <input id="sl-webhook" type="password" autocomplete="off" placeholder="${c.webhook ? "変更するときだけ入力（消すときは - を入力）" : "https://hooks.slack.com/services/…"}" style="${inp};font-family:var(--mono)"></label>
+      <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer;margin-bottom:6px">
+        <input type="checkbox" id="sl-daily" ${c.dailySummary ? "checked" : ""}>毎朝7時に日次サマリを送る</label>
+      <div class="btns">
+        <button class="act primary" id="sl-save">保存</button>
+        <button class="act" id="sl-test">テスト送信</button>
+        <button class="act" id="sl-daily-now">日次サマリを今すぐ送る</button>
+        <span class="note" id="sl-msg"></span>
+      </div>
+      <p class="note" style="margin-top:8px">Webhook URL は、Slack の「アプリ → Incoming Webhooks」で、通知したいチャンネルを選んで発行します（全体のときと同じ手順）。
+        URL を知っていれば誰でもそのチャンネルに投稿できるので、暗号化して保存し、画面には一部だけを表示します。</p>
+    </div>`;
+    const msg = (ok, t) => { $("sl-msg").innerHTML = `<span class="tag ${ok ? "ok" : "ng"}">${ok ? "OK" : "NG"}</span> ${esc(t)}`; };
+    $("sl-save").addEventListener("click", async () => {
+      const r2 = await fetch("/api/connections/slack", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ caseId: currentCase, channel: $("sl-channel").value, webhook: $("sl-webhook").value, dailySummary: $("sl-daily").checked }) });
+      const d2 = await r2.json();
+      if (!r2.ok) return msg(false, d2.error || "保存できませんでした");
+      await loadConnSlack();
+      msg(true, "保存しました");
+    });
+    const post = async (path) => {
+      const r2 = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ caseId: currentCase }) });
+      const d2 = await r2.json();
+      msg(d2.ok, d2.message || (d2.results || []).map((x) => x.message).join(" ／ "));
+    };
+    $("sl-test").addEventListener("click", () => post("/api/slack/test"));
+    $("sl-daily-now").addEventListener("click", () => post("/api/slack/daily"));
+  }
+
+  /* ---------- 要対応の状態 ---------- */
+  let todoList = [];
+  const ST_JA = { open: "未対応", done: "対応済み", skip: "今はしない" };
+  function todoRow(t, i) {
+    const st = t.status || "open";
+    // サーバーの時刻は UTC。日本時間に直して「11/06 08:41」の形で出す
+    const when = t.statusAt ? (() => {
+      const raw = String(t.statusAt);
+      const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(raw) ? raw : raw.replace(" ", "T") + "Z");
+      return isNaN(d) ? "" : new Date(d.getTime() + 9 * 3600 * 1000).toISOString().slice(5, 16).replace("-", "/").replace("T", " ");
+    })() : "";
+    return `<div class="t is-${st}">
+      <span class="tag ${PRI[t.priority][0]}">${PRI[t.priority][1]}</span>
+      <span class="note">${esc(t.area)}</span>
+      <span>${esc(t.text)}</span>
+      <span class="st"><select data-todo="${i}" class="${st}" aria-label="状態">
+        ${Object.entries(ST_JA).map(([k, v]) => `<option value="${k}"${k === st ? " selected" : ""}>${v}</option>`).join("")}
+      </select></span>
+      ${t.basis ? `<span class="b">${esc(t.basis)}</span>` : ""}
+      ${st !== "open" ? `<span class="who">${esc(ST_JA[st])}：${esc(t.statusBy || "")} ${esc(when)}
+        <input data-note="${i}" value="${esc(t.note || "")}" placeholder="${st === "done" ? "やったこと（任意・お客様向けレポートに載ります）" : "今はしない理由（任意）"}"
+          style="display:block;width:100%;margin-top:4px;font:inherit;font-size:12px;padding:4px 8px;border:1px solid var(--line);border-radius:5px;background:var(--surface-2);color:var(--ink)"></span>` : ""}
+    </div>`;
+  }
+  function renderTodos(list, openSection) {
+    todoList = list;
+    const idx = list.map((t, i) => [t, i]);
+    const open = idx.filter(([t]) => (t.status || "open") === "open");
+    const done = idx.filter(([t]) => t.status === "done");
+    const skip = idx.filter(([t]) => t.status === "skip");
+    // 状態を変えた直後は、その項目が入った欄を開いておく（続けてメモを書けるように）
+    const block = (title, rows, key) => rows.length
+      ? `<details class="todo-more"${openSection === key ? " open" : ""}><summary>${title}（${rows.length}件）</summary>${rows.map(([t, i]) => todoRow(t, i)).join("")}</details>` : "";
+    $("dash-todo").innerHTML = (open.map(([t, i]) => todoRow(t, i)).join("")
+        || `<p class="note">未対応の要対応はありません。</p>`)
+      + block("対応済み", done, "done") + block("今はしない", skip, "skip");
+  }
+  async function saveTodo(t, status, note) {
+    return fetch("/api/todo", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ caseId: currentCase, key: t.key, status, text: t.text, basis: t.basis, area: t.area, priority: t.priority, note }) });
+  }
+  $("dash-todo").addEventListener("change", async (e) => {
+    // メモ欄：状態はそのままでメモだけ保存する
+    const ni = e.target.closest("input[data-note]");
+    if (ni) {
+      const t = todoList[Number(ni.dataset.note)];
+      const r = await saveTodo(t, t.status, ni.value.trim() || null);
+      if (r.ok) { t.note = ni.value.trim() || null; ni.style.borderColor = "var(--ok)"; loadDone(); }
+      return;
+    }
+    const sel = e.target.closest("select[data-todo]");
+    if (!sel) return;
+    const t = todoList[Number(sel.dataset.todo)];
+    const status = sel.value;
+    const note = null;
+    sel.disabled = true;
+    const r = await saveTodo(t, status, note);
+    sel.disabled = false;
+    if (!r.ok) { sel.value = t.status || "open"; return; }
+    t.status = status; t.note = note; t.statusBy = $("who").textContent || ""; t.statusAt = new Date().toISOString();
+    renderTodos(todoList, status);
+    loadDone();
+  });
+
+  /* ---------- 対応の記録 ---------- */
+  let doneItems = [];
+  async function loadDone() {
+    if (!$("done-month").value) $("done-month").value = jstDay(0).slice(0, 7);
+    const d = await get(`/api/todo/done?case_id=${encodeURIComponent(currentCase)}&month=${$("done-month").value}`);
+    doneItems = d.items || [];
+    $("done-text").classList.add("hidden");
+    $("done-list").innerHTML = doneItems.length ? `<div class="tablewrap"><table style="min-width:560px">
+      <thead><tr><th>日付</th><th>分野</th><th>内容</th><th>メモ</th><th>担当</th></tr></thead>
+      <tbody>${doneItems.map((x) => `<tr><td>${esc(x.day)}</td><td>${esc(x.area || "")}</td>
+        <td style="white-space:normal">${esc(x.title)}</td><td style="white-space:normal">${esc(x.note || "")}</td><td>${esc(x.by || "")}</td></tr>`).join("")}</tbody>
+      </table></div>` : `<p class="note">この月に「対応済み」にしたものはまだありません。</p>`;
+  }
+  $("done-month").addEventListener("change", loadDone);
+  $("btn-done-text").addEventListener("click", () => {
+    if (!doneItems.length) { $("done-msg").textContent = "この月の記録がありません"; return; }
+    const [yy, mm] = $("done-month").value.split("-");
+    const byArea = new Map();
+    doneItems.forEach((x) => { const a = x.area || "その他"; byArea.set(a, [...(byArea.get(a) || []), x]); });
+    // お客様向けなので、ツールの言い回し（「〜を確認する」など）は残しつつ、メモがあればそちらを優先して書く
+    const lines = [`■ ${Number(yy)}年${Number(mm)}月に実施した対応（${caseName()}）`, ""];
+    for (const [area, xs] of byArea) {
+      lines.push(`【${area}】`);
+      xs.forEach((x) => lines.push(`・${x.day.slice(5).replace("-", "/")}　${x.note || x.title.replace(/。.*$/, "")}`));
+      lines.push("");
+    }
+    const ta = $("done-text");
+    ta.value = lines.join("\n").trim();
+    ta.classList.remove("hidden");
+    ta.focus(); ta.select();
+    $("done-msg").textContent = "選択した状態で出しました。Ctrl+C（Macは ⌘C）でコピーできます";
+  });
 
   /* ---------- 広告の改善提案 ---------- */
   let advData = null, advTab = "bids";

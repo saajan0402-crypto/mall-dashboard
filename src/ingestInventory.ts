@@ -184,6 +184,8 @@ export async function ingestInventory(env: InventoryEnv, caseId: string): Promis
 
 /* ───────── アラート ───────── */
 
+import { postSlack, type SlackEnv } from "./slack";
+
 export interface InventoryRow {
   caseId: string;
   caseName: string;
@@ -301,22 +303,23 @@ export async function inventoryStatus(db: D1Database, caseId?: string): Promise<
 export async function notifyInventory(env: InventoryEnv): Promise<{ sent: boolean; count: number }> {
   const rows = await inventoryStatus(env.DB);
   const urgent = rows.filter((r) => r.level === "out" || r.level === "risk");
-  if (!urgent.length || !env.SLACK_WEBHOOK_URL) return { sent: false, count: urgent.length };
+  if (!urgent.length) return { sent: false, count: 0 };
 
-  const lines = urgent.map((r) => {
-    const head = r.level === "out" ? ":red_circle: 在庫切れ" : ":warning: 欠品間近";
-    const inbound = r.inbound ? `／納品中 ${r.inbound}個` : "";
-    const sns = r.subscriptions ? `／定期便 ${r.subscriptions}件` : "";
-    const mall = r.mall === "rakuten" ? "楽天" : "Amazon";
-    return `${head}　*${r.caseName}*（${mall}） ${r.sku}（${r.name}）　在庫 ${r.qty}個${inbound}${sns}\n　　${r.reason}`;
-  });
-
-  await fetch(env.SLACK_WEBHOOK_URL, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text: ["*FBA在庫のアラート*", ...lines].join("\n") }),
-  });
-  return { sent: true, count: urgent.length };
+  // 案件ごとに、その案件のチャンネルへ（未登録なら全体のチャンネルへ）
+  let sent = false;
+  for (const caseId of [...new Set(urgent.map((r) => r.caseId))]) {
+    const mine = urgent.filter((r) => r.caseId === caseId);
+    const lines = mine.map((r) => {
+      const head = r.level === "out" ? ":red_circle: 在庫切れ" : ":warning: 欠品間近";
+      const inbound = r.inbound ? `／納品中 ${r.inbound}個` : "";
+      const sns = r.subscriptions ? `／定期便 ${r.subscriptions}件` : "";
+      const mall = r.mall === "rakuten" ? "楽天" : "Amazon";
+      return `${head}　${mall} ${r.sku}（${r.name}）　在庫 ${r.qty}個${inbound}${sns}\n　　${r.reason}`;
+    });
+    const r = await postSlack(env as SlackEnv, caseId, [`*${mine[0].caseName}｜在庫のアラート*`, ...lines].join("\n"));
+    sent = sent || r.ok;
+  }
+  return { sent, count: urgent.length };
 }
 
 /** 全案件ぶんを取り込む */
