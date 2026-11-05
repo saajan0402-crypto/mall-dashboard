@@ -7,6 +7,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Noto+Sans+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script>
+  // 画面が描かれる前にテーマを当てる（一瞬だけ違う色で光るのを防ぐ）
+  try { const t = localStorage.getItem("mall.theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 <style>
   :root {
     color-scheme: light;
@@ -19,7 +23,8 @@
     /* グラフ：データビズ用の検証済みパレット（明暗どちらも全チェック通過） */
     --series-1:#2a78d6; --grid:#E6EBE9; --chart-surface:#fff;
   }
-  @media (prefers-color-scheme:dark){ :root{
+  /* ダークの色。OSの設定に従う（自動）か、ヘッダーで手動で切り替える（data-theme） */
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
     color-scheme: dark;
     --bg:#0F1514; --surface:#161E1D; --surface-2:#1D2726; --ink:#E9EEEC; --ink-2:#C2CCC9;
     --muted:#8E9C98; --line:#283432; --line-strong:#3A4846; --accent:#5CB9BC; --accent-soft:#17302F;
@@ -27,6 +32,14 @@
     --risk:#E38477; --risk-soft:#2E1B18;
     --amazon:#D8A24A; --rakuten:#E38A8F;
     --series-1:#3987e5; --grid:#273130; --chart-surface:#161E1D; } }
+  :root[data-theme="dark"]{
+    color-scheme: dark;
+    --bg:#0F1514; --surface:#161E1D; --surface-2:#1D2726; --ink:#E9EEEC; --ink-2:#C2CCC9;
+    --muted:#8E9C98; --line:#283432; --line-strong:#3A4846; --accent:#5CB9BC; --accent-soft:#17302F;
+    --ok:#77C48C; --ok-soft:#16281C; --warn:#D9A648; --warn-soft:#2B2313;
+    --risk:#E38477; --risk-soft:#2E1B18;
+    --amazon:#D8A24A; --rakuten:#E38A8F;
+    --series-1:#3987e5; --grid:#273130; --chart-surface:#161E1D; }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
     font-family:"Noto Sans JP","Noto Sans",system-ui,sans-serif;font-size:14px;line-height:1.75}
@@ -36,10 +49,18 @@
   .brand{font-weight:700;font-size:15px;margin-right:auto}
   .brand span{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-left:10px;font-weight:400}
   .who{font-family:var(--mono);font-size:11px;color:var(--muted)}
-  nav{max-width:1080px;margin:0 auto;padding:10px 20px 0;display:flex;gap:2px}
-  nav button{background:none;border:none;border-bottom:2px solid transparent;padding:8px 12px;
-    cursor:pointer;color:var(--muted);font:inherit;font-weight:500}
-  nav button[aria-selected=true]{color:var(--accent);border-bottom-color:var(--accent)}
+  /* メニューは2段。上の段で「ダッシュボード／設定」、下の段でその中の画面を選ぶ */
+  nav.nav1{max-width:1080px;margin:0 auto;padding:10px 20px 0;display:flex;gap:2px}
+  nav.nav1 button{background:none;border:none;border-bottom:2px solid transparent;padding:8px 14px;
+    cursor:pointer;color:var(--muted);font:inherit;font-size:14.5px;font-weight:700}
+  nav.nav1 button[aria-selected=true]{color:var(--accent);border-bottom-color:var(--accent)}
+  .nav2wrap{background:var(--surface-2);border-top:1px solid var(--line)}
+  nav.nav2{max-width:1080px;margin:0 auto;padding:7px 20px;display:flex;gap:4px}
+  nav.nav2 button{background:none;border:1px solid transparent;border-radius:999px;padding:4px 14px;
+    cursor:pointer;color:var(--ink-2);font:inherit;font-size:13px;font-weight:500;white-space:nowrap}
+  nav.nav2 button:hover{color:var(--accent)}
+  nav.nav2 button[aria-selected=true]{background:var(--surface);border-color:var(--line-strong);color:var(--accent)}
+  .seg.theme-seg button{padding:2px 10px;font-size:11.5px;line-height:1.6}
   main{max-width:1080px;margin:0 auto;padding:24px 20px 72px;display:grid;gap:22px}
   h2{font-size:14px;margin:0 0 10px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
   h2 .hint{font-family:var(--mono);font-size:10.5px;color:var(--muted);font-weight:400}
@@ -61,7 +82,8 @@
     border:1px solid var(--line-strong);background:var(--surface-2);color:var(--ink)}
   button.act:hover{border-color:var(--accent);color:var(--accent)}
   button.act.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-  @media (prefers-color-scheme:dark){ button.act.primary{color:#0F1514} }
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]) button.act.primary{color:#0F1514} }
+  :root[data-theme="dark"] button.act.primary{color:#0F1514}
   button.act[disabled]{opacity:.5;cursor:default}
   .note{font-size:12.5px;color:var(--muted);margin:0}
   /* 表示切替（表／グラフ） */
@@ -69,7 +91,8 @@
   .seg button{font:inherit;font-size:13px;padding:6px 16px;border:none;cursor:pointer;
     background:var(--surface-2);color:var(--muted)}
   .seg button[aria-pressed=true]{background:var(--accent);color:#fff}
-  @media (prefers-color-scheme:dark){ .seg button[aria-pressed=true]{color:#0F1514} }
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]) .seg button[aria-pressed=true]{color:#0F1514} }
+  :root[data-theme="dark"] .seg button[aria-pressed=true]{color:#0F1514}
   .chart{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:16px 18px}
   .chart h3{font-size:13px;margin:0 0 2px;font-weight:700}
   .chart .sub{font-size:12px;color:var(--muted);margin:0 0 10px}
@@ -108,12 +131,12 @@
   .range-pick button{font:inherit;font-size:12.5px;padding:4px 10px;border:1px solid var(--line-strong);border-radius:5px;
     background:var(--surface-2);color:var(--ink);cursor:pointer}
   .range-pick button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff}
-  @media (prefers-color-scheme:dark){ .range-pick button[aria-pressed=true]{color:#0F1514} }
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]) .range-pick button[aria-pressed=true]{color:#0F1514} }
+  :root[data-theme="dark"] .range-pick button[aria-pressed=true]{color:#0F1514}
   .range-pick .span{font-size:12px;color:var(--muted);font-family:var(--mono)}
   .range-pick.dim{opacity:.45}
   @media (max-width:640px){ .picks{justify-items:start;width:100%} .range-pick{justify-content:flex-start} }
   nav{overflow-x:auto}
-  nav button{white-space:nowrap}
   /* ダッシュボード */
   .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
   @media (max-width:520px){ .kpis{grid-template-columns:1fr 1fr} .kpi .v{font-size:19px} }
@@ -138,7 +161,7 @@
 <body>
 <header>
   <div class="bar">
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.10.1</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.10.2</span></div>
     <div class="picks">
       <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
       <div class="range-pick" id="range-pick" title="">
@@ -159,18 +182,33 @@
         <span class="span" id="g-span"></span>
       </div>
     </div>
-    <div class="who" id="who"></div>
+    <div style="display:grid;gap:6px;justify-items:end">
+      <div class="who" id="who"></div>
+      <span class="seg theme-seg" id="theme-seg" role="group" aria-label="表示の色">
+        <button data-theme-set="auto" aria-pressed="true" title="パソコンの設定に合わせる">自動</button>
+        <button data-theme-set="light" aria-pressed="false">ライト</button>
+        <button data-theme-set="dark" aria-pressed="false">ダーク</button>
+      </span>
+    </div>
   </div>
-  <nav role="tablist">
-    <button role="tab" id="t-dash" aria-selected="true">ダッシュボード</button>
-    <button role="tab" id="t-master" aria-selected="false">商品マスタ</button>
-    <button role="tab" id="t-sales" aria-selected="false">売上</button>
-    <button role="tab" id="t-stock" aria-selected="false">在庫</button>
-    <button role="tab" id="t-ads" aria-selected="false">広告</button>
-    <button role="tab" id="t-settings" aria-selected="false">設定</button>
-    <button role="tab" id="t-conn" aria-selected="false">接続</button>
-    <button role="tab" id="t-status" aria-selected="false">連携ステータス</button>
+  <nav class="nav1" role="tablist" aria-label="メニュー">
+    <button role="tab" id="grp-dash" aria-selected="true">ダッシュボード</button>
+    <button role="tab" id="grp-set" aria-selected="false">設定</button>
   </nav>
+  <div class="nav2wrap">
+    <nav class="nav2" role="tablist" aria-label="ダッシュボードの画面" id="sub-dash">
+      <button role="tab" id="t-dash" aria-selected="true">ダッシュボード</button>
+      <button role="tab" id="t-sales" aria-selected="false">売上</button>
+      <button role="tab" id="t-ads" aria-selected="false">広告</button>
+      <button role="tab" id="t-stock" aria-selected="false">在庫</button>
+    </nav>
+    <nav class="nav2 hidden" role="tablist" aria-label="設定の画面" id="sub-set">
+      <button role="tab" id="t-settings" aria-selected="false">設定</button>
+      <button role="tab" id="t-conn" aria-selected="false">接続</button>
+      <button role="tab" id="t-status" aria-selected="false">連携ステータス</button>
+      <button role="tab" id="t-master" aria-selected="false">商品マスタ</button>
+    </nav>
+  </div>
 </header>
 
 <main>
@@ -704,7 +742,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.10.1";
+  const UI_VERSION = "0.10.2";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
@@ -712,13 +750,57 @@
   const POLICY = { profit: "利益重視", share: "シェア獲得", nurture: "育成中" };
 
   const tabs = [["t-dash", "p-dash"], ["t-master", "p-master"], ["t-sales", "p-sales"], ["t-stock", "p-stock"], ["t-ads", "p-ads"], ["t-settings", "p-settings"], ["t-conn", "p-conn"], ["t-status", "p-status"]];
-  tabs.forEach(([t, p]) => $(t).addEventListener("click", () => {
+  // 2段のメニュー。上の段（グループ）ごとに、最後に開いていた画面を覚えておく
+  const GROUPS = {
+    dash: { btn: "grp-dash", sub: "sub-dash", tabs: ["t-dash", "t-sales", "t-ads", "t-stock"], last: "t-dash" },
+    set: { btn: "grp-set", sub: "sub-set", tabs: ["t-settings", "t-conn", "t-status", "t-master"], last: "t-settings" },
+  };
+  const groupOf = (t) => Object.keys(GROUPS).find((g) => GROUPS[g].tabs.includes(t));
+  function openTab(t) {
+    const p = tabs.find(([t2]) => t2 === t)[1];
+    const g = groupOf(t);
+    GROUPS[g].last = t;
+    Object.entries(GROUPS).forEach(([k, v]) => {
+      $(v.btn).setAttribute("aria-selected", k === g ? "true" : "false");
+      $(v.sub).classList.toggle("hidden", k !== g);
+    });
     tabs.forEach(([t2, p2]) => {
       $(t2).setAttribute("aria-selected", t2 === t ? "true" : "false");
       $(p2).classList.toggle("hidden", p2 !== p);
     });
+    try { localStorage.setItem("mall.tabs", JSON.stringify({ dash: GROUPS.dash.last, set: GROUPS.set.last })); } catch (e) { /* なくても動く */ }
     loadPanel(p);
-  }));
+  }
+  tabs.forEach(([t]) => $(t).addEventListener("click", () => openTab(t)));
+  Object.values(GROUPS).forEach((v) => $(v.btn).addEventListener("click", () => openTab(v.last)));
+  try {
+    const saved = JSON.parse(localStorage.getItem("mall.tabs") || "null");
+    if (saved) Object.keys(GROUPS).forEach((g) => { if (GROUPS[g].tabs.includes(saved[g])) GROUPS[g].last = saved[g]; });
+  } catch (e) { /* 既定のまま */ }
+
+  /* ---------- 表示の色（自動／ライト／ダーク） ---------- */
+  function applyTheme(mode, redraw) {
+    if (mode === "light" || mode === "dark") document.documentElement.dataset.theme = mode;
+    else delete document.documentElement.dataset.theme;
+    document.querySelectorAll("#theme-seg button").forEach((b) =>
+      b.setAttribute("aria-pressed", b.dataset.themeSet === (mode || "auto") ? "true" : "false"));
+    try { localStorage.setItem("mall.theme", mode || "auto"); } catch (e) { /* なくても動く */ }
+    // グラフの線や文字の色は描いた時点の色で固定されるので、描き直す
+    if (redraw) loadPanel(activePanel());
+  }
+  $("theme-seg").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-theme-set]");
+    if (b) applyTheme(b.dataset.themeSet, true);
+  });
+  // OSの設定が変わったとき（自動のときだけ）も描き直す
+  try {
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+      if (!document.documentElement.dataset.theme) loadPanel(activePanel());
+    });
+  } catch (e) { /* 古いブラウザ */ }
+  let savedTheme = "auto";
+  try { savedTheme = localStorage.getItem("mall.theme") || "auto"; } catch (e) { savedTheme = "auto"; }
+  applyTheme(savedTheme, false);
 
   function loadPanel(p) {
     markRangeTab(p);
@@ -2459,8 +2541,7 @@
     }
     await initCases();
     await resolveRange();
-    markRangeTab("p-dash");
-    await loadDashboard();
+    openTab("t-dash");
   })();
 })();
 </script>
