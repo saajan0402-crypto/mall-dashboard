@@ -8,6 +8,7 @@
 import { feeLabel, isKnownFee } from "./feeNames";
 import { inventoryStatus, type InventoryRow } from "./ingestInventory";
 import { resolveSettings } from "./settings";
+import { buildAdAdvice, type BidAdvice, type NegativeAdvice, type HarvestAdvice } from "./adAdvice";
 
 /** 日本時間で n 日前の日付 */
 export const jst = (n = 0) =>
@@ -157,28 +158,41 @@ async function adTotals(db: D1Database, caseId: string, from: string, to: string
 export interface CaseSummary {
   caseId: string;
   caseName: string;
-  asOf: string;
+  /** 見ている期間と、比べる直前の同じ長さの期間 */
+  period: { from: string; to: string; days: number; preset: string | null };
+  prev: { from: string; to: string };
+  /** データがある範囲（全期間ボタン用） */
+  dataRange: { from: string | null; to: string | null };
   generatedAt: string;
   malls: string[];
   sales: {
-    yesterday: { date: string; revenue: number; units: number };
-    last7: { revenue: number; units: number; sessions: number | null };
-    prev7: { revenue: number; units: number };
+    total: { revenue: number; units: number; sessions: number | null };
+    prev: { revenue: number; units: number };
     changeRate: number | null;
+    perDay: number;
+    /** 期間の最終日 */
+    last: { date: string; revenue: number; units: number };
     trend: Array<{ date: string; revenue: number; units: number }>;
   };
-  monthToDate: PeriodSummary;
-  last30: PeriodSummary;
+  /** 期間の損益 */
+  pl: PeriodSummary;
   ads: {
-    last7: AdTotal[];
-    last30: AdTotal[];
-    tacos7: number | null;
-    profitAfterAds30: number | null;
+    totals: AdTotal[];
+    tacos: number | null;
+    profitAfterAds: number | null;
     campaigns: Array<{ mall: string; adType: string | null; name: string; cost: number; sales: number;
       roas: number | null; attribution: number | null; belowBreakEven: boolean; budgetCoverage: number | null }>;
     wastedTerms: Array<{ mall: string; adType: string; term: string; cost: number; clicks: number; impShare: number | null }>;
     winningTerms: Array<{ mall: string; adType: string; term: string; cost: number; sales: number; roas: number; orders: number }>;
     wastedKeywords: Array<{ term: string; product: string; cost: number; clicks: number }>;
+  };
+  /** 広告の改善提案（件数と上位だけ。全部は広告タブで） */
+  advice: {
+    counts: { up: number; down: number; pause: number; negatives: number; harvest: number; budgets: number };
+    impact: { wastedCost: number; bidDownCost: number };
+    topBids: BidAdvice[];
+    topNegatives: NegativeAdvice[];
+    topHarvest: HarvestAdvice[];
   };
   products: Array<{ sku: string; name: string; units: number; revenue: number; gross: number | null;
     grossRate: number | null; adCost: number | null; costManual: boolean }>;
@@ -189,6 +203,58 @@ export interface CaseSummary {
   todo: Todo[];
   settings: { targetMargin: number; stockAlertDays: number; rakutenFeeRate: number | null; amazonFeeRate: number | null;
     rakutenFeeFromDefault: boolean };
+}
+
+/* ───────── 期間 ───────── */
+
+export const PRESETS: Record<string, string> = {
+  yesterday: "昨日", last7: "直近7日", last14: "直近14日", last30: "直近30日", last90: "直近90日",
+  this_month: "今月", last_month: "先月", all: "全期間", custom: "期間を指定",
+};
+
+/** 案件のデータがある範囲。売上と広告のうち、いちばん古い日〜いちばん新しい日 */
+export async function dataRange(db: D1Database, caseId: string): Promise<{ from: string | null; to: string | null }> {
+  const r = await db.prepare(
+    `SELECT MIN(d) AS a, MAX(e) AS b FROM (
+       SELECT MIN(date) AS d, MAX(date) AS e FROM daily_sales WHERE case_id = ?1
+       UNION ALL SELECT MIN(date), MAX(date) FROM daily_ads WHERE case_id = ?1
+       UNION ALL SELECT MIN(date), MAX(date) FROM daily_search_terms WHERE case_id = ?1)`
+  ).bind(caseId).first<{ a: string | null; b: string | null }>();
+  const y = jst(1);
+  return { from: r?.a ?? null, to: r?.b ? (r.b > y ? y : r.b) : null };
+}
+
+/** 決まった呼び名（直近30日など）から日付を出す。日付はすべて日本時間 */
+export async function resolvePeriod(
+  db: D1Database, caseId: string, q: { preset?: string | null; from?: string | null; to?: string | null },
+): Promise<{ from: string; to: string; preset: string | null }> {
+  const valid = (d?: string | null) => !!d && /^\d{4}-\d{2}-\d{2}$/.test(d);
+  const y = jst(1);
+  const preset = q.preset && PRESETS[q.preset] ? q.preset : null;
+  if (preset === "custom" || (!preset && valid(q.from) && valid(q.to))) {
+    if (valid(q.from) && valid(q.to)) {
+      const [f, t] = [q.from!, q.to!].sort();
+      return { from: f, to: t, preset: "custom" };
+    }
+  }
+  const back = (d: number) => ({ from: jst(d), to: y });
+  switch (preset) {
+    case "yesterday": return { ...back(1), preset };
+    case "last7": return { ...back(7), preset };
+    case "last14": return { ...back(14), preset };
+    case "last90": return { ...back(90), preset };
+    case "this_month": { const f = `${y.slice(0, 7)}-01`; return { from: f, to: y, preset }; }
+    case "last_month": {
+      const first = new Date(`${y.slice(0, 7)}-01T00:00:00Z`);
+      const end = new Date(first.getTime() - 86400000).toISOString().slice(0, 10);
+      return { from: `${end.slice(0, 7)}-01`, to: end, preset };
+    }
+    case "all": {
+      const r = await dataRange(db, caseId);
+      return { from: r.from ?? jst(30), to: r.to ?? y, preset };
+    }
+    default: return { ...back(30), preset: "last30" };
+  }
 }
 
 export interface Todo {
@@ -207,9 +273,11 @@ const TYPE_JA: Record<string, string> = { sp: "SP", sb: "SB", sd: "SD", rpp: "RP
 /**
  * 決まりきった判断はここで出す。AIに任せるのはその先（優先順位づけ・打ち手の具体化）
  */
+const ac0 = (s: Omit<CaseSummary, "todo">) => s.advice.counts;
+
 function buildTodo(s: Omit<CaseSummary, "todo">): Todo[] {
   const out: Todo[] = [];
-  const be = s.last30.breakEvenRoas;
+  const be = s.pl.breakEvenRoas;
 
   // 売れている商品の在庫切れを先に出す。売れていない商品の在庫0は廃番のことが多い
   const outs = s.inventory.filter((x) => x.level === "out")
@@ -227,46 +295,34 @@ function buildTodo(s: Omit<CaseSummary, "todo">): Todo[] {
     out.push({
       priority: "high", area: "広告",
       text: `${MALL_JA[c.mall] ?? c.mall}${c.adType ? " " + (TYPE_JA[c.adType] ?? c.adType) : ""}「${c.name}」は広告で赤字。入札・対象キーワードを見直す`,
-      basis: `直近30日 広告費 ${yenS(c.cost)} / ROAS ${c.roas} ＜ 損益分岐 ${be}`,
+      basis: `期間の広告費 ${yenS(c.cost)} / ROAS ${c.roas} ＜ 損益分岐 ${be}`,
     });
 
-  const wastedCost = s.ads.wastedTerms.reduce((t, w) => t + w.cost, 0);
-  if (s.ads.wastedTerms.length && wastedCost >= 1000)
+  if (ac0(s).negatives)
     out.push({
-      priority: wastedCost >= 10000 ? "high" : "mid", area: "広告",
-      text: `売上ゼロの検索語 ${s.ads.wastedTerms.length} 語を除外キーワードの候補として確認する（上位：${s.ads.wastedTerms.slice(0, 3).map((w) => w.term).join("、")}）`,
-      basis: `直近30日で ${yenS(wastedCost)} を消化して売上0`,
-    });
-
-  const kwCost = s.ads.wastedKeywords.reduce((t, w) => t + w.cost, 0);
-  if (s.ads.wastedKeywords.length && kwCost >= 1000)
-    out.push({
-      priority: "mid", area: "広告",
-      text: `楽天RPPで売上ゼロのキーワード ${s.ads.wastedKeywords.length} 件の入札を下げるか外す（上位：${s.ads.wastedKeywords.slice(0, 3).map((w) => w.term).join("、")}）`,
-      basis: `直近30日で ${yenS(kwCost)} を消化して売上0（楽天は30日帰属なので直近分はまだ増える可能性あり）`,
-    });
-
-  const short = s.ads.campaigns.filter((c) => c.budgetCoverage != null && c.budgetCoverage < 80 && !c.belowBreakEven && (c.roas ?? 0) > 0);
-  for (const c of short.slice(0, 3))
-    out.push({
-      priority: "mid", area: "広告",
-      text: `「${c.name}」は1日の途中で予算切れになっている。採算は取れているので予算の引き上げを検討する`,
-      basis: `予算内に収まっていた時間 ${c.budgetCoverage}% / ROAS ${c.roas}${be ? `（損益分岐 ${be}）` : ""}`,
-    });
-
-  if (s.ads.winningTerms.length)
-    out.push({
-      priority: "mid", area: "広告",
-      text: `成果の出ている検索語 ${s.ads.winningTerms.length} 語を完全一致で追加・入札強化の候補にする（上位：${s.ads.winningTerms.slice(0, 3).map((w) => w.term).join("、")}）`,
-      basis: s.ads.winningTerms.slice(0, 3).map((w) => `${w.term} ROAS ${w.roas}・${w.orders}件`).join(" / "),
+      priority: s.advice.impact.wastedCost >= 10000 ? "high" : "mid", area: "広告",
+      text: `除外キーワードの候補が ${s.advice.counts.negatives} 件あります（上位：${s.advice.topNegatives.slice(0, 3).map((w) => w.searchTerm).join("、")}）`,
+      basis: s.advice.impact.wastedCost ? `売上0の検索語に期間内 ${yenS(s.advice.impact.wastedCost)}` : undefined,
     });
 
   if (s.sales.changeRate != null && s.sales.changeRate <= -15)
     out.push({
       priority: "high", area: "売上",
-      text: "直近7日の売上が前の7日より大きく落ちている。在庫・価格・広告の停止・検索順位のどれが原因か確認する",
-      basis: `前週比 ${s.sales.changeRate}%（${yenS(s.sales.prev7.revenue)} → ${yenS(s.sales.last7.revenue)}）`,
+      text: `売上が直前の${s.period.days}日より大きく落ちている。在庫・価格・広告の停止・検索順位のどれが原因か確認する`,
+      basis: `前期間比 ${s.sales.changeRate}%（${yenS(s.sales.prev.revenue)} → ${yenS(s.sales.total.revenue)}）`,
     });
+
+  const ac = s.advice.counts;
+  if (ac.pause + ac.down + ac.up)
+    out.push({
+      priority: ac.pause ? "high" : "mid", area: "広告",
+      text: `入札の見直し候補：停止を検討 ${ac.pause}件・下げる ${ac.down}件・上げる ${ac.up}件（広告タブの「改善提案」に具体的な金額）`,
+      basis: s.advice.impact.bidDownCost ? `下げる・停止の対象に期間内 ${yenS(s.advice.impact.bidDownCost)} を使っている` : undefined,
+    });
+  if (ac.harvest)
+    out.push({ priority: "mid", area: "広告", text: `完全一致で追加する候補の検索語が ${ac.harvest} 件あります（広告タブの「改善提案」）` });
+  if (ac.budgets)
+    out.push({ priority: "mid", area: "広告", text: `予算切れで売上を逃しているキャンペーンが ${ac.budgets} 件あります（広告タブの「改善提案」）` });
 
   for (const r of s.inventory.filter((x) => x.level === "watch").slice(0, 5))
     out.push({ priority: "mid", area: "在庫", text: `${MALL_JA[r.mall] ?? r.mall}「${r.name}」（${r.sku}）の在庫に注意`, basis: r.reason });
@@ -278,72 +334,80 @@ function buildTodo(s: Omit<CaseSummary, "todo">): Todo[] {
 
 const daysBetween = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86400000);
 
-export async function buildCaseSummary(db: D1Database, caseId: string): Promise<CaseSummary | null> {
+export async function buildCaseSummary(
+  db: D1Database, caseId: string,
+  q: { preset?: string | null; from?: string | null; to?: string | null } = {},
+): Promise<CaseSummary | null> {
   const c = await db.prepare("SELECT id, name FROM cases WHERE id = ?").bind(caseId).first<{ id: string; name: string }>();
   if (!c) return null;
 
   const today = jst(0);
-  const y = jst(1);
-  const monthStart = `${y.slice(0, 7)}-01`;
+  const per = await resolvePeriod(db, caseId, q);
+  const { from, to } = per;
+  const days = daysBetween(from, to) + 1;
+  const prevTo = new Date(Date.parse(from) - 86400000).toISOString().slice(0, 10);
+  const prevFrom = new Date(Date.parse(from) - days * 86400000).toISOString().slice(0, 10);
+  const monthStart = `${jst(1).slice(0, 7)}-01`;
 
   const { results: mallRows } = await db
     .prepare("SELECT mall FROM case_malls WHERE case_id = ? AND credentials_enc IS NOT NULL")
     .bind(caseId).all<{ mall: string }>();
   const malls = mallRows.map((m) => m.mall);
 
-  /* 売上の推移 */
+  /* 売上の推移（期間内） */
   const { results: trend } = await db.prepare(
     `SELECT date, SUM(revenue) AS revenue, SUM(units) AS units, SUM(sessions) AS sessions
        FROM daily_sales WHERE case_id = ? AND date BETWEEN ? AND ? GROUP BY date ORDER BY date`
-  ).bind(caseId, jst(30), y).all<{ date: string; revenue: number; units: number; sessions: number | null }>();
+  ).bind(caseId, from, to).all<{ date: string; revenue: number; units: number; sessions: number | null }>();
+  const prevAgg = await db.prepare(
+    `SELECT COALESCE(SUM(revenue), 0) AS revenue, COALESCE(SUM(units), 0) AS units, COUNT(DISTINCT date) AS n
+       FROM daily_sales WHERE case_id = ? AND date BETWEEN ? AND ?`
+  ).bind(caseId, prevFrom, prevTo).first<{ revenue: number; units: number; n: number }>();
+  const revenue = trend.reduce((t, x) => t + n(x.revenue), 0);
+  const units = trend.reduce((t, x) => t + n(x.units), 0);
+  const sessions = trend.reduce((t, x) => t + n(x.sessions), 0);
+  const lastDay = trend.find((t) => t.date === to);
+  const prevRevenue = n(prevAgg?.revenue);
+  // 直前の期間のデータが欠けていると比較がおかしくなるので、8割以上の日が揃っているときだけ出す
+  const prevComplete = n(prevAgg?.n) >= days * 0.8;
 
-  const inRange = (a: string, b: string) => trend.filter((t) => t.date >= a && t.date <= b);
-  const sumOf = (list: typeof trend, k: "revenue" | "units") => list.reduce((s, t) => s + n(t[k]), 0);
-  const last7 = inRange(jst(7), y), prev7 = inRange(jst(14), jst(8));
-  const yd = trend.find((t) => t.date === y);
-  const sessions7 = last7.reduce((s, t) => s + n(t.sessions), 0);
-
-  const [mtd, l30] = await Promise.all([
-    periodSummary(db, caseId, monthStart, y),
-    periodSummary(db, caseId, jst(30), y),
-  ]);
+  const pl = await periodSummary(db, caseId, from, to);
 
   /* 広告 */
-  const [ads7, ads30] = await Promise.all([adTotals(db, caseId, jst(7), y), adTotals(db, caseId, jst(30), y)]);
-  const adCost7 = ads7.reduce((s, a) => s + a.cost, 0);
-  const adCost30 = ads30.reduce((s, a) => s + a.cost, 0);
-  const be = l30.breakEvenRoas;
+  const totals = await adTotals(db, caseId, from, to);
+  const adCost = totals.reduce((t, a) => t + a.cost, 0);
+  const be = pl.breakEvenRoas;
 
   const { results: camp } = await db.prepare(
     `SELECT mall, ad_type, campaign, SUM(cost) AS cost, SUM(sales) AS sales,
             MAX(attribution_days) AS attr, ROUND(AVG(budget_coverage), 1) AS cov
        FROM daily_ads WHERE case_id = ? AND level = 'campaign' AND date BETWEEN ? AND ?
       GROUP BY mall, ad_type, campaign HAVING SUM(cost) > 0 ORDER BY SUM(cost) DESC LIMIT 20`
-  ).bind(caseId, jst(30), y).all<Record<string, string | number | null>>();
+  ).bind(caseId, from, to).all<Record<string, string | number | null>>();
 
   const { results: wasted } = await db.prepare(
     `SELECT mall, ad_type, search_term, SUM(cost) AS cost, SUM(clicks) AS clicks, ROUND(AVG(imp_share), 1) AS share
        FROM daily_search_terms WHERE case_id = ? AND date BETWEEN ? AND ?
       GROUP BY mall, ad_type, search_term HAVING SUM(sales) = 0 AND SUM(cost) > 0
       ORDER BY SUM(cost) DESC LIMIT 10`
-  ).bind(caseId, jst(30), y).all<Record<string, string | number | null>>();
+  ).bind(caseId, from, to).all<Record<string, string | number | null>>();
 
   const { results: winning } = await db.prepare(
     `SELECT mall, ad_type, search_term, SUM(cost) AS cost, SUM(sales) AS sales, SUM(orders) AS orders
        FROM daily_search_terms WHERE case_id = ? AND date BETWEEN ? AND ?
       GROUP BY mall, ad_type, search_term HAVING SUM(cost) >= 500 AND SUM(orders) >= 2
       ORDER BY SUM(sales) * 1.0 / SUM(cost) DESC LIMIT 10`
-  ).bind(caseId, jst(30), y).all<Record<string, string | number | null>>();
+  ).bind(caseId, from, to).all<Record<string, string | number | null>>();
 
   const { results: wastedKw } = await db.prepare(
     `SELECT a.keyword, COALESCE(p.sku, a.external_id) AS product, SUM(a.cost) AS cost, SUM(a.clicks) AS clicks
        FROM daily_ads a LEFT JOIN products p ON p.id = a.product_id
-      WHERE a.case_id = ? AND a.level = 'keyword' AND a.date BETWEEN ? AND ?
+      WHERE a.case_id = ? AND a.mall = 'rakuten' AND a.level = 'keyword' AND a.date BETWEEN ? AND ?
       GROUP BY a.keyword, a.external_id HAVING SUM(a.sales) = 0 AND SUM(a.cost) > 0
       ORDER BY SUM(a.cost) DESC LIMIT 10`
-  ).bind(caseId, jst(30), y).all<Record<string, string | number | null>>();
+  ).bind(caseId, from, to).all<Record<string, string | number | null>>();
 
-  /* 商品別（直近30日） */
+  /* 商品別（期間内） */
   const { results: prod } = await db.prepare(
     `SELECT p.id, p.sku, p.name, SUM(s.units) AS units, SUM(s.revenue) AS revenue,
             SUM(COALESCE(s.fee_actual, s.fee_est, 0)) AS fees,
@@ -356,20 +420,20 @@ export async function buildCaseSummary(db: D1Database, caseId: string): Promise<
        FROM daily_sales s JOIN products p ON p.id = s.product_id
       WHERE s.case_id = ? AND s.date BETWEEN ? AND ?
       GROUP BY p.id ORDER BY SUM(s.revenue) DESC LIMIT 15`
-  ).bind(jst(30), y, caseId, jst(30), y).all<Record<string, string | number | null>>();
+  ).bind(from, to, caseId, from, to).all<Record<string, string | number | null>>();
 
   const products = prod.map((p) => {
-    const revenue = n(p.revenue);
-    const gross = p.unit_cost == null ? null : revenue - n(p.unit_cost) * n(p.units) - n(p.fees);
+    const rev = n(p.revenue);
+    const gross = p.unit_cost == null ? null : rev - n(p.unit_cost) * n(p.units) - n(p.fees);
     return {
-      sku: String(p.sku), name: String(p.name), units: n(p.units), revenue,
-      gross, grossRate: gross == null || !revenue ? null : round1((gross / revenue) * 100),
+      sku: String(p.sku), name: String(p.name), units: n(p.units), revenue: rev,
+      gross, grossRate: gross == null || !rev ? null : round1((gross / rev) * 100),
       adCost: p.ad_cost == null ? null : n(p.ad_cost),
       costManual: n(p.manual) === 1,
     };
   });
 
-  /* 在庫 */
+  /* 在庫（期間に関係なく最新） */
   const inventory = await inventoryStatus(db, caseId);
 
   /* データの鮮度 */
@@ -396,10 +460,14 @@ export async function buildCaseSummary(db: D1Database, caseId: string): Promise<
   const sAmz = await resolveSettings(db, { caseId, mall: "amazon" });
   const sRak = await resolveSettings(db, { caseId, mall: "rakuten" });
   const val = (list: { key: string; effective: number }[], k: string, d: number) =>
-    list.find((s) => s.key === k)?.effective ?? d;
+    list.find((x) => x.key === k)?.effective ?? d;
   const rate = (list: { isFeeRate: boolean; effective: number }[]) =>
-    round1(list.filter((s) => s.isFeeRate).reduce((t, s) => t + s.effective, 0));
-  const rakutenFeeFromDefault = sRak.caseMall.filter((s) => s.isFeeRate).every((s) => s.from === "既定");
+    round1(list.filter((x) => x.isFeeRate).reduce((t, x) => t + x.effective, 0));
+  const rakutenFeeFromDefault = sRak.caseMall.filter((x) => x.isFeeRate).every((x) => x.from === "既定");
+  const targetMargin = val(sAmz.case, "target_margin", 30);
+
+  /* 広告の改善提案 */
+  const adv = await buildAdAdvice(db, caseId, from, to, targetMargin);
 
   /* 気をつけること */
   const warnings: string[] = [];
@@ -408,7 +476,7 @@ export async function buildCaseSummary(db: D1Database, caseId: string): Promise<
        AND (SELECT needs_manual FROM cost_history h WHERE h.product_id = p.id
              ORDER BY h.effective_from DESC LIMIT 1) = 1`
   ).bind(caseId).first<{ c: number }>();
-  if (manual?.c) warnings.push(`原価が未確定（要手計算）の商品が ${manual.c} 件あります。その商品の粗利は計算に入っていません`);
+  if (manual?.c) warnings.push(`原価が未確定（要手計算）の商品が ${manual.c} 件あります。その商品の売上は粗利の計算から外しています`);
 
   const noCost = await db.prepare(
     `SELECT COUNT(*) AS c FROM products p WHERE p.case_id = ? AND p.status = 'active'
@@ -432,25 +500,29 @@ export async function buildCaseSummary(db: D1Database, caseId: string): Promise<
     if (f.latest == null) warnings.push(`${f.label} のデータがまだありません`);
     else if ((f.daysAgo ?? 0) > 3) warnings.push(`${f.label} の最新データが ${f.daysAgo} 日前（${f.latest}）で止まっています`);
   }
+  if (!prevComplete && per.preset !== "all")
+    warnings.push(`比べる直前の期間（${prevFrom}〜${prevTo}）の売上データが${n(prevAgg?.n) ? "一部しか無い" : "無い"}ため、前期間比は出していません`);
 
-  const pl7 = sumOf(last7, "revenue");
   const base: Omit<CaseSummary, "todo"> = {
-    caseId, caseName: c.name, asOf: y,
+    caseId, caseName: c.name,
+    period: { from, to, days, preset: per.preset },
+    prev: { from: prevFrom, to: prevTo },
+    dataRange: await dataRange(db, caseId),
     generatedAt: new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 16).replace("T", " "),
     malls,
     sales: {
-      yesterday: { date: y, revenue: n(yd?.revenue), units: n(yd?.units) },
-      last7: { revenue: pl7, units: sumOf(last7, "units"), sessions: sessions7 || null },
-      prev7: { revenue: sumOf(prev7, "revenue"), units: sumOf(prev7, "units") },
-      changeRate: sumOf(prev7, "revenue") ? round1(((pl7 - sumOf(prev7, "revenue")) / sumOf(prev7, "revenue")) * 100) : null,
+      total: { revenue, units, sessions: sessions || null },
+      prev: { revenue: prevRevenue, units: n(prevAgg?.units) },
+      changeRate: prevComplete && prevRevenue ? round1(((revenue - prevRevenue) / prevRevenue) * 100) : null,
+      perDay: Math.round(revenue / days),
+      last: { date: to, revenue: n(lastDay?.revenue), units: n(lastDay?.units) },
       trend: trend.map((t) => ({ date: t.date, revenue: n(t.revenue), units: n(t.units) })),
     },
-    monthToDate: mtd,
-    last30: l30,
+    pl,
     ads: {
-      last7: ads7, last30: ads30,
-      tacos7: pl7 ? round1((adCost7 / pl7) * 100) : null,
-      profitAfterAds30: l30.revenue ? l30.gross - adCost30 : null,
+      totals,
+      tacos: revenue ? round1((adCost / revenue) * 100) : null,
+      profitAfterAds: pl.revenue ? pl.gross - adCost : null,
       campaigns: camp.map((r) => {
         const cost = n(r.cost), sales = n(r.sales);
         const roas = cost > 0 ? round2(sales / cost) : null;
@@ -468,9 +540,19 @@ export async function buildCaseSummary(db: D1Database, caseId: string): Promise<
       wastedKeywords: wastedKw.map((r) => ({ term: String(r.keyword), product: String(r.product),
         cost: n(r.cost), clicks: n(r.clicks) })),
     },
+    advice: {
+      counts: {
+        up: adv.bids.filter((b) => b.action === "up").length,
+        down: adv.bids.filter((b) => b.action === "down").length,
+        pause: adv.bids.filter((b) => b.action === "pause").length,
+        negatives: adv.negatives.length, harvest: adv.harvest.length, budgets: adv.budgets.length,
+      },
+      impact: adv.impact,
+      topBids: adv.bids.slice(0, 10), topNegatives: adv.negatives.slice(0, 10), topHarvest: adv.harvest.slice(0, 10),
+    },
     products, inventory, freshness, warnings,
     settings: {
-      targetMargin: val(sAmz.case, "target_margin", 30),
+      targetMargin,
       stockAlertDays: val(sAmz.case, "stock_alert_days", 14),
       rakutenFeeRate: malls.includes("rakuten") ? rate(sRak.caseMall) : null,
       amazonFeeRate: malls.includes("amazon") ? rate(sAmz.caseMall) : null,

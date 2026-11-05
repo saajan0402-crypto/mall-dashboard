@@ -21,7 +21,8 @@ import { syncRakutenItems, pumpRakutenItems } from "./rakutenItems";
 import { importAdFile, adCoverage, adSummary, type ImportResult, type SummaryLevel } from "./ingestAds";
 import { SETTINGS, resolveSettings, saveSettings, feeRate, recalcFeeEst, recalcAllFeeEst, type Scope } from "./settings";
 import { parseChargeCsv, saveCharges, listCharges, type ChargeRow } from "./mallCharges";
-import { buildCaseSummary, periodSummary } from "./caseSummary";
+import { buildCaseSummary, periodSummary, dataRange, resolvePeriod } from "./caseSummary";
+import { buildAdAdvice } from "./adAdvice";
 import { renderCaseMarkdown, requestPrompt } from "./caseReport";
 import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./adsApi";
 import { createShareLink, listShareLinks, revokeShareLink, resolveShareToken } from "./shareLinks";
@@ -30,7 +31,7 @@ import { createShareLink, listShareLinks, revokeShareLink, resolveShareToken } f
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.9.3";
+const APP_VERSION = "0.10.0";
 
 export interface Env {
   DB: D1Database;
@@ -200,22 +201,28 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
          LEFT JOIN products p ON p.id = s.product_id
          JOIN cases c ON c.id = s.case_id
         WHERE s.date BETWEEN ? AND ? ${caseId ? "AND s.case_id = ?" : ""}
-        ORDER BY s.date DESC, p.sku`
+        ORDER BY s.date DESC, p.sku
+        LIMIT 2001`
     )
       .bind(...(caseId ? [from, to, caseId] : [from, to]))
       .all();
+    // 明細は長い期間だと数万行になるので2000行で打ち切る。日ごとの合計は別に集計して必ず全部返す
+    const truncated = results.length > 2000;
+    if (truncated) results.length = 2000;
 
     // 日ごとの合計もここで出す。画面側で足し算させない
-    const byDate = new Map<string, { date: string; units: number; revenue: number; sessions: number }>();
-    for (const r of results as Array<Record<string, number | string | null>>) {
-      const d = String(r.date);
-      const agg = byDate.get(d) ?? { date: d, units: 0, revenue: 0, sessions: 0 };
-      agg.units += Number(r.units ?? 0);
-      agg.revenue += Number(r.revenue ?? 0);
-      agg.sessions += Number(r.sessions ?? 0);
-      byDate.set(d, agg);
-    }
-    return json({ from, to, rows: results, daily: [...byDate.values()].sort((a, b) => (a.date < b.date ? 1 : -1)) });
+    const { results: dailyRows } = await env.DB.prepare(
+      `SELECT date, COALESCE(SUM(units), 0) AS units, COALESCE(SUM(revenue), 0) AS revenue, COALESCE(SUM(sessions), 0) AS sessions
+         FROM daily_sales WHERE date BETWEEN ? AND ? ${caseId ? "AND case_id = ?" : ""}
+        GROUP BY date ORDER BY date DESC`
+    ).bind(...(caseId ? [from, to, caseId] : [from, to])).all<{ date: string; units: number; revenue: number; sessions: number }>();
+    const { results: bySku } = await env.DB.prepare(
+      `SELECT COALESCE(p.sku, '（未登録）') AS sku, COALESCE(SUM(s.units), 0) AS units, COALESCE(SUM(s.revenue), 0) AS revenue
+         FROM daily_sales s LEFT JOIN products p ON p.id = s.product_id
+        WHERE s.date BETWEEN ? AND ? ${caseId ? "AND s.case_id = ?" : ""}
+        GROUP BY COALESCE(p.sku, '（未登録）') ORDER BY revenue DESC`
+    ).bind(...(caseId ? [from, to, caseId] : [from, to])).all<{ sku: string; units: number; revenue: number }>();
+    return json({ from, to, rows: results, truncated, daily: dailyRows, bySku });
   }
 
   /* ───────── 過去データの取り込み ───────── */
@@ -323,25 +330,47 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const caseId = u.searchParams.get("case_id");
     const month = u.searchParams.get("month") ?? jstDate(1).slice(0, 7);
     if (!caseId) return json({ error: "案件を指定してください" }, 400);
-    const p = await periodSummary(env.DB, caseId, `${month}-01`, `${month}-31`);
+    const from = u.searchParams.get("from") ?? `${month}-01`;
+    const to = u.searchParams.get("to") ?? `${month}-31`;
+    const p = await periodSummary(env.DB, caseId, from, to);
     return json({ month, caseId, ...p });
   }
 
   /* ───────── ダッシュボード・AI用レポート ───────── */
 
-  if (path === "/api/dashboard") {
+  // 案件のデータがある範囲（「全期間」用）
+  if (path === "/api/range") {
     const caseId = new URL(req.url).searchParams.get("case_id");
+    if (!caseId) return json({ from: null, to: null });
+    return json(await dataRange(env.DB, caseId));
+  }
+
+  // 広告の改善提案
+  if (path === "/api/ads/advice") {
+    const u = new URL(req.url);
+    const caseId = u.searchParams.get("case_id");
     if (!caseId) return json({ error: "案件を指定してください" }, 400);
-    const s = await buildCaseSummary(env.DB, caseId);
+    const per = await resolvePeriod(env.DB, caseId, periodQuery(u));
+    const st = await resolveSettings(env.DB, { caseId, mall: "amazon" });
+    const tm = st.case.find((x) => x.key === "target_margin")?.effective ?? 30;
+    return json({ ...(await buildAdAdvice(env.DB, caseId, per.from, per.to, tm)), targetMargin: tm });
+  }
+
+  if (path === "/api/dashboard") {
+    const u = new URL(req.url);
+    const caseId = u.searchParams.get("case_id");
+    if (!caseId) return json({ error: "案件を指定してください" }, 400);
+    const s = await buildCaseSummary(env.DB, caseId, periodQuery(u));
     if (!s) return json({ error: "案件が見つかりません" }, 404);
     return json(s);
   }
 
   // 画面の「データを直接コピー」用。共有URLを使わずにAIへ渡せる
   if (path === "/api/dashboard/markdown") {
-    const caseId = new URL(req.url).searchParams.get("case_id");
+    const u = new URL(req.url);
+    const caseId = u.searchParams.get("case_id");
     if (!caseId) return json({ error: "案件を指定してください" }, 400);
-    const s = await buildCaseSummary(env.DB, caseId);
+    const s = await buildCaseSummary(env.DB, caseId, periodQuery(u));
     if (!s) return json({ error: "案件が見つかりません" }, 404);
     return new Response(renderCaseMarkdown(s), { headers: { "content-type": "text/markdown; charset=utf-8" } });
   }
@@ -362,10 +391,11 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       return json({ links: await listShareLinks(env, origin, caseId) });
     }
     if (path === "/api/share" && req.method === "POST") {
-      const b = (await req.json()) as { caseId?: string; days?: number; label?: string };
+      const b = (await req.json()) as { caseId?: string; days?: number; label?: string; preset?: string; from?: string; to?: string };
       if (!b.caseId) return json({ error: "案件を指定してください" }, 400);
       try {
-        const link = await createShareLink(env, origin, b.caseId, Number(b.days ?? 7), b.label?.trim() || null, email);
+        const link = await createShareLink(env, origin, b.caseId, Number(b.days ?? 7), b.label?.trim() || null, email,
+          { preset: b.preset, from: b.from, to: b.to });
         const c = await env.DB.prepare("SELECT name FROM cases WHERE id = ?").bind(b.caseId).first<{ name: string }>();
         return json({ ...link, prompt: requestPrompt(c?.name ?? "", link.url, await mallsOf(b.caseId)) });
       } catch (e) {
@@ -650,6 +680,11 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
   return json({ error: "not found", path }, 404);
 }
 
+/** 画面から来る期間の指定（preset か from/to） */
+function periodQuery(u: URL) {
+  return { preset: u.searchParams.get("preset"), from: u.searchParams.get("from"), to: u.searchParams.get("to") };
+}
+
 /** 共有URLの中身。集計済みのレポートだけを返し、それ以外には一切触れさせない */
 async function shareResponse(req: Request, env: Env, url: URL): Promise<Response> {
   const headers = {
@@ -664,7 +699,7 @@ async function shareResponse(req: Request, env: Env, url: URL): Promise<Response
     const link = await resolveShareToken(env.DB, token);
     // 期限切れと存在しないURLは見分けがつかないようにする
     if (!link) return new Response("このURLは無効か、有効期限が切れています。\n", { status: 404, headers: { ...headers, "content-type": "text/plain; charset=utf-8" } });
-    const s = await buildCaseSummary(env.DB, link.caseId);
+    const s = await buildCaseSummary(env.DB, link.caseId, link.range);
     if (!s) return new Response("Not Found\n", { status: 404, headers });
     if (url.pathname.endsWith(".json") || url.searchParams.get("format") === "json") {
       return new Response(JSON.stringify(s, null, 2), { headers: { ...headers, "content-type": "application/json; charset=utf-8" } });

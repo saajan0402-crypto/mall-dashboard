@@ -100,6 +100,18 @@
   .case-pick label{font-size:12px;color:var(--muted)}
   .case-pick select{font:inherit;font-size:13.5px;font-weight:700;padding:6px 30px 6px 12px;min-width:180px;
     border:1px solid var(--accent);border-radius:5px;background:var(--accent-soft);color:var(--accent);cursor:pointer}
+  .picks{display:grid;gap:6px;justify-items:end}
+  .range-pick{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+  .range-pick label{font-size:12px;color:var(--muted)}
+  .range-pick select,.range-pick input{font:inherit;font-size:12.5px;padding:4px 8px;border:1px solid var(--line-strong);
+    border-radius:5px;background:var(--surface-2);color:var(--ink)}
+  .range-pick button{font:inherit;font-size:12.5px;padding:4px 10px;border:1px solid var(--line-strong);border-radius:5px;
+    background:var(--surface-2);color:var(--ink);cursor:pointer}
+  .range-pick button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff}
+  @media (prefers-color-scheme:dark){ .range-pick button[aria-pressed=true]{color:#0F1514} }
+  .range-pick .span{font-size:12px;color:var(--muted);font-family:var(--mono)}
+  .range-pick.dim{opacity:.45}
+  @media (max-width:640px){ .picks{justify-items:start;width:100%} .range-pick{justify-content:flex-start} }
   nav{overflow-x:auto}
   nav button{white-space:nowrap}
   /* ダッシュボード */
@@ -126,8 +138,27 @@
 <body>
 <header>
   <div class="bar">
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.9.3</span></div>
-    <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.10.0</span></div>
+    <div class="picks">
+      <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
+      <div class="range-pick" id="range-pick" title="">
+        <label for="g-preset">期間</label>
+        <select id="g-preset" aria-label="期間">
+          <option value="yesterday">昨日</option>
+          <option value="last7">直近7日</option>
+          <option value="last14">直近14日</option>
+          <option value="last30" selected>直近30日</option>
+          <option value="last90">直近90日</option>
+          <option value="this_month">今月</option>
+          <option value="last_month">先月</option>
+          <option value="all">全期間</option>
+          <option value="custom">期間を指定</option>
+        </select>
+        <input type="date" id="g-from" aria-label="開始日"><span class="span">〜</span><input type="date" id="g-to" aria-label="終了日">
+        <button type="button" id="g-all" aria-pressed="false" title="この案件のデータがある範囲をすべて表示">全期間</button>
+        <span class="span" id="g-span"></span>
+      </div>
+    </div>
     <div class="who" id="who"></div>
   </div>
   <nav role="tablist">
@@ -156,11 +187,11 @@
     </div>
     <div class="chart">
       <h3>日別の売上</h3>
-      <p class="sub" id="dash-trend-sub">直近30日・両モール合計</p>
+      <p class="sub" id="dash-trend-sub"></p>
       <div id="dash-trend"></div>
     </div>
     <div class="grid2">
-      <div><h2>今月の損益<span class="hint">広告費を引く前</span></h2><div id="dash-pl"></div></div>
+      <div><h2>期間の損益<span class="hint">広告費を引く前</span></h2><div id="dash-pl"></div></div>
       <div><h2>データの鮮度</h2><div class="card" id="dash-fresh"></div></div>
     </div>
     <div>
@@ -168,7 +199,7 @@
       <div id="dash-ads"></div>
     </div>
     <div>
-      <h2>キャンペーン別<span class="hint">直近30日・広告費の多い順</span></h2>
+      <h2>キャンペーン別<span class="hint">期間内・広告費の多い順</span></h2>
       <div class="tablewrap"><table>
         <thead><tr><th>モール</th><th>種類</th><th>キャンペーン</th><th class="r">広告費</th><th class="r">広告経由売上</th>
           <th class="r">ROAS</th><th>採算</th><th class="r">予算内の時間</th></tr></thead>
@@ -189,7 +220,7 @@
       </div>
     </div>
     <div>
-      <h2>商品別<span class="hint">直近30日・売上の多い順</span></h2>
+      <h2>商品別<span class="hint">期間内・売上の多い順</span></h2>
       <div class="tablewrap"><table>
         <thead><tr><th>SKU</th><th>商品名</th><th class="r">販売数</th><th class="r">売上</th>
           <th class="r">粗利（広告費前）</th><th class="r">粗利率</th><th class="r">広告費</th></tr></thead>
@@ -202,7 +233,7 @@
         <p class="note" style="margin-bottom:12px">このダッシュボードの内容を、AIが読める文章（表つき）にして渡します。
           渡し方は2通りあります。<strong>どちらも金額はこのツールが確定させた値</strong>なので、AIに計算をやり直させずに済みます。</p>
 
-        <h3 style="font-size:13px;margin:0 0 6px">① 共有URLを貼る<span class="note" style="font-weight:400;margin-left:8px">開くたびに最新の数字で作り直されます</span></h3>
+        <h3 style="font-size:13px;margin:0 0 6px">① 共有URLを貼る<span class="note" style="font-weight:400;margin-left:8px">開くたびに最新の数字で作り直されます。期間はいまヘッダーで選んでいるもの（「直近30日」などは開いた日から数え直します）</span></h3>
         <div class="btns" style="margin-top:0">
           <select id="share-days" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
             border-radius:5px;background:var(--surface-2);color:var(--ink)">
@@ -316,12 +347,8 @@
       </div>
     </div>
     <div>
-      <h2>月次のまとめ<span class="hint">両モール／Amazonは実額、楽天は料率からの概算</span></h2>
+      <h2>期間のまとめ<span class="hint" id="sum-period"></span></h2>
       <div class="card">
-        <div class="btns" style="margin-top:0;margin-bottom:12px">
-          <input type="month" id="sum-month" style="font:inherit;font-size:13px;padding:7px 10px;
-            border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink)">
-        </div>
         <div id="summary"></div>
       </div>
     </div>
@@ -386,12 +413,15 @@
             <option value="rakuten">楽天</option>
             <option value="amazon">Amazon</option>
           </select>
+          <label class="note" for="sum-month">対象月</label>
+          <input type="month" id="sum-month" style="font:inherit;font-size:13px;padding:7px 10px;
+            border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink)">
           <input type="file" id="ch-file" accept=".csv,.tsv,text/csv" style="font:inherit;font-size:13px;color:var(--ink-2)">
           <button class="act primary" id="btn-ch-import">取り込む</button>
           <button class="act" id="btn-ch-manual">手で入力する</button>
           <span class="note" id="ch-msg"></span>
         </div>
-        <p class="note" style="margin-top:10px">上の「月次のまとめ」で選んだ月が対象です。
+        <p class="note" style="margin-top:10px">請求明細は月単位なので、ここだけは「対象月」で選びます（ヘッダーの期間とは別）。
           RMS の請求明細を入れると、<strong>その月の手数料が概算から実額に変わります</strong>。</p>
         <p class="note" style="margin-top:6px"><strong>請求明細は店舗単位で、商品ごとの内訳はありません。</strong>
           店舗の合計は実額になりますが、商品別の手数料は<strong>売上で按分した値</strong>になります。
@@ -410,7 +440,7 @@
       </div>
     </div>
     <div>
-      <h2>商品別の明細<span class="hint">新しい順</span></h2>
+      <h2>商品別の明細<span class="hint" id="sales-rows-hint">新しい順</span></h2>
       <div class="tablewrap">
         <table>
           <thead><tr><th>日付</th><th>モール</th><th>SKU</th><th>商品名</th><th class="r">販売数</th><th class="r">売上</th>
@@ -428,7 +458,7 @@
   <!-- 在庫 -->
   <section id="p-stock" class="hidden">
     <div>
-      <h2>FBA在庫<span class="hint" id="stock-asof"></span></h2>
+      <h2>FBA在庫<span class="hint" id="stock-asof"></span><span class="hint">在庫はヘッダーの期間に関係なく最新の状態です</span></h2>
       <div class="card" style="margin-bottom:16px">
         <div class="btns" style="margin-top:0">
           <select id="stock-case" class="hidden" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);
@@ -467,6 +497,31 @@
 
   <!-- 広告 -->
   <section id="p-ads" class="hidden">
+    <div>
+      <h2>改善提案<span class="hint" id="adv-period"></span></h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0">
+          <span class="seg" id="adv-tabs">
+            <button data-adv="bids" aria-pressed="true">入札の見直し</button>
+            <button data-adv="negatives" aria-pressed="false">除外キーワード</button>
+            <button data-adv="harvest" aria-pressed="false">追加キーワード</button>
+            <button data-adv="budgets" aria-pressed="false">予算</button>
+          </span>
+          <button class="act" id="btn-adv-csv">この表をCSVで書き出す</button>
+          <span class="note" id="adv-msg"></span>
+        </div>
+        <div id="adv-summary" style="margin-top:12px"></div>
+        <div id="adv-table" style="margin-top:10px"></div>
+        <details style="margin-top:10px">
+          <summary style="cursor:pointer;font-size:12.5px;color:var(--accent)">提案の前提（目標ROASの決め方など）</summary>
+          <div id="adv-assume" style="margin-top:8px"></div>
+        </details>
+        <p class="note" style="margin-top:8px">提案はヘッダーで選んだ期間の実績から出しています。<strong>14〜30日</strong>くらいが目安です。
+          短すぎるとクリックが足りず判断できず、長すぎると古い状況に引っ張られます。
+          入札の変更はこのツールからは行いません。表を見ながら、またはCSVを書き出して担当者が手で反映してください。</p>
+      </div>
+    </div>
+
     <div>
       <h2>Amazon広告の自動取り込み<span class="hint">Ads API／毎朝6時に直近14日を取り直す</span></h2>
       <div class="card">
@@ -681,7 +736,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.9.3";
+  const UI_VERSION = "0.10.0";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
@@ -698,6 +753,7 @@
   }));
 
   function loadPanel(p) {
+    markRangeTab(p);
     if (p === "p-dash") return loadDashboard();
     if (p === "p-master") return loadProducts();
     if (p === "p-status") return loadStatus();
@@ -708,6 +764,66 @@
     if (p === "p-conn") return loadConnections();
   }
   const activePanel = () => (tabs.find(([t]) => $(t).getAttribute("aria-selected") === "true") || tabs[0])[1];
+
+  /* ---------- 期間の選択（ヘッダー） ---------- */
+  // 期間は案件をまたいで共通。「全期間」だけは案件ごとにデータがある範囲を聞いて決める
+  const jstDay = (n) => new Date(Date.now() + 9 * 3600 * 1000 - n * 86400000).toISOString().slice(0, 10);
+  const RANGE_TABS = ["p-dash", "p-sales", "p-ads"];
+  let range = { preset: "last30", from: jstDay(30), to: jstDay(1) };
+  function presetDates(p) {
+    const y = jstDay(1);
+    if (p === "yesterday") return [y, y];
+    if (p === "last7") return [jstDay(7), y];
+    if (p === "last14") return [jstDay(14), y];
+    if (p === "last90") return [jstDay(90), y];
+    if (p === "this_month") return [y.slice(0, 7) + "-01", y];
+    if (p === "last_month") {
+      const end = new Date(Date.parse(y.slice(0, 7) + "-01T00:00:00Z") - 86400000).toISOString().slice(0, 10);
+      return [end.slice(0, 7) + "-01", end];
+    }
+    return [jstDay(30), y];
+  }
+  async function resolveRange() {
+    if (range.preset === "all") {
+      const r = currentCase ? await get(`/api/range?case_id=${encodeURIComponent(currentCase)}`) : {};
+      range.from = r.from || jstDay(30); range.to = r.to || jstDay(1);
+    } else if (range.preset !== "custom") {
+      [range.from, range.to] = presetDates(range.preset);
+    }
+    renderRange();
+  }
+  function renderRange() {
+    $("g-preset").value = range.preset;
+    $("g-from").value = range.from; $("g-to").value = range.to;
+    $("g-all").setAttribute("aria-pressed", range.preset === "all" ? "true" : "false");
+    const days = Math.round((Date.parse(range.to) - Date.parse(range.from)) / 86400000) + 1;
+    $("g-span").textContent = `${days}日間`;
+    try { localStorage.setItem("mall.range", JSON.stringify(range)); } catch (e) { /* 保存できなくても動く */ }
+  }
+  /** API に付ける期間の指定 */
+  const rangeQS = () => `preset=${encodeURIComponent(range.preset)}&from=${range.from}&to=${range.to}`;
+  const rangeLabel = () => `${range.from} 〜 ${range.to}`;
+  function markRangeTab(p) {
+    const on = RANGE_TABS.includes(p);
+    $("range-pick").classList.toggle("dim", !on);
+    $("range-pick").title = on ? "" : "このタブの表示は期間に関係ありません";
+  }
+  async function changeRange(next) {
+    range = { ...range, ...next };
+    await resolveRange();
+    loadPanel(activePanel());
+  }
+  $("g-preset").addEventListener("change", () => changeRange({ preset: $("g-preset").value }));
+  $("g-all").addEventListener("click", () => changeRange({ preset: "all" }));
+  ["g-from", "g-to"].forEach((id) => $(id).addEventListener("change", () => {
+    const f = $("g-from").value, t = $("g-to").value;
+    if (!f || !t) return;
+    changeRange({ preset: "custom", from: f < t ? f : t, to: f < t ? t : f });
+  }));
+  try {
+    const saved = JSON.parse(localStorage.getItem("mall.range") || "null");
+    if (saved && saved.preset) range = saved;
+  } catch (e) { /* 既定の直近30日 */ }
 
   /* ---------- 案件の選択（ヘッダー） ---------- */
   // 各タブの中にあった案件の選択欄は残してあり（非表示）、ヘッダーの選択をそこへ写す。
@@ -735,7 +851,8 @@
     currentCase = $("g-case").value;
     try { localStorage.setItem("mall.case", currentCase); } catch (e) { /* 保存できなくても動く */ }
     applyCase();
-    loadPanel(activePanel());
+    // 全期間は案件ごとに範囲が違うので取り直す
+    (range.preset === "all" ? resolveRange() : Promise.resolve()).then(() => loadPanel(activePanel()));
   });
 
   async function get(path) { const r = await fetch(path); return r.json(); }
@@ -1235,7 +1352,8 @@
       applyCase();
     }
     const caseId = $("sales-case").value;
-    const d = await get("/api/sales" + (caseId ? `?case_id=${encodeURIComponent(caseId)}` : ""));
+    const d = await get(`/api/sales?from=${range.from}&to=${range.to}` + (caseId ? `&case_id=${encodeURIComponent(caseId)}` : ""));
+    $("sales-rows-hint").textContent = d.truncated ? "新しい順・期間が長いため最新2000行まで（日別の合計とグラフは全期間ぶん）" : "新しい順";
 
     $("sales-daily").innerHTML = (d.daily || []).map((x) => {
       const cvr = x.sessions ? ((x.units / x.sessions) * 100).toFixed(1) + "%" : "—";
@@ -1266,38 +1384,63 @@
   }
 
   /** 表と同じデータからグラフを描く */
+  /**
+   * 長い期間は棒が細くなりすぎるので、週ごと（92日超）・月ごと（400日超）にまとめる。
+   * list は古い順・{date, ...数値}。返り値は {label, key, ...合計, days}
+   */
+  function bucketize(list, fields) {
+    if (!list.length) return { unit: "day", rows: [] };
+    const span = (Date.parse(list[list.length - 1].date) - Date.parse(list[0].date)) / 86400000 + 1;
+    const unit = span > 400 ? "month" : span > 92 ? "week" : "day";
+    const map = new Map();
+    for (const x of list) {
+      let key = x.date;
+      if (unit === "month") key = x.date.slice(0, 7);
+      if (unit === "week") {
+        const d = new Date(x.date + "T00:00:00Z");
+        d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+        key = d.toISOString().slice(0, 10);
+      }
+      const b = map.get(key) || { key, days: 0 };
+      fields.forEach((f) => { b[f] = (b[f] || 0) + Number(x[f] || 0); });
+      b.days++;
+      map.set(key, b);
+    }
+    const rows = [...map.values()].map((b) => ({
+      ...b,
+      label: unit === "month" ? b.key.slice(2).replace("-", "/") : b.key.slice(5).replace("-", "/"),
+      title: unit === "month" ? `${b.key}（月）` : unit === "week" ? `${b.key} の週` : b.key
+    }));
+    return { unit, rows };
+  }
+  const UNIT_JA = { day: "日別", week: "週別（月曜始まり）", month: "月別" };
+
   function drawSalesCharts(d) {
-    const md = (s) => String(s).slice(5).replace("-", "/");     // 2026-10-31 → 10/31
     const daily = (d.daily || []).slice().reverse();            // 古い順に並べ直す
 
     $("chart-rev-sub").textContent = daily.length
       ? `${daily[0].date} 〜 ${daily[daily.length - 1].date}　合計 ${yen(daily.reduce((n, x) => n + x.revenue, 0))}`
       : "";
 
-    columnChart($("chart-rev"), daily.map((x) => ({
-      label: md(x.date), value: x.revenue,
-      tip: `<div><strong>${esc(x.date)}</strong></div>
+    const bk = bucketize(daily, ["revenue", "units", "sessions"]);
+    $("chart-rev-sub").textContent += daily.length ? `　${UNIT_JA[bk.unit]}` : "";
+    columnChart($("chart-rev"), bk.rows.map((x) => ({
+      label: x.label, value: x.revenue,
+      tip: `<div><strong>${esc(x.title)}</strong></div>
             <div><span class="k">売上</span><span class="v">${yen(x.revenue)}</span></div>
             <div><span class="k">販売数</span><span class="v">${x.units}</span></div>`
     })), yen);
 
-    lineChart($("chart-sess"), daily.map((x) => ({
-      label: md(x.date), value: x.sessions || 0,
-      tip: `<div><strong>${esc(x.date)}</strong></div>
+    lineChart($("chart-sess"), bk.rows.map((x) => ({
+      label: x.label, value: x.sessions || 0,
+      tip: `<div><strong>${esc(x.title)}</strong></div>
             <div><span class="k">セッション</span><span class="v">${x.sessions || 0}</span></div>
             <div><span class="k">CVR</span><span class="v">${
               x.sessions ? ((x.units / x.sessions) * 100).toFixed(1) + "%" : "—"}</span></div>`
     })), (v) => v.toLocaleString("ja-JP"));
 
     // 商品別は期間の合計。多すぎるときは上位8件＋その他にまとめる
-    const bySku = new Map();
-    for (const r of d.rows || []) {
-      const key = r.sku || "（未登録）";
-      const a = bySku.get(key) || { label: key, value: 0, units: 0 };
-      a.value += r.revenue; a.units += r.units;
-      bySku.set(key, a);
-    }
-    let list = [...bySku.values()].sort((a, b) => b.value - a.value);
+    let list = (d.bySku || []).map((x) => ({ label: x.sku, value: x.revenue, units: x.units }));
     if (list.length > 8) {
       const rest = list.slice(8);
       list = list.slice(0, 8).concat([{
@@ -1417,10 +1560,11 @@
   async function loadSummary() {
     const caseId = $("sales-case").value;
     if (!caseId) {
-      $("summary").innerHTML = `<p class="note">案件を選ぶと月次のまとめが出ます。</p>`;
+      $("summary").innerHTML = `<p class="note">案件を選ぶと期間のまとめが出ます。</p>`;
       return;
     }
-    const d = await get(`/api/summary?case_id=${encodeURIComponent(caseId)}&month=${$("sum-month").value}`);
+    $("sum-period").textContent = `${rangeLabel()}／Amazonは実額、楽天は料率からの概算`;
+    const d = await get(`/api/summary?case_id=${encodeURIComponent(caseId)}&from=${range.from}&to=${range.to}`);
     if (d.error) { $("summary").innerHTML = `<p class="note">${esc(d.error)}</p>`; return; }
 
     const MALL_JA = { amazon: "Amazon", rakuten: "楽天" };
@@ -1762,7 +1906,7 @@
       adsCasesLoaded = true;
       applyCase();
     }
-    await Promise.all([loadCoverage(), loadAdsApi()]);
+    await Promise.all([loadCoverage(), loadAdsApi(), loadAdvice()]);
     await loadAdRows();
   }
 
@@ -1866,7 +2010,7 @@
   async function loadAdRows() {
     const caseId = $("ads-case").value;
     if (!caseId) return;
-    const d = await get(`/api/ads?case_id=${encodeURIComponent(caseId)}&level=${adsLevel}`);
+    const d = await get(`/api/ads?case_id=${encodeURIComponent(caseId)}&level=${adsLevel}&from=${range.from}&to=${range.to}`);
     $("ads-period").textContent = `${d.from} 〜 ${d.to}`;
     const cfg = ADS_COLS[adsLevel] || ADS_COLS.product;
 
@@ -2077,23 +2221,24 @@
       return;
     }
     $("dash-asof").textContent = "読み込み中…";
-    const s = await get(`/api/dashboard?case_id=${encodeURIComponent(currentCase)}`);
+    const s = await get(`/api/dashboard?case_id=${encodeURIComponent(currentCase)}&${rangeQS()}`);
     if (s.error) { $("dash-asof").textContent = s.error; return; }
-    $("dash-asof").textContent = `${s.asOf} まで／作成 ${s.generatedAt}`;
+    const P = s.period;
+    $("dash-asof").textContent = `${P.from} 〜 ${P.to}（${P.days}日間）／比較：直前の${P.days}日（${s.prev.from} 〜 ${s.prev.to}）`;
 
-    const sl = s.sales, m = s.monthToDate, l30 = s.last30;
-    const ad30 = s.ads.last30.reduce((t, a) => t + a.cost, 0);
-    const adSales30 = s.ads.last30.reduce((t, a) => t + a.sales, 0);
-    const chg = sl.changeRate == null ? "前週比 —"
-      : `前週比 <span class="${sl.changeRate >= 0 ? "up" : "down"}">${sl.changeRate >= 0 ? "+" : ""}${sl.changeRate}%</span>`;
+    const sl = s.sales, pl = s.pl;
+    const adCost = s.ads.totals.reduce((t, a) => t + a.cost, 0);
+    const adSales = s.ads.totals.reduce((t, a) => t + a.sales, 0);
+    const chg = sl.changeRate == null ? "前期間比 —"
+      : `前期間比 <span class="${sl.changeRate >= 0 ? "up" : "down"}">${sl.changeRate >= 0 ? "+" : ""}${sl.changeRate}%</span>`;
     $("dash-kpis").innerHTML = [
-      kpi("昨日の売上", yen(sl.yesterday.revenue), `${sl.yesterday.units}個`),
-      kpi("直近7日の売上", yen(sl.last7.revenue), chg),
-      kpi("今月の粗利", yen(m.gross), `広告費前・粗利率 ${pctS(m.grossRate)}`),
-      kpi("直近30日の広告費", s.ads.last30.length ? yen(ad30) : "—",
-        s.ads.last30.length ? `ROAS ${ad30 ? Math.round(adSales30 / ad30 * 100) / 100 : "—"}／損益分岐 ${l30.breakEvenRoas ?? "—"}` : "広告データ未取り込み"),
-      kpi("TACoS（直近7日）", pctS(s.ads.tacos7), "広告費 ÷ 総売上"),
-      kpi("広告費を引いた利益", yen(s.ads.profitAfterAds30), "直近30日"),
+      kpi("期間の売上", yen(sl.total.revenue), chg),
+      kpi("1日あたりの売上", yen(sl.perDay), `${sl.total.units.toLocaleString("ja-JP")}個`),
+      kpi("期間の粗利", yen(pl.gross), `広告費前・粗利率 ${pctS(pl.grossRate)}`),
+      kpi("期間の広告費", s.ads.totals.length ? yen(adCost) : "—",
+        s.ads.totals.length ? `ROAS ${adCost ? Math.round(adSales / adCost * 100) / 100 : "—"}／損益分岐 ${pl.breakEvenRoas ?? "—"}` : "広告データなし"),
+      kpi("TACoS", pctS(s.ads.tacos), "広告費 ÷ 総売上"),
+      kpi("広告費を引いた利益", yen(s.ads.profitAfterAds), "粗利 − 広告費"),
     ].join("");
 
     $("dash-todo").innerHTML = (s.todo || []).map((t) => `<div class="t">
@@ -2103,47 +2248,49 @@
         ${t.basis ? `<span class="b">${esc(t.basis)}</span>` : ""}</div>`).join("")
       || `<p class="note">いま対応が必要なものは見つかりませんでした。</p>`;
 
-    // 30日ぶんの枠を作り、データの無い日は空けておく（0円とは区別する）
-    const md = (x) => String(x).slice(5).replace("-", "/");
+    // 期間の枠を作り、データの無い日は空けておく（0円とは区別する）。長い期間は週・月にまとめる
     const byDate = new Map(sl.trend.map((t) => [t.date, t]));
     const days = [];
-    for (let i = 30; i >= 1; i--) {
-      const d = new Date(Date.now() + 9 * 3600 * 1000 - i * 86400000).toISOString().slice(0, 10);
-      const t = byDate.get(d);
-      days.push({
-        label: md(d), value: t ? t.revenue : 0,
-        tip: t ? `<div><strong>${esc(d)}</strong></div><div><span class="k">売上</span><span class="v">${yen(t.revenue)}</span></div>
-                  <div><span class="k">販売数</span><span class="v">${t.units}</span></div>`
-               : `<div><strong>${esc(d)}</strong></div><div class="k">データなし</div>`
-      });
+    for (let t = Date.parse(P.from); t <= Date.parse(P.to); t += 86400000) {
+      const d = new Date(t).toISOString().slice(0, 10);
+      const x = byDate.get(d);
+      days.push({ date: d, revenue: x ? x.revenue : 0, units: x ? x.units : 0, has: x ? 1 : 0 });
     }
-    $("dash-trend-sub").textContent = `直近30日・${s.malls.map((x) => MALL_JA[x] || x).join("＋") || "全モール"}の合計　${yen(l30.revenue)}`;
-    columnChart($("dash-trend"), days, yen);
+    const bk = bucketize(days, ["revenue", "units", "has"]);
+    $("dash-trend-sub").textContent = `${UNIT_JA[bk.unit]}・${s.malls.map((x) => MALL_JA[x] || x).join("＋") || "全モール"}の合計　${yen(sl.total.revenue)}`;
+    columnChart($("dash-trend"), bk.rows.map((x) => ({
+      label: x.label, value: x.revenue,
+      tip: x.has ? `<div><strong>${esc(x.title)}</strong></div><div><span class="k">売上</span><span class="v">${yen(x.revenue)}</span></div>
+                <div><span class="k">販売数</span><span class="v">${x.units}</span></div>`
+             : `<div><strong>${esc(x.title)}</strong></div><div class="k">データなし</div>`
+    })), yen);
 
-    const plRows = m.byMall.map((x) => `<tr><td>${mallTag(x.mall)}</td><td class="r">${yen(x.revenue)}</td>
+    const plRows = pl.byMall.map((x) => `<tr><td>${mallTag(x.mall)}</td><td class="r">${yen(x.revenue)}</td>
       <td class="r">${yen(x.cost)}</td><td class="r">${yen(x.fees)}${x.feesEst > 0 ? `<span class="tag wait" style="margin-left:5px">概算</span>` : ""}</td>
       <td class="r">${yen(x.gross)}</td><td class="r">${x.revenue - x.revenueWithoutCost > 0 ? (Math.round(x.gross / (x.revenue - x.revenueWithoutCost) * 1000) / 10) + "%" : "—"}</td></tr>`).join("");
     $("dash-pl").innerHTML = `<div class="tablewrap"><table style="min-width:440px">
       <thead><tr><th>モール</th><th class="r">売上</th><th class="r">原価</th><th class="r">手数料</th><th class="r">粗利</th><th class="r">粗利率</th></tr></thead>
-      <tbody>${plRows || emptyRow(6, "今月の売上はまだありません。")}
-      ${m.byMall.length > 1 ? `<tr><td><strong>合計</strong></td><td class="r">${yen(m.revenue)}</td><td class="r">${yen(m.cost)}</td>
-        <td class="r">${yen(m.fees)}</td><td class="r"><strong>${yen(m.gross)}</strong></td><td class="r">${pctS(m.grossRate)}</td></tr>` : ""}
+      <tbody>${plRows || emptyRow(6, "この期間の売上はありません。")}
+      ${pl.byMall.length > 1 ? `<tr><td><strong>合計</strong></td><td class="r">${yen(pl.revenue)}</td><td class="r">${yen(pl.cost)}</td>
+        <td class="r">${yen(pl.fees)}</td><td class="r"><strong>${yen(pl.gross)}</strong></td><td class="r">${pctS(pl.grossRate)}</td></tr>` : ""}
       </tbody></table></div>
-      ${m.revenueWithoutCost ? `<p class="note" style="margin-top:6px">原価が分からない商品の売上 ${yen(m.revenueWithoutCost)} は、粗利と粗利率から除いています。</p>` : ""}
-      <p class="note" style="margin-top:6px">損益分岐ROAS（直近30日）：<strong>${l30.breakEvenRoas ?? "—"}</strong>　ROASがこれを下回る広告は、売れるほど赤字です。</p>`;
+      ${pl.revenueWithoutCost ? `<p class="note" style="margin-top:6px">原価が分からない商品の売上 ${yen(pl.revenueWithoutCost)} は、粗利と粗利率から除いています。</p>` : ""}
+      <p class="note" style="margin-top:6px">損益分岐ROAS：<strong>${pl.breakEvenRoas ?? "—"}</strong>　ROASがこれを下回る広告は、売れるほど赤字です。</p>`;
 
     $("dash-fresh").innerHTML = (s.freshness || []).map((f) => `<div class="row"><span>${esc(f.label)}</span>
       <span class="v">${f.latest ? `${esc(f.latest)} <span class="tag ${f.daysAgo > 3 ? "ng" : f.daysAgo > 1 ? "warn" : "ok"}">${f.daysAgo}日前</span>`
-        : `<span class="tag wait">未取り込み</span>`}</span></div>`).join("") || `<p class="note">接続済みのモールがありません。</p>`;
+        : `<span class="tag wait">未取り込み</span>`}</span></div>`).join("")
+      + (s.dataRange && s.dataRange.from ? `<p class="note" style="margin-top:8px">データがある範囲：${esc(s.dataRange.from)} 〜 ${esc(s.dataRange.to)}</p>` : "")
+      || `<p class="note">接続済みのモールがありません。</p>`;
 
     $("dash-ads-hint").textContent = "帰属期間がモールで違うので、ROASはモールをまたいで比べない";
-    const adRow = (a, span) => `<tr><td>${span}</td><td>${mallTag(a.mall)}</td><td class="r">${yen(a.cost)}</td><td class="r">${yen(a.sales)}</td>
-      <td class="r">${a.roas ?? "—"}</td><td class="r">${a.clicks.toLocaleString("ja-JP")}</td><td class="r">${a.orders.toLocaleString("ja-JP")}</td><td>${esc(a.attribution) || "—"}</td></tr>`;
     $("dash-ads").innerHTML = `<div class="tablewrap"><table>
-      <thead><tr><th>期間</th><th>モール</th><th class="r">広告費</th><th class="r">広告経由売上</th><th class="r">ROAS</th>
+      <thead><tr><th>モール</th><th>集計した粒度</th><th class="r">広告費</th><th class="r">広告経由売上</th><th class="r">ROAS</th>
         <th class="r">クリック</th><th class="r">注文</th><th>帰属期間</th></tr></thead>
-      <tbody>${[...s.ads.last7.map((a) => adRow(a, "直近7日")), ...s.ads.last30.map((a) => adRow(a, "直近30日"))].join("")
-        || emptyRow(8, "広告レポートがまだ取り込まれていません（広告タブから）。")}</tbody></table></div>`;
+      <tbody>${s.ads.totals.map((a) => `<tr><td>${mallTag(a.mall)}</td><td>${esc({ campaign: "キャンペーン別", product: "商品別", keyword: "キーワード別" }[a.level] || a.level)}</td>
+        <td class="r">${yen(a.cost)}</td><td class="r">${yen(a.sales)}</td><td class="r">${a.roas ?? "—"}</td>
+        <td class="r">${a.clicks.toLocaleString("ja-JP")}</td><td class="r">${a.orders.toLocaleString("ja-JP")}</td><td>${esc(a.attribution) || "—"}</td></tr>`).join("")
+        || emptyRow(8, "この期間の広告データがありません。")}</tbody></table></div>`;
 
     $("dash-camp").innerHTML = s.ads.campaigns.slice(0, 12).map((c) => `<tr><td>${mallTag(c.mall)}</td>
       <td>${esc(ADTYPE_JA[c.adType] || c.adType || "—")}</td><td>${esc(c.name)}</td>
@@ -2159,10 +2306,117 @@
     $("dash-products").innerHTML = s.products.map((p) => `<tr><td>${esc(p.sku)}</td><td>${esc(p.name)}</td>
       <td class="r">${p.units}</td><td class="r">${yen(p.revenue)}</td>
       <td class="r">${p.costManual ? `<span class="tag warn">要手計算</span>` : yen(p.gross)}</td>
-      <td class="r">${p.costManual ? "—" : pctS(p.grossRate)}</td><td class="r">${yen(p.adCost)}</td></tr>`).join("") || emptyRow(7, "直近30日の売上がありません。");
+      <td class="r">${p.costManual ? "—" : pctS(p.grossRate)}</td><td class="r">${yen(p.adCost)}</td></tr>`).join("") || emptyRow(7, "この期間の売上がありません。");
 
     loadShares();
   }
+
+  /* ---------- 広告の改善提案 ---------- */
+  let advData = null, advTab = "bids";
+  const ACT = { up: ["ok", "上げる"], down: ["warn", "下げる"], pause: ["ng", "停止を検討"] };
+  const POLICY_JA = { profit: "利益重視", share: "シェア獲得", nurture: "育成中" };
+  const ADV_COLS = {
+    bids: {
+      head: ["操作", "キーワード・ターゲット", "入札（今 → 提案）", "ROAS／目標", "クリック", "広告費", "注文", "キャンペーン／広告グループ", "商品", "理由"],
+      row: (b) => [`<span class="tag ${ACT[b.action][0]}">${ACT[b.action][1]}</span>`,
+        `<strong>${esc(b.keyword)}</strong>${b.matchType ? `<div class="note">${esc(b.matchType)}</div>` : ""}`,
+        `${yen(b.currentBid ?? b.cpc)} → <strong>${yen(b.suggestedBid)}</strong>
+          <div class="note">${b.basis === "入札" ? "今の入札から" : "平均CPCから"}${b.suggestedCpc ? `・目安CPC ${yen(b.suggestedCpc)}` : ""}</div>`,
+        `${b.roas ?? "—"} ／ ${b.target.roas}<div class="note">${esc(POLICY_JA[b.target.policy])}</div>`,
+        b.clicks, yen(b.cost), b.orders,
+        `${mallTag(b.mall)} ${esc(b.campaign)}<div class="note">${esc(b.adGroup)}</div>`,
+        b.product ? `${esc(b.product.sku)}` : "—",
+        esc(b.reason)],
+      csv: ["操作", "モール", "広告の種類", "キャンペーン", "広告グループ", "キーワード・ターゲット", "マッチタイプ", "商品SKU", "クリック", "広告費", "注文", "売上", "ROAS", "目標ROAS", "今の入札", "基準", "提案入札", "理由"],
+      csvRow: (b) => [ACT[b.action][1], MALL_JA[b.mall] || b.mall, b.adType || "", b.campaign, b.adGroup, b.keyword, b.matchType,
+        b.product ? b.product.sku : "", b.clicks, b.cost, b.orders, b.sales, b.roas ?? "", b.target.roas,
+        b.currentBid ?? b.cpc, b.basis, b.suggestedBid, b.reason]
+    },
+    negatives: {
+      head: ["検索語", "登録のしかた", "クリック", "広告費", "注文", "ROAS", "キャンペーン／広告グループ", "ターゲット", "理由"],
+      row: (x) => [`<strong>${esc(x.searchTerm)}</strong>`, x.kind === "product" ? "除外商品（ASIN）" : "除外キーワード（完全一致）",
+        x.clicks, yen(x.cost), x.orders, x.roas ?? "—",
+        `${mallTag(x.mall)} ${esc(ADTYPE_JA[x.adType] || x.adType)} ${esc(x.campaign)}<div class="note">${esc(x.adGroup)}</div>`,
+        esc(x.targeting) || "—", esc(x.reason)],
+      csv: ["検索語", "種類", "モール", "広告の種類", "キャンペーン", "広告グループ", "ターゲット", "クリック", "広告費", "注文", "売上", "理由"],
+      csvRow: (x) => [x.searchTerm, x.kind === "product" ? "除外商品（ASIN）" : "除外キーワード（完全一致）", MALL_JA[x.mall] || x.mall,
+        x.adType, x.campaign, x.adGroup, x.targeting, x.clicks, x.cost, x.orders, x.sales, x.reason]
+    },
+    harvest: {
+      head: ["検索語", "追加のしかた", "提案入札", "ROAS／目標", "注文", "広告費", "見つかったキャンペーン", "理由"],
+      row: (x) => [`<strong>${esc(x.searchTerm)}</strong>`, x.kind === "product" ? "商品ターゲティング" : "完全一致キーワード",
+        `<strong>${yen(x.suggestedBid)}</strong><div class="note">今のCPC ${yen(x.cpc)}</div>`, `${x.roas} ／ ${x.target.roas}`,
+        x.orders, yen(x.cost), `${mallTag(x.mall)} ${esc(x.campaign)}<div class="note">${esc(x.adGroup)}</div>`, esc(x.reason)],
+      csv: ["検索語", "追加のしかた", "モール", "広告の種類", "キャンペーン", "広告グループ", "クリック", "広告費", "注文", "売上", "ROAS", "目標ROAS", "今のCPC", "提案入札", "理由"],
+      csvRow: (x) => [x.searchTerm, x.kind === "product" ? "商品ターゲティング" : "完全一致キーワード", MALL_JA[x.mall] || x.mall, x.adType,
+        x.campaign, x.adGroup, x.clicks, x.cost, x.orders, x.sales, x.roas, x.target.roas, x.cpc, x.suggestedBid, x.reason]
+    },
+    budgets: {
+      head: ["キャンペーン", "モール", "広告費", "売上", "ROAS", "予算内の時間", "今の予算", "提案", "理由"],
+      row: (x) => [esc(x.campaign), mallTag(x.mall), yen(x.cost), yen(x.sales), x.roas, x.coverage + "%",
+        x.budget ? yen(x.budget) : "—", x.suggestedBudget ? `<strong>${yen(x.suggestedBudget)}</strong>` : "引き上げ", esc(x.reason)],
+      csv: ["キャンペーン", "モール", "広告の種類", "広告費", "売上", "ROAS", "予算内の時間(%)", "今の予算", "提案予算", "理由"],
+      csvRow: (x) => [x.campaign, MALL_JA[x.mall] || x.mall, x.adType || "", x.cost, x.sales, x.roas, x.coverage, x.budget ?? "", x.suggestedBudget ?? "", x.reason]
+    }
+  };
+  function renderAdvice() {
+    const d = advData;
+    if (!d) return;
+    const cnt = { bids: d.bids.length, negatives: d.negatives.length, harvest: d.harvest.length, budgets: d.budgets.length };
+    document.querySelectorAll("#adv-tabs button").forEach((b) => {
+      const k = b.dataset.adv;
+      b.setAttribute("aria-pressed", k === advTab ? "true" : "false");
+      b.textContent = `${{ bids: "入札の見直し", negatives: "除外キーワード", harvest: "追加キーワード", budgets: "予算" }[k]}（${cnt[k]}）`;
+    });
+    const c = (a) => d.bids.filter((b) => b.action === a).length;
+    $("adv-summary").innerHTML = advTab === "bids"
+      ? `<span class="tag ng">停止を検討 ${c("pause")}</span> <span class="tag warn">下げる ${c("down")}</span> <span class="tag ok">上げる ${c("up")}</span>
+         <span class="note" style="margin-left:6px">下げる・停止の対象に期間内 ${yen(d.impact.bidDownCost)} を使っています</span>`
+      : advTab === "negatives"
+        ? `<span class="note">注文0の検索語に期間内 ${yen(d.impact.wastedCost)}。除外すると、この分が他のキーワードに回ります</span>`
+        : advTab === "budgets" ? `<span class="note">予算切れの判定は「予算内に収まっていた時間」を使います。APIでは取れないので、Amazonのキャンペーンレポート（CSV）を入れた期間だけ出ます</span>` : "";
+    const cfg = ADV_COLS[advTab];
+    const list = d[advTab] || [];
+    $("adv-table").innerHTML = list.length ? `<div class="tablewrap"><table style="min-width:980px">
+      <thead><tr>${cfg.head.map((h) => `<th>${h}</th>`).join("")}</tr></thead>
+      <tbody>${list.map((x) => `<tr>${cfg.row(x).map((v, i) =>
+        `<td${typeof v === "number" ? ' class="r"' : ""}${i === cfg.head.length - 1 ? ' style="white-space:normal;min-width:260px;font-size:12.5px"' : ""}>${v}</td>`).join("")}</tr>`).join("")}</tbody>
+      </table></div>` : `<p class="note">この期間では該当がありません。</p>`;
+    $("adv-assume").innerHTML = `<ul class="steps">${d.assumptions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>
+      <div class="tablewrap"><table style="min-width:420px"><thead><tr><th>対象</th><th class="r">粗利率（広告費前）</th><th class="r">目標ACoS</th><th class="r">目標ROAS</th></tr></thead>
+      <tbody>${d.targets.map((t) => `<tr><td>${esc(t.label)}</td><td class="r">${t.gm == null ? "—（仮に30%）" : t.gm + "%"}</td>
+        <td class="r">${t.acos}%</td><td class="r">${t.roas}</td></tr>`).join("")}</tbody></table></div>
+      <p class="note" style="margin-top:6px">商品が特定できる広告は、その商品の粗利率と広告方針で個別に計算しています（表の「目標ROAS」の下に方針を表示）。
+        目標粗利率は設定タブで変えられます。</p>`;
+  }
+  async function loadAdvice() {
+    const caseId = $("ads-case").value;
+    if (!caseId) return;
+    $("adv-period").textContent = `${rangeLabel()} の実績から`;
+    $("adv-msg").textContent = "計算中…";
+    advData = await get(`/api/ads/advice?case_id=${encodeURIComponent(caseId)}&${rangeQS()}`);
+    $("adv-msg").textContent = advData.error || "";
+    if (!advData.error) renderAdvice();
+  }
+  $("adv-tabs").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-adv]");
+    if (!b) return;
+    advTab = b.dataset.adv;
+    renderAdvice();
+  });
+  $("btn-adv-csv").addEventListener("click", () => {
+    if (!advData) return;
+    const cfg = ADV_COLS[advTab];
+    const q = (v) => { const t = String(v ?? ""); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+    const lines = [cfg.csv.map(q).join(","), ...(advData[advTab] || []).map((x) => cfg.csvRow(x).map(q).join(","))];
+    // Excel で文字化けしないよう BOM を付ける
+    const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `広告提案_${advTab}_${caseName()}_${range.from}_${range.to}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
 
   /* ---------- AIに渡す ---------- */
   async function copyText(text) {
@@ -2182,9 +2436,10 @@
     const d = await r.json();
     const links = d.links || [];
     $("share-list").innerHTML = links.length ? `<div class="tablewrap"><table style="min-width:640px">
-      <thead><tr><th>メモ</th><th>発行</th><th>有効期限</th><th class="r">読まれた回数</th><th>最後に読まれた</th><th>状態</th><th></th></tr></thead>
+      <thead><tr><th>メモ</th><th>期間</th><th>発行</th><th>有効期限</th><th class="r">読まれた回数</th><th>最後に読まれた</th><th>状態</th><th></th></tr></thead>
       <tbody>${links.map((l) => `<tr>
-        <td>${esc(l.label) || "—"}</td><td>${esc(l.createdAt.slice(0, 16))}<div class="note">${esc(l.createdBy || "")}</div></td>
+        <td>${esc(l.label) || "—"}</td><td>${l.range && l.range.preset === "custom" ? `${esc(l.range.from)}〜${esc(l.range.to)}`
+          : esc($("g-preset").querySelector(`option[value="${(l.range && l.range.preset) || "last30"}"]`)?.textContent || "直近30日")}</td><td>${esc(l.createdAt.slice(0, 16))}<div class="note">${esc(l.createdBy || "")}</div></td>
         <td>${esc(l.expiresAt.slice(0, 16))}</td><td class="r">${l.accessCount}</td><td>${esc((l.lastAccessAt || "—").slice(0, 16))}</td>
         <td><span class="tag ${l.active ? "ok" : "wait"}">${l.active ? "有効" : l.revokedAt ? "無効化済み" : "期限切れ"}</span></td>
         <td>${l.active ? `${l.url ? `<button class="act" data-share-copy="${esc(l.url)}" style="padding:3px 10px;font-size:12px">依頼文をコピー</button> ` : ""}
@@ -2200,7 +2455,8 @@
     try {
       const r = await fetch("/api/share", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ caseId: currentCase, days: Number($("share-days").value), label: $("share-label").value })
+        body: JSON.stringify({ caseId: currentCase, days: Number($("share-days").value), label: $("share-label").value,
+          preset: range.preset, from: range.from, to: range.to })
       });
       const d = await r.json();
       if (!r.ok) { $("share-msg").textContent = d.error || "発行できませんでした"; return; }
@@ -2233,7 +2489,7 @@
 
   $("btn-copy-md").addEventListener("click", async () => {
     $("copy-msg").textContent = "作成中…";
-    const r = await fetch(`/api/dashboard/markdown?case_id=${encodeURIComponent(currentCase)}`);
+    const r = await fetch(`/api/dashboard/markdown?case_id=${encodeURIComponent(currentCase)}&${rangeQS()}`);
     const md = await r.text();
     const text = [
       `以下は、私たちが運用しているEC案件「${caseName()}」の最新の運用データです。分析してください。`,
@@ -2267,6 +2523,8 @@
       document.querySelector("header").after(bar);
     }
     await initCases();
+    await resolveRange();
+    markRangeTab("p-dash");
     await loadDashboard();
   })();
 })();

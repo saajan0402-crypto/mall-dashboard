@@ -24,6 +24,7 @@ export interface ShareLink {
   createdBy: string | null; createdAt: string; expiresAt: string;
   revokedAt: string | null; lastAccessAt: string | null; accessCount: number;
   active: boolean;
+  range: { preset: string | null; from: string | null; to: string | null };
   /** 再表示用。SECRET_KEY が無いときは出せない */
   url: string | null;
 }
@@ -33,6 +34,7 @@ const ALLOWED_DAYS = [1, 7, 30, 90];
 export async function createShareLink(
   env: { DB: D1Database; SECRET_KEY?: string },
   origin: string, caseId: string, days: number, label: string | null, by: string | null,
+  range: { preset?: string | null; from?: string | null; to?: string | null } = {},
 ): Promise<{ id: string; url: string; expiresAt: string }> {
   if (!ALLOWED_DAYS.includes(days)) throw new Error("有効期限は 1・7・30・90 日から選んでください");
   const c = await env.DB.prepare("SELECT id FROM cases WHERE id = ?").bind(caseId).first();
@@ -43,9 +45,10 @@ export async function createShareLink(
   const expiresAt = new Date(Date.now() + days * 86400000).toISOString().slice(0, 19).replace("T", " ");
   const enc = env.SECRET_KEY ? await seal(env.SECRET_KEY, { token }) : null;
   await env.DB.prepare(
-    `INSERT INTO share_links (id, case_id, token_hash, token_enc, label, created_by, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).bind(id, caseId, await sha256(token), enc, label, by, expiresAt).run();
+    `INSERT INTO share_links (id, case_id, token_hash, token_enc, label, created_by, expires_at, range_preset, range_from, range_to)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, caseId, await sha256(token), enc, label, by, expiresAt,
+    range.preset ?? "last30", range.preset === "custom" ? range.from ?? null : null, range.preset === "custom" ? range.to ?? null : null).run();
   return { id, url: `${origin}/share/${token}`, expiresAt };
 }
 
@@ -73,6 +76,8 @@ export async function listShareLinks(
       expiresAt: String(r.expires_at), revokedAt: r.revoked_at == null ? null : String(r.revoked_at),
       lastAccessAt: r.last_access_at == null ? null : String(r.last_access_at),
       accessCount: Number(r.access_count ?? 0), active, url,
+      range: { preset: r.range_preset == null ? null : String(r.range_preset),
+        from: r.range_from == null ? null : String(r.range_from), to: r.range_to == null ? null : String(r.range_to) },
     });
   }
   return out;
@@ -85,14 +90,15 @@ export async function revokeShareLink(db: D1Database, id: string): Promise<boole
 }
 
 /** 鍵から案件を引く。期限切れ・無効化済みは null */
-export async function resolveShareToken(db: D1Database, token: string): Promise<{ id: string; caseId: string } | null> {
+export async function resolveShareToken(db: D1Database, token: string):
+  Promise<{ id: string; caseId: string; range: { preset: string | null; from: string | null; to: string | null } } | null> {
   if (!/^[A-Za-z0-9_-]{40,60}$/.test(token)) return null;
   const r = await db.prepare(
-    `SELECT id, case_id FROM share_links
+    `SELECT id, case_id, range_preset, range_from, range_to FROM share_links
       WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > datetime('now')`
-  ).bind(await sha256(token)).first<{ id: string; case_id: string }>();
+  ).bind(await sha256(token)).first<{ id: string; case_id: string; range_preset: string | null; range_from: string | null; range_to: string | null }>();
   if (!r) return null;
   await db.prepare("UPDATE share_links SET access_count = access_count + 1, last_access_at = datetime('now') WHERE id = ?")
     .bind(r.id).run();
-  return { id: r.id, caseId: r.case_id };
+  return { id: r.id, caseId: r.case_id, range: { preset: r.range_preset, from: r.range_from, to: r.range_to } };
 }
