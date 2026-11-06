@@ -283,7 +283,7 @@
       </div>
     </div>
     <div class="chart">
-      <h3>日別の売上</h3>
+      <h3 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">日別の売上<span class="basis-pick"></span></h3>
       <p class="sub" id="dash-trend-sub"></p>
       <div id="dash-trend"></div>
     </div>
@@ -513,7 +513,7 @@
 
     <div id="sales-chart-view" class="hidden" style="display:grid;gap:18px">
       <div class="chart">
-        <h3>日別の売上</h3>
+        <h3 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">日別の売上<span class="basis-pick"></span></h3>
         <p class="sub" id="chart-rev-sub"></p>
         <div id="chart-rev"></div>
       </div>
@@ -562,7 +562,8 @@
     </div>
 
     <div>
-      <h2>日別の合計</h2>
+      <h2 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">日別の合計<span class="basis-pick"></span></h2>
+      <p class="note hidden" id="sales-basis-note" style="margin:-4px 0 8px"></p>
       <div class="tablewrap">
         <table>
           <thead><tr><th>日付</th><th class="r">販売数</th><th class="r">売上</th><th class="r">セッション</th><th class="r">CVR</th><th>セール・イベント</th></tr></thead>
@@ -1010,7 +1011,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.17.2";
+  const UI_VERSION = "0.18.0";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
@@ -1848,6 +1849,13 @@
     $("sales-rows-hint").textContent = d.truncated ? "新しい順・期間が長いため最新2000行まで（日別の合計とグラフは全期間ぶん）" : "新しい順";
 
     salesEvents = caseId ? ((await get(`/api/events?case_id=${encodeURIComponent(caseId)}&from=${range.from}&to=${range.to}`)).events || []) : [];
+    if (salesBasis === "posted") {
+      const pd = await postedDailyFor(caseId);
+      d.daily = pd.daily;
+      $("sales-basis-note").textContent = pd.coveredDays ? BASIS_NOTE
+        : "出荷日ベースのデータ（Amazonの新しい入金明細）はまだ取り込み中です。数時間〜1日でそろいます";
+    }
+    $("sales-basis-note").classList.toggle("hidden", salesBasis !== "posted");
     $("sales-daily").innerHTML = (d.daily || []).map((x) => {
       const cvr = x.sessions ? ((x.units / x.sessions) * 100).toFixed(1) + "%" : "—";
       const ev = evOverlap(salesEvents, x.date, x.date);
@@ -1914,6 +1922,34 @@
     return { unit, rows };
   }
   const UNIT_JA = { day: "日別", week: "週別（月曜始まり）", month: "月別" };
+
+  /* ---------- 注文日ベース／出荷日ベースの切り替え ---------- */
+  // 注文日：お客様に「昨日何個売れた？」と聞かれたときの数字（売上・トラフィックレポート／楽天の受注）。
+  // 出荷日：Amazon の入金明細（新API）の出荷・計上日。セラーセントラルの日付範囲レポートと同じ数え方。楽天は注文日のまま
+  let salesBasis = "order";
+  try { salesBasis = localStorage.getItem("mall.salesBasis") === "posted" ? "posted" : "order"; } catch (e) { salesBasis = "order"; }
+  function renderBasisPickers() {
+    document.querySelectorAll(".basis-pick").forEach((el) => {
+      el.innerHTML = `<span class="seg theme-seg" role="group" aria-label="日付の基準">
+        <button type="button" data-basis="order" aria-pressed="${salesBasis === "order"}" title="注文が入った日で数えます（昨日何個売れた？の数字）">注文日</button>
+        <button type="button" data-basis="posted" aria-pressed="${salesBasis === "posted"}" title="Amazonは出荷・計上した日（入金明細と同じ）で数えます。楽天は注文日のまま">出荷日</button></span>`;
+    });
+  }
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest(".basis-pick button[data-basis]");
+    if (!b || b.dataset.basis === salesBasis) return;
+    salesBasis = b.dataset.basis;
+    try { localStorage.setItem("mall.salesBasis", salesBasis); } catch (err) { /* 保存できなくても動く */ }
+    renderBasisPickers();
+    loadPanel(activePanel());
+  });
+  renderBasisPickers();
+  /** 出荷日ベースの日別（新しい順）。sessions は無い */
+  async function postedDailyFor(caseId) {
+    const r = await get(`/api/sales/posted?from=${range.from}&to=${range.to}` + (caseId ? `&case_id=${encodeURIComponent(caseId)}` : ""));
+    return { daily: (r.daily || []).map((x) => ({ ...x, sessions: null })).reverse(), coveredDays: r.coveredDays || 0 };
+  }
+  const BASIS_NOTE = "出荷日ベース：Amazonは出荷・計上した日（入金明細）、楽天は注文日で数えています。商品別の明細とセッションは注文日のままです";
 
   function drawSalesCharts(d) {
     const daily = (d.daily || []).slice().reverse();            // 古い順に並べ直す
@@ -2134,9 +2170,15 @@
     if (!caseId || !month) { $("amz-monthly").innerHTML = ""; return; }
     const d = await get(`/api/monthly/amazon?case_id=${encodeURIComponent(caseId)}&month=${month}`);
     if (d.error) { $("amz-monthly").innerHTML = `<p class="note">${esc(d.error)}</p>`; return; }
-    if (!d.lines.length) { $("amz-monthly").innerHTML = `<p class="note">${esc(month)} の Amazon の入金明細はまだありません。</p>`; return; }
-    const t = d.totals;
+    const BASIS_JA = { posted: "出荷日ベース（新しい入金明細・日付範囲レポートと同じ）", release: "入金可能日ベース（旧い入金明細・出荷の7〜10日後）" };
     const signed = (v) => (v < 0 ? "-" : "") + yen(Math.abs(v));
+    const head = `<p class="note" style="margin:0 0 8px">今の集計：<strong>${esc(BASIS_JA[d.active])}</strong></p>`;
+    if (!d.lines.length) {
+      $("amz-monthly").innerHTML = head + `<p class="note">${esc(month)} の Amazon の入金明細（${d.active === "posted" ? "出荷日ベース" : "入金可能日ベース"}）はまだありません。</p>`
+        + basisCompare(d, signed);
+      return;
+    }
+    const t = d.totals;
     const groups = [["商品売上（税込）", t.sales], ["配送料", t.shipping], ["返金", t.refunds], ["プロモーション割引", t.promotions],
       ["Amazonポイントの費用", t.points], ["注文ごとの手数料（販売手数料・FBA）", t.orderFees], ["月額登録料・保管料など", t.accountFees],
       ["補填・調整", t.adjustments]].filter(([, v]) => v);
@@ -2149,15 +2191,43 @@
     const ob = d.orderBasis;
     const diff = ob ? `<p class="note" style="margin-top:10px">比較：ふだんの数字（注文日ベース）の同じ月は 売上 <strong>${yen(ob.revenue)}</strong>（${ob.units}個）。
         明細の商品売上との差 ${signed(t.sales - ob.revenue)} は、月をまたいだ注文（月末に注文・翌月に出荷など）の分です。</p>` : "";
+    const dfr = d.basis === "posted" && d.deferred ? `<p class="note" style="margin-top:6px">うち留保中（まだ入金されていない取引）の合計 ${signed(d.deferred)}</p>` : "";
     const detail = d.lines.map((l) => `<tr><td class="note">${esc(l.group)}</td><td>${esc(l.name)}</td><td class="r">${signed(l.amount)}</td></tr>`).join("");
-    $("amz-monthly").innerHTML = `<p style="margin:0 0 8px">${status}</p>
+    $("amz-monthly").innerHTML = head + `<p style="margin:0 0 8px">${status}</p>
       <div class="tablewrap"><table style="min-width:420px"><tbody>
         ${groups.map(([k, v]) => `<tr><td>${k}</td><td class="r">${signed(v)}</td></tr>`).join("")}
         <tr><td><strong>合計（振込みの元になる額）</strong></td><td class="r"><strong>${signed(t.net)}</strong></td></tr>
-      </tbody></table></div>${diff}
+      </tbody></table></div>${dfr}${diff}
       <details style="margin-top:8px"><summary class="note" style="cursor:pointer">費目ごとの内訳</summary>
-        <div class="tablewrap" style="margin-top:6px"><table style="min-width:420px"><tbody>${detail}</tbody></table></div></details>`;
+        <div class="tablewrap" style="margin-top:6px"><table style="min-width:420px"><tbody>${detail}</tbody></table></div></details>`
+      + basisCompare(d, signed);
   }
+  /** もう一方の日付の数え方での同じ月を並べ、切り替えボタンを出す */
+  function basisCompare(d, signed) {
+    const o = d.other;
+    if (!o) return "";
+    const label = o.basis === "posted" ? "出荷日ベース（新しい入金明細）" : "入金可能日ベース（旧い入金明細）";
+    const body = o.lines.length
+      ? `商品売上 <strong>${signed(o.totals.sales)}</strong>／注文ごとの手数料 ${signed(o.totals.orderFees)}／合計 <strong>${signed(o.totals.net)}</strong>（${o.coveredDays}/${o.days}日分）`
+      : "まだ取り込み中です（数時間〜1日でそろいます）";
+    const btn = o.basis === "posted"
+      ? `<button class="act" id="btn-basis" data-v="posted" style="margin-top:6px">出荷日ベースに切り替える</button>`
+      : `<button class="act" id="btn-basis" data-v="release" style="margin-top:6px">入金可能日ベースに戻す</button>`;
+    return `<div class="card" style="margin-top:12px;background:var(--surface-2)">
+      <p class="note" style="margin:0">比較：${label}だと ${body}</p>
+      ${o.basis === "posted" ? `<p class="note" style="margin:6px 0 0">セラーセントラルの日付範囲レポートと同じ数字になっていれば、切り替えてください。ダッシュボード・粗利・広告の判定もこの数え方になります（管理者のみ）。</p>` : ""}
+      ${btn} <span class="note" id="basis-msg"></span></div>`;
+  }
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest && e.target.closest("#btn-basis");
+    if (!b) return;
+    b.disabled = true;
+    const r = await fetch("/api/flags/fee-basis", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ value: b.dataset.v }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { $("basis-msg").textContent = d.error || "切り替えられませんでした"; b.disabled = false; return; }
+    await loadAmzMonthly(); await loadSummary();
+  });
+
 
   /* ---------- 請求明細 ---------- */
   async function loadCharges() {
@@ -2825,7 +2895,13 @@
     loadDone();
 
     // 期間の枠を作り、データの無い日は空けておく（0円とは区別する）。長い期間は週・月にまとめる
-    const byDate = new Map(sl.trend.map((t) => [t.date, t]));
+    let trendRows = sl.trend, basisNote = "";
+    if (salesBasis === "posted") {
+      const pd = await postedDailyFor(currentCase);
+      trendRows = pd.daily.slice().reverse();
+      basisNote = pd.coveredDays ? "　Amazonは出荷日・楽天は注文日" : "　出荷日ベースのデータは取り込み中です";
+    }
+    const byDate = new Map(trendRows.map((t) => [t.date, t]));
     const days = [];
     for (let t = Date.parse(P.from); t <= Date.parse(P.to); t += 86400000) {
       const d = new Date(t).toISOString().slice(0, 10);
@@ -2833,7 +2909,9 @@
       days.push({ date: d, revenue: x ? x.revenue : 0, units: x ? x.units : 0, has: x ? 1 : 0 });
     }
     const bk = bucketize(days, ["revenue", "units", "has"]);
-    $("dash-trend-sub").textContent = `${UNIT_JA[bk.unit]}・${s.malls.map((x) => MALL_JA[x] || x).join("＋") || "全モール"}の合計　${yen(sl.total.revenue)}`;
+    const trendTotal = trendRows.reduce((n, x) => n + (x.revenue || 0), 0);
+    $("dash-trend-sub").textContent = `${UNIT_JA[bk.unit]}・${s.malls.map((x) => MALL_JA[x] || x).join("＋") || "全モール"}の合計　${yen(trendTotal)}`
+      + (salesBasis === "posted" ? `（出荷日ベース）${basisNote}` : "（注文日ベース）");
     columnChart($("dash-trend"), bk.rows.map((x) => {
       const ev = evOverlap(s.events, x.from, x.to);
       return { label: x.label, value: x.revenue, ev,

@@ -97,7 +97,7 @@ export const FIN_PARSER = 2;
 async function writeFinanceDay(db: D1Database, caseId: string, date: string, rows: FeeRow[]): Promise<{ kept: number; unknown: Set<string> }> {
   const map = await skuMap(db, caseId);
   const statements: D1PreparedStatement[] = [
-    db.prepare("DELETE FROM fee_events WHERE case_id = ? AND mall = 'amazon' AND date = ?").bind(caseId, date),
+    db.prepare("DELETE FROM fee_events WHERE case_id = ? AND mall = 'amazon' AND basis = 'release' AND date = ?").bind(caseId, date),
   ];
   let kept = 0;
   const unknown = new Set<string>();
@@ -121,11 +121,11 @@ async function writeFinanceDay(db: D1Database, caseId: string, date: string, row
       `UPDATE daily_sales SET
          fee_actual = (SELECT -COALESCE(SUM(f.amount), 0) FROM fee_events f
                         WHERE f.case_id = daily_sales.case_id AND f.mall = daily_sales.mall
-                          AND f.date = daily_sales.date AND f.product_id IS daily_sales.product_id
+                          AND f.date = daily_sales.date AND f.product_id IS daily_sales.product_id AND f.basis = 'release'
                           AND f.kind IN ('fee', 'promotion', 'tax_withheld', 'points')),
          returns = (SELECT -COALESCE(SUM(f.amount), 0) FROM fee_events f
                      WHERE f.case_id = daily_sales.case_id AND f.mall = daily_sales.mall
-                       AND f.date = daily_sales.date AND f.product_id IS daily_sales.product_id
+                       AND f.date = daily_sales.date AND f.product_id IS daily_sales.product_id AND f.basis = 'release'
                        AND f.event_type = 'refund' AND f.kind = 'charge')
        WHERE case_id = ? AND mall = 'amazon' AND date = ?`
     ).bind(caseId, date)

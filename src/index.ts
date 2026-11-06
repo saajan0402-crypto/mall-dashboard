@@ -13,7 +13,8 @@ import { ensureAdmin, addAdmin, removeAdmin, setAdminAll, listConnections, saveC
 import { diagnose } from "./diagnose";
 import { advance, pump, jstDate } from "./ingestSales";
 import { ingestFinances, pumpFinances, reparseFinances } from "./ingestFinances";
-import { monthlyStatement } from "./amazonFin";
+import { monthlyStatement, feeBasis, postedDaily } from "./amazonFin";
+import { pumpTransactions, ingestTransactionsDay } from "./ingestTransactions";
 import { ingestInventory, pumpInventory, inventoryStatus, notifyInventory } from "./ingestInventory";
 import { ingestSns, pumpSns } from "./ingestSns";
 import { startBackfill, runBackfill, backfillStatus } from "./backfill";
@@ -38,7 +39,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.17.2";
+const APP_VERSION = "0.18.0";
 
 export interface Env {
   DB: D1Database;
@@ -439,18 +440,51 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
   }
 
   // 月次確定（明細ベース）：セラーセントラルの日付範囲レポートと同じ並びで、その月の入金明細をまとめる。
-  // 横に、日々の数字（注文日ベース）の同じ月を並べて差を見せる
+  // 新旧2つの日付の数え方を並べて返す（切り替え前に一致を確かめるため）。横に注文日ベースの同じ月も
   if (path === "/api/monthly/amazon") {
     const u = new URL(req.url);
     const caseId = u.searchParams.get("case_id");
     const month = u.searchParams.get("month") ?? jstDate(1).slice(0, 7);
     if (!caseId || !/^\d{4}-\d{2}$/.test(month)) return json({ error: "案件と月を指定してください" }, 400);
-    const st = await monthlyStatement(env.DB, caseId, month);
+    const active = await feeBasis(env.DB);
+    const posted = await monthlyStatement(env.DB, caseId, month, "posted");
+    const release = await monthlyStatement(env.DB, caseId, month, "release");
+    const st = active === "posted" ? posted : release;
     const last = `${month}-${String(st.days).padStart(2, "0")}`;
     const daily = await periodSummary(env.DB, caseId, `${month}-01`, last);
     const amz = daily.byMall.find((m) => m.mall === "amazon") ?? null;
-    return json({ ...st, orderBasis: amz ? { revenue: amz.revenue, units: amz.units, cost: amz.cost, gross: amz.gross } : null,
+    return json({ ...st, active, other: active === "posted" ? release : posted,
+      orderBasis: amz ? { revenue: amz.revenue, units: amz.units, cost: amz.cost, gross: amz.gross } : null,
       otherFees: daily.otherFees, closed: last < jstDate(1) });
+  }
+
+  // 入金明細をどちらの日付で数えるか（管理者のみ）
+  if (path === "/api/flags/fee-basis" && req.method === "POST") {
+    const email = viewer(req);
+    const { isAdmin } = await ensureAdmin(env.DB, email);
+    if (!isAdmin) return json({ error: "切り替えは管理者のみです" }, 403);
+    const b = (await req.json().catch(() => ({}))) as { value?: string };
+    const value = b.value === "posted" ? "posted" : "release";
+    await env.DB.prepare(
+      `INSERT INTO app_flags (key, value, updated_by) VALUES ('amazon_fee_basis', ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_by = excluded.updated_by, updated_at = datetime('now')`
+    ).bind(value, email).run();
+    return json({ ok: true, value });
+  }
+
+  // 新しい入金明細（出荷日ベース）を今すぐ進める。caseId と date を渡すとその日だけ取り直す
+  if (path === "/api/ingest/transactions" && req.method === "POST") {
+    const b = (await req.json().catch(() => ({}))) as { caseId?: string; date?: string };
+    if (b.caseId && b.date) return json(await ingestTransactionsDay(env, b.caseId, b.date));
+    return json({ done: await pumpTransactions(env, { budgetMs: 25000, caseId: b.caseId }) });
+  }
+
+  // 日別の販売数・売上を「出荷日ベース」で（Amazon は新しい入金明細、楽天は注文日のまま）
+  if (path === "/api/sales/posted") {
+    const u = new URL(req.url);
+    const from = u.searchParams.get("from") ?? jstDate(14);
+    const to = u.searchParams.get("to") ?? jstDate(1);
+    return json({ from, to, ...(await postedDaily(env.DB, u.searchParams.get("case_id"), from, to)) });
   }
 
   /* ───────── ダッシュボード・AI用レポート ───────── */
@@ -569,8 +603,24 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       .first<{ id: string; name: string }>();
     if (!c) return json({ error: `案件「${key}」が見つかりません（アプリに登録した案件名と同じにしてください）` }, 404);
     const results: ImportResult[] = [];
+    const billpay: Array<Record<string, unknown>> = [];
     for (const entry of form.getAll("files")) {
       if (!(entry instanceof File)) continue;
+      // 楽天の「請求・支払明細」（Shop_Billpay.csv）も同じ入口で受け取る。
+      // 担当者の Playwright が RMS から落として送れば、請求明細の取り込みも自動になる（Cloudflare 側の設定変更は不要）
+      if (/\.csv$/i.test(entry.name)) {
+        const bytes = await entry.arrayBuffer();
+        const table = parseCsv(decodeCsv(bytes));
+        if (table.length && isBillpay(table)) {
+          const b = parseBillpay(table, entry.name);
+          if (!b.ok) { billpay.push({ fileName: entry.name, ok: false, message: b.message }); continue; }
+          const r2Key = `raw/rakuten/charges/${c.id}/billpay_${b.statementNo}.csv`;
+          await env.FILES.put(r2Key, bytes, { httpMetadata: { contentType: "text/csv" } });
+          const months = await saveBillpay(env, c.id, "rakuten", b, r2Key);
+          billpay.push({ fileName: entry.name, ok: true, statementNo: b.statementNo, months, taxDiff: b.taxDiff });
+          continue;
+        }
+      }
       try {
         results.push(...(await importAdUpload(env, c.id, entry.name, await entry.arrayBuffer())));
       } catch (e) {
@@ -578,12 +628,17 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
           message: `読み込みに失敗：${String(e instanceof Error ? e.message : e)}` });
       }
     }
+    if (billpay.length && !results.length) {
+      const bad = billpay.filter((x) => !x.ok);
+      if (bad.length) await postSlack(env, c.id, `:warning: 楽天の請求・支払明細の自動取り込みで ${bad.length}件 失敗しました\n${bad.map((x) => `• ${x.fileName}：${x.message}`).join("\n")}`).catch(() => null);
+      return json({ case: c.name, ok: bad.length === 0, billpay });
+    }
     const ng = results.filter((r) => !r.ok);
     await env.DB.prepare(`INSERT INTO ingests (id, case_id, mall, kind, rows, status, error, source) VALUES (?, ?, 'rakuten', 'ads_push', ?, ?, ?, 'push')`)
       .bind(crypto.randomUUID(), c.id, results.reduce((t, r) => t + r.rows, 0), ng.length ? "error" : "ok",
         ng.length ? ng.map((r) => `${r.fileName}: ${r.message}`).join(" / ").slice(0, 500) : null).run();
     if (ng.length) await postSlack(env, c.id, `:warning: 楽天RPPレポートの自動取り込みで ${ng.length}件 失敗しました\n${ng.slice(0, 5).map((r) => `• ${r.fileName}：${r.message}`).join("\n")}`).catch(() => null);
-    return json({ case: c.name, ok: ng.length === 0, results });
+    return json({ case: c.name, ok: ng.length === 0, results, ...(billpay.length ? { billpay } : {}) });
   }
 
   /* Amazon Ads API の自動取り込み */
@@ -934,6 +989,8 @@ export default {
         (async () => {
           // 入金明細の読み方を変えた日（ポイントの費用を読むようにした等）を、R2 の生データから読み直す
           await reparseFinances(env, 40).catch(() => 0);
+          // 新しい入金明細（出荷日ベース）。直近14日は毎日取り直し、古い日は少しずつ埋める
+          await pumpTransactions(env, { budgetMs: 60000 }).catch(() => 0);
           // 広告レポートは出来上がるまで数分〜数十分かかるので、ここで少しずつ取りに行く
           const ads = await env.DB
             .prepare("SELECT COUNT(*) AS n FROM ads_report_jobs WHERE status IN ('queued', 'requested')")

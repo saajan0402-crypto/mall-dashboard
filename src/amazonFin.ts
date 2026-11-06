@@ -28,15 +28,29 @@ export interface FinAmounts {
 const zero = (): FinAmounts => ({ fees: 0, promotions: 0, points: 0, refunds: 0, shipping: 0 });
 const n = (v: unknown) => Number(v ?? 0) || 0;
 
+/**
+ * どちらの日付で入金明細を数えるか。
+ *   release＝旧API（お金が使えるようになった日。出荷の7〜10日後）
+ *   posted ＝新API（出荷・計上した日。セラーセントラルの日付範囲レポートと同じ）
+ * 新API の取り込みが一致するのを確かめてから、画面のボタンで posted に切り替える
+ */
+export type FeeBasis = "release" | "posted";
+export async function feeBasis(db: D1Database): Promise<FeeBasis> {
+  const r = await db.prepare("SELECT value FROM app_flags WHERE key = 'amazon_fee_basis'").first<{ value: string }>().catch(() => null);
+  return r?.value === "posted" ? "posted" : "release";
+}
+export const ingestKindOf = (b: FeeBasis) => (b === "posted" ? "transactions" : "settlement");
+
 /** daily_sales の行（別名 s）が「入金明細を取り込めている日」かどうか。SQL に埋め込んで使う */
-export const COVERED_SQL = `(s.mall = 'amazon' AND EXISTS (SELECT 1 FROM ingests i
-  WHERE i.case_id = s.case_id AND i.mall = 'amazon' AND i.kind = 'settlement' AND i.status = 'ok' AND i.period_start = s.date))`;
+export const coveredSql = (b: FeeBasis) => `(s.mall = 'amazon' AND EXISTS (SELECT 1 FROM ingests i
+  WHERE i.case_id = s.case_id AND i.mall = 'amazon' AND i.kind = '${ingestKindOf(b)}' AND i.status = 'ok' AND i.period_start = s.date))`;
 
 /** 期間内に計上された入金明細を商品ごとに集計する（商品に紐づくものだけ） */
-export async function amazonFinance(db: D1Database, caseId: string, from: string, to: string): Promise<{
+export async function amazonFinance(db: D1Database, caseId: string, from: string, to: string, basis?: FeeBasis): Promise<{
   byProduct: Map<string, FinAmounts>;
   total: FinAmounts;
 }> {
+  const b = basis ?? (await feeBasis(db));
   const { results } = await db.prepare(
     `SELECT product_id,
        -SUM(CASE WHEN kind IN ('fee', 'tax_withheld') THEN amount ELSE 0 END) AS fees,
@@ -45,9 +59,9 @@ export async function amazonFinance(db: D1Database, caseId: string, from: string
        -SUM(CASE WHEN event_type = 'refund' AND kind = 'charge' THEN amount ELSE 0 END) AS refunds,
         SUM(CASE WHEN event_type = 'shipment' AND kind = 'charge' AND name IN ('ShippingCharge', 'ShippingTax') THEN amount ELSE 0 END) AS shipping
        FROM fee_events
-      WHERE case_id = ? AND mall = 'amazon' AND date BETWEEN ? AND ? AND product_id IS NOT NULL
+      WHERE case_id = ? AND mall = 'amazon' AND basis = ? AND date BETWEEN ? AND ? AND product_id IS NOT NULL
       GROUP BY product_id`
-  ).bind(caseId, from, to).all<Record<string, string | number | null>>();
+  ).bind(caseId, b, from, to).all<Record<string, string | number | null>>();
   const byProduct = new Map<string, FinAmounts>();
   const total = zero();
   for (const r of results) {
@@ -66,6 +80,9 @@ export const finCost = (a: FinAmounts | undefined) =>
 
 export interface MonthlyStatement {
   month: string;
+  basis: FeeBasis;
+  /** 留保中の取引の合計（新APIのみ） */
+  deferred: number;
   /** その月で入金明細を取り込めた日数／月の日数 */
   coveredDays: number;
   days: number;
@@ -87,22 +104,25 @@ export interface MonthlyStatement {
  * セラーセントラルの日付範囲レポートと同じ並びで、その月の入金明細をまとめる。
  * 符号は明細と同じ（収入はプラス、費用はマイナス）
  */
-export async function monthlyStatement(db: D1Database, caseId: string, month: string): Promise<MonthlyStatement> {
+export async function monthlyStatement(db: D1Database, caseId: string, month: string, basis: FeeBasis): Promise<MonthlyStatement> {
   const from = `${month}-01`;
   const last = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate();
   const to = `${month}-${String(last).padStart(2, "0")}`;
 
   const cov = await db.prepare(
     `SELECT COUNT(DISTINCT period_start) AS d FROM ingests
-      WHERE case_id = ? AND mall = 'amazon' AND kind = 'settlement' AND status = 'ok' AND period_start BETWEEN ? AND ?`
-  ).bind(caseId, from, to).first<{ d: number }>();
+      WHERE case_id = ? AND mall = 'amazon' AND kind = ? AND status = 'ok' AND period_start BETWEEN ? AND ?`
+  ).bind(caseId, ingestKindOf(basis), from, to).first<{ d: number }>();
+  const dfr = await db.prepare(
+    `SELECT COALESCE(SUM(amount), 0) AS a FROM fee_events WHERE case_id = ? AND mall = 'amazon' AND basis = ? AND deferred = 1 AND date BETWEEN ? AND ?`
+  ).bind(caseId, basis, from, to).first<{ a: number }>();
 
   const { results } = await db.prepare(
     `SELECT event_type, kind, name, (product_id IS NOT NULL OR sku IS NOT NULL OR order_id IS NOT NULL) AS per_order,
             SUM(amount) AS amount
-       FROM fee_events WHERE case_id = ? AND mall = 'amazon' AND date BETWEEN ? AND ?
+       FROM fee_events WHERE case_id = ? AND mall = 'amazon' AND basis = ? AND date BETWEEN ? AND ?
       GROUP BY event_type, kind, name, per_order`
-  ).bind(caseId, from, to).all<{ event_type: string; kind: string; name: string; per_order: number; amount: number }>();
+  ).bind(caseId, basis, from, to).all<{ event_type: string; kind: string; name: string; per_order: number; amount: number }>();
 
   const t = { sales: 0, shipping: 0, refunds: 0, promotions: 0, points: 0, orderFees: 0, accountFees: 0, adjustments: 0, net: 0 };
   const lines: MonthlyStatement["lines"] = [];
@@ -122,5 +142,26 @@ export async function monthlyStatement(db: D1Database, caseId: string, month: st
   t.net = t.sales + t.shipping + t.refunds + t.promotions + t.points + t.orderFees + t.accountFees + t.adjustments;
   const order = ["商品売上", "配送料", "返金", "プロモーション割引", "ポイントの費用", "注文ごとの手数料", "月額登録料・保管料など", "補填・調整"];
   lines.sort((x, y) => order.indexOf(x.group) - order.indexOf(y.group) || Math.abs(y.amount) - Math.abs(x.amount));
-  return { month, coveredDays: n(cov?.d), days: last, lines, totals: t };
+  return { month, basis, deferred: n(dfr?.a), coveredDays: n(cov?.d), days: last, lines, totals: t };
+}
+
+/** 出荷日ベースの日別の販売数・売上（Amazon は新APIの出荷、楽天は注文日のまま） */
+export async function postedDaily(db: D1Database, caseId: string | null, from: string, to: string) {
+  const { results } = await db.prepare(
+    `SELECT date, SUM(units) AS units, SUM(revenue) AS revenue FROM (
+       SELECT date,
+              SUM(CASE WHEN event_type = 'shipment' THEN COALESCE(quantity, 0) ELSE 0 END) AS units,
+              SUM(CASE WHEN event_type = 'shipment' AND kind = 'charge' AND name NOT LIKE 'Shipping%' THEN amount ELSE 0 END) AS revenue
+         FROM fee_events WHERE mall = 'amazon' AND basis = 'posted' AND date BETWEEN ? AND ? ${caseId ? "AND case_id = ?" : ""}
+         GROUP BY date
+       UNION ALL
+       SELECT date, SUM(units), SUM(revenue) FROM daily_sales
+        WHERE mall = 'rakuten' AND date BETWEEN ? AND ? ${caseId ? "AND case_id = ?" : ""} GROUP BY date)
+     GROUP BY date ORDER BY date`
+  ).bind(...(caseId ? [from, to, caseId, from, to, caseId] : [from, to, from, to])).all<{ date: string; units: number; revenue: number }>();
+  const cov = await db.prepare(
+    `SELECT COUNT(DISTINCT period_start) AS d FROM ingests WHERE mall = 'amazon' AND kind = 'transactions' AND status = 'ok'
+        AND period_start BETWEEN ? AND ? ${caseId ? "AND case_id = ?" : ""}`
+  ).bind(...(caseId ? [from, to, caseId] : [from, to])).first<{ d: number }>();
+  return { daily: results.map((r) => ({ date: r.date, units: n(r.units), revenue: n(r.revenue) })), coveredDays: n(cov?.d) };
 }

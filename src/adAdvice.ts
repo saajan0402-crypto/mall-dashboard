@@ -14,7 +14,7 @@
  * ここでは提案を出すだけ。入札の変更は担当者が手で行う（モールへ書き込む経路は作らない）。
  */
 
-import { amazonFinance, finCost, COVERED_SQL } from "./amazonFin";
+import { amazonFinance, finCost, coveredSql, feeBasis } from "./amazonFin";
 import { periodSummary } from "./caseSummary";
 
 const n = (v: unknown) => Number(v ?? 0);
@@ -103,16 +103,17 @@ export async function buildAdAdvice(
     const covered = m.revenue - m.revenueWithoutCost;
     if (covered > 0 && m.gross > 0) mallGm.set(m.mall, m.gross / covered);
   }
+  const basis = await feeBasis(db);
   const { results: prodRows } = await db.prepare(
     `SELECT p.id, p.sku, p.name, COALESCE(p.ad_policy, 'profit') AS policy,
             SUM(s.units) AS units, SUM(s.revenue) AS revenue,
-            SUM(CASE WHEN ${COVERED_SQL} THEN 0 ELSE COALESCE(s.fee_actual, s.fee_est, 0) + COALESCE(s.returns, 0) + COALESCE(s.discounts, 0) END) AS fees,
+            SUM(CASE WHEN ${coveredSql(basis)} THEN 0 ELSE COALESCE(s.fee_actual, s.fee_est, 0) + COALESCE(s.returns, 0) + COALESCE(s.discounts, 0) END) AS fees,
             (SELECT unit_cost FROM cost_history h WHERE h.product_id = p.id ORDER BY h.effective_from DESC LIMIT 1) AS uc
        FROM products p LEFT JOIN daily_sales s ON s.product_id = p.id AND s.date BETWEEN ? AND ?
       WHERE p.case_id = ? GROUP BY p.id`
   ).bind(from, to, caseId).all<Record<string, string | number | null>>();
   const products = new Map<string, { sku: string; name: string; policy: Policy; gm: number | null; price: number | null }>();
-  const fin = await amazonFinance(db, caseId, from, to);
+  const fin = await amazonFinance(db, caseId, from, to, basis);
   for (const p of prodRows) {
     const rev = n(p.revenue), units = n(p.units);
     const gm = p.uc != null && rev > 0 ? (rev - n(p.uc) * units - n(p.fees) - finCost(fin.byProduct.get(String(p.id)))) / rev : null;

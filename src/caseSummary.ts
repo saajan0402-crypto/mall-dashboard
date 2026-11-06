@@ -11,7 +11,7 @@ import { resolveSettings } from "./settings";
 import { listEvents, type SaleEvent } from "./events";
 import { applyTodoStatus, doneInMonth, isoWeek, textKey, type TodoStatus, type DoneItem } from "./todos";
 import { notifyEnabled } from "./cases";
-import { amazonFinance, finCost, COVERED_SQL } from "./amazonFin";
+import { amazonFinance, finCost, coveredSql, feeBasis } from "./amazonFin";
 import { latestCompleteMonth } from "./mallCharges";
 import { buildAdAdvice, type BidAdvice, type NegativeAdvice, type HarvestAdvice } from "./adAdvice";
 
@@ -56,9 +56,10 @@ export async function periodSummary(db: D1Database, caseId: string, from: string
   // 0円として数えると粗利が実態よりよく見え、損益分岐ROASも甘くなるため。
   // Amazon で入金明細を取り込めている日（cov）は、日次の行の手数料・返品・値引きを使わず、
   // 下で入金明細（計上日）の合計を足す（amazonFin.ts の説明を参照）
+  const basis = await feeBasis(db);
   const { results: rows } = await db.prepare(
     `WITH r AS (
-       SELECT s.*, ${COVERED_SQL} AS cov,
+       SELECT s.*, ${coveredSql(basis)} AS cov,
          COALESCE(
            (SELECT unit_cost FROM cost_history h
              WHERE h.product_id = s.product_id AND h.effective_from <= s.date
@@ -90,7 +91,7 @@ export async function periodSummary(db: D1Database, caseId: string, from: string
   ).bind(caseId, from, to).all<Record<string, number | string>>();
 
   // Amazon の入金明細（計上日）。原価の分からない商品の分は、その売上と同じく粗利から外す
-  const fin = await amazonFinance(db, caseId, from, to);
+  const fin = await amazonFinance(db, caseId, from, to, basis);
   const { results: noCost } = await db.prepare(
     `SELECT p.id FROM products p WHERE p.case_id = ?
         AND (SELECT unit_cost FROM cost_history h WHERE h.product_id = p.id ORDER BY h.effective_from DESC LIMIT 1) IS NULL`
@@ -114,14 +115,14 @@ export async function periodSummary(db: D1Database, caseId: string, from: string
 
   const other = await db.prepare(
     `SELECT COALESCE(-SUM(amount), 0) AS amount FROM fee_events
-      WHERE case_id = ? AND date BETWEEN ? AND ? AND product_id IS NULL AND kind = 'fee'`
-  ).bind(caseId, from, to).first<{ amount: number }>();
+      WHERE case_id = ? AND basis = ? AND date BETWEEN ? AND ? AND product_id IS NULL AND kind = 'fee'`
+  ).bind(caseId, basis, from, to).first<{ amount: number }>();
 
   const { results: bd } = await db.prepare(
     `SELECT name, -SUM(amount) AS amount, COUNT(*) AS count FROM fee_events
-      WHERE case_id = ? AND date BETWEEN ? AND ? AND kind IN ('fee', 'promotion', 'tax_withheld')
+      WHERE case_id = ? AND basis = ? AND date BETWEEN ? AND ? AND kind IN ('fee', 'promotion', 'tax_withheld', 'points')
       GROUP BY name ORDER BY amount DESC`
-  ).bind(caseId, from, to).all<{ name: string; amount: number; count: number }>();
+  ).bind(caseId, basis, from, to).all<{ name: string; amount: number; count: number }>();
 
   const byMall: MallPL[] = rows.map((r) => ({
     mall: String(r.mall),
@@ -474,9 +475,10 @@ export async function buildCaseSummary(
   ).bind(caseId, from, to).all<Record<string, string | number | null>>();
 
   /* 商品別（期間内） */
+  const prodBasis = await feeBasis(db);
   const { results: prod } = await db.prepare(
     `SELECT p.id, p.sku, p.name, SUM(s.units) AS units, SUM(s.revenue) AS revenue,
-            SUM(CASE WHEN ${COVERED_SQL} THEN 0 ELSE COALESCE(s.fee_actual, s.fee_est, 0) + COALESCE(s.returns, 0) + COALESCE(s.discounts, 0) END) AS fees,
+            SUM(CASE WHEN ${coveredSql(prodBasis)} THEN 0 ELSE COALESCE(s.fee_actual, s.fee_est, 0) + COALESCE(s.returns, 0) + COALESCE(s.discounts, 0) END) AS fees,
             (SELECT unit_cost FROM cost_history h WHERE h.product_id = p.id
               ORDER BY h.effective_from DESC LIMIT 1) AS unit_cost,
             (SELECT needs_manual FROM cost_history h WHERE h.product_id = p.id
@@ -489,7 +491,7 @@ export async function buildCaseSummary(
   ).bind(from, to, caseId, from, to, Math.min(200, opts.productLimit ?? 15)).all<Record<string, string | number | null>>();
 
   // 商品別も、Amazon の入金明細は計上日の合計で引く（手数料・返品・値引き・ポイント）
-  const finP = await amazonFinance(db, caseId, from, to);
+  const finP = await amazonFinance(db, caseId, from, to, prodBasis);
   const products = prod.map((p) => {
     const rev = n(p.revenue);
     const gross = p.unit_cost == null ? null : rev - n(p.unit_cost) * n(p.units) - n(p.fees) - finCost(finP.byProduct.get(String(p.id)));
