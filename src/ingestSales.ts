@@ -316,3 +316,23 @@ export async function pump(
   }
   return out;
 }
+
+/**
+ * R2 に残した売上・トラフィックレポートから、その日の日次売上を作り直す（API は呼ばない）。
+ * 過去データの取り込みをやり直したときに注文APIの集計で上書きされた日を戻す／
+ * 商品マスタを直したあとに照合し直す、のに使う
+ */
+export async function reapplyStoredReport(env: IngestEnv, caseId: string, date: string): Promise<boolean> {
+  const job = await env.DB.prepare(
+    "SELECT r2_key, status FROM report_jobs WHERE case_id = ? AND mall = 'amazon' AND report_type = ? AND date = ?"
+  ).bind(caseId, SALES_TRAFFIC, date).first<{ r2_key: string | null; status: string }>();
+  if (!job || job.status !== "done") return false;
+  const obj = await env.FILES.get(job.r2_key ?? `raw/amazon/sales_traffic/${caseId}/${date}.json`);
+  if (!obj) return false;
+  let parsed: { rows: SalesTrafficRow[] };
+  try { parsed = parseSalesTraffic(await obj.text()); } catch { return false; }
+  const { saved, unknown } = await writeDay(env.DB, caseId, date, parsed.rows, await skuMap(env.DB, caseId));
+  const note = unknown.length ? `商品マスタに無いSKUが ${unknown.length} 件：${unknown.slice(0, 10).join(", ")}` : null;
+  await upsertJob(env.DB, caseId, date, { status: "done", error: note, rows: saved });
+  return true;
+}

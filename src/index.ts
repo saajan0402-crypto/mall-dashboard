@@ -40,7 +40,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.18.3";
+const APP_VERSION = "0.18.4";
 
 export interface Env {
   DB: D1Database;
@@ -1018,7 +1018,7 @@ export default {
             .first<{ n: number }>();
           if (ads?.n) await pumpAdsReports(env, { budgetMs: 60000 });
           const pending = await env.DB
-            .prepare("SELECT COUNT(*) AS n FROM backfill WHERE status = 'running'")
+            .prepare("SELECT COUNT(*) AS n FROM backfill WHERE status = 'running' OR (kind = 'traffic' AND cursor IS NOT NULL AND cursor >= from_date)")
             .first<{ n: number }>();
           if (!pending?.n) return;
           await runBackfill(env, { budgetMs: 180000 });

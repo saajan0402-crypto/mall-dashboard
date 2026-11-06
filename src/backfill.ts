@@ -18,7 +18,7 @@
 import { readCreds, type ConnEnv } from "./connections";
 import { accessToken, spapi, errorMessage, JP_MARKETPLACE, type LwaEnv } from "./amazon";
 import { ingestFinances, type FinanceEnv } from "./ingestFinances";
-import { advance } from "./ingestSales";
+import { advance, reapplyStoredReport } from "./ingestSales";
 import { SALES_TRAFFIC } from "./spReports";
 
 export interface BackfillEnv extends ConnEnv, LwaEnv {
@@ -145,18 +145,24 @@ async function stepOrders(
   const statements: D1PreparedStatement[] = [];
   const dates = new Set<string>();
 
+  // ページの途中で時間切れ・呼び出し制限に当たったら、カーソルを進めずに次回このページをやり直す。
+  // （以前は残りの注文を飛ばして次のページに進んでいたので、取りこぼしが出ていた。order_items は
+  //   注文明細ごとに上書きなので、同じページをやり直しても二重にならない）
+  let complete = true;
+  let note: string | undefined;
   for (const o of orders) {
-    if (Date.now() > deadline) break;
+    if (Date.now() > deadline) { complete = false; break; }
     const id = o.AmazonOrderId;
     if (!id || !o.PurchaseDate) continue;
     const date = new Date(Date.parse(o.PurchaseDate) + 9 * 3600 * 1000).toISOString().slice(0, 10);
 
+    // 注文明細の取得は「0.5回/秒・まとめて30回まで」。制限に当たったら少しずつ待って取り直す
     let ir = await spapi(token, `/orders/v0/orders/${id}/orderItems`);
-    if (ir.status === 429) {
-      await new Promise((res) => setTimeout(res, 3000));
+    for (let i = 1; ir.status === 429 && i <= 4 && Date.now() + i * 2500 < deadline; i++) {
+      await new Promise((res) => setTimeout(res, i * 2500));
       ir = await spapi(token, `/orders/v0/orders/${id}/orderItems`);
     }
-    if (!ir.ok) continue;
+    if (!ir.ok) { complete = false; note = `注文明細の取得で止まりました（${errorMessage(ir.body)}）。次回この続きから取り直します`; break; }
     const items = ((ir.body as { payload?: { OrderItems?: ItemRow[] } }).payload?.OrderItems ?? []);
 
     for (const it of items) {
@@ -180,14 +186,21 @@ async function stepOrders(
       );
       dates.add(date);
     }
-    await new Promise((res) => setTimeout(res, 250));   // 明細は1秒に2回まで
+    await new Promise((res) => setTimeout(res, 600));
   }
 
   if (statements.length) await env.DB.batch(statements);
 
-  // 触れた日だけ日次売上を作り直す。直近分はふだんの処理が持っているので上書きしない
+  // 触れた日だけ日次売上を作り直す。直近分はふだんの処理が持っているので上書きしない。
+  // 売上・トラフィックレポートを取り込み済みの日は、レポート（Amazon の公式集計）が正なので上書きしない
+  //（以前は過去データの取り込みをやり直すと、レポートの数字が注文APIの集計で上書きされていた）
+  const { results: reported } = await env.DB.prepare(
+    `SELECT date FROM report_jobs WHERE case_id = ? AND mall = 'amazon' AND report_type = ? AND status = 'done' AND date BETWEEN ? AND ?`
+  ).bind(caseId, SALES_TRAFFIC, from, to).all<{ date: string }>();
+  const hasReport = new Set(reported.map((x) => x.date));
   for (const date of dates) {
     if (date > to) continue;
+    if (hasReport.has(date)) { await reapplyDiscounts(env, caseId, date); continue; }
     await env.DB.batch([
       env.DB.prepare("DELETE FROM daily_sales WHERE case_id = ? AND mall = 'amazon' AND date = ?").bind(caseId, date),
       env.DB
@@ -202,8 +215,10 @@ async function stepOrders(
     ]);
   }
 
+  if (!complete) return { more: true, orders: 0, note: note ?? "時間切れのため、次回このページの続きから取り直します" };
+
   await env.DB.prepare(
-    `UPDATE backfill SET cursor = ?, done = done + ?, status = ?, updated_at = datetime('now')
+    `UPDATE backfill SET cursor = ?, done = done + ?, status = ?, note = NULL, updated_at = datetime('now')
       WHERE case_id = ? AND kind = 'orders'`
   ).bind(nextToken, orders.length, nextToken ? "running" : "done", caseId).run();
 
@@ -256,6 +271,16 @@ async function stepTraffic(
     if (r.status === "done" || r.status === "empty") await reapplyDiscounts(env, caseId, date);
   }
 
+  // 3) レポートを取り込み済みの日を、R2 の生データから作り直す（新しい日から古い日へ。cursor が進み具合）。
+  //    注文APIの集計で上書きされてしまった日を戻すため。API は呼ばないので速い
+  let cursor = state.cursor == null ? null : String(state.cursor);
+  while (cursor && cursor >= from && Date.now() < deadline) {
+    if (byDate.get(cursor) === "done" && await reapplyStoredReport(env, caseId, cursor)) await reapplyDiscounts(env, caseId, cursor);
+    cursor = new Date(Date.parse(cursor) - 86400000).toISOString().slice(0, 10);
+  }
+  await env.DB.prepare("UPDATE backfill SET cursor = ? WHERE case_id = ? AND kind = 'traffic'").bind(cursor, caseId).run();
+  const repairing = Boolean(cursor && cursor >= from);
+
   // 進み具合を数え直す
   const after = await env.DB
     .prepare(
@@ -267,7 +292,7 @@ async function stepTraffic(
     .first<{ n: number }>();
   const done = after?.n ?? finished;
   const total = Number(state.total ?? 0);
-  const more = done < total;
+  const more = done < total || repairing;
 
   await env.DB.prepare(
     `UPDATE backfill SET done = ?, status = ?, updated_at = datetime('now')
@@ -330,7 +355,9 @@ export async function runBackfill(
   const { results } = await env.DB
     .prepare(
       // 必ず orders → traffic → finances の順。traffic が日次売上を作り直すため
-      `SELECT * FROM backfill WHERE status = 'running' ${opts.caseId ? "AND case_id = ?" : ""}
+      // レポートの作り直し（traffic の cursor）が残っているものも対象にする
+      `SELECT * FROM backfill WHERE (status = 'running' OR (kind = 'traffic' AND cursor IS NOT NULL AND cursor >= from_date))
+        ${opts.caseId ? "AND case_id = ?" : ""}
         ORDER BY CASE kind WHEN 'orders' THEN 1 WHEN 'traffic' THEN 2 ELSE 3 END, case_id`
     )
     .bind(...(opts.caseId ? [opts.caseId] : []))
