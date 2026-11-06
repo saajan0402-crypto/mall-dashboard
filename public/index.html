@@ -118,6 +118,10 @@
   .msg ul{margin:7px 0 0;padding-left:1.2em}
   .empty{color:var(--muted);font-size:13px;padding:14px 0}
   .hidden{display:none!important}
+  .pd-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px 14px}
+  .pd-grid label{display:grid;gap:3px;font-size:12px;color:var(--ink-2)}
+  .pd-grid label.wide{grid-column:span 2}
+  @media (max-width:520px){ .pd-grid label.wide{grid-column:auto} }
   /* 週次レポート（画面のプレビューと、PDF用の印刷） */
   .rep{background:#fff;color:#161F1E;border:1px solid var(--line);border-radius:6px;padding:32px 36px;
     --ink:#161F1E;--ink-2:#3B4846;--muted:#66746F;--line:#DCE3E0;--surface:#fff;--surface-2:#EFF3F2;
@@ -198,7 +202,7 @@
 <body>
 <header>
   <div class="bar">
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.14.1</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.15.0</span></div>
     <div class="picks">
       <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
       <div class="range-pick" id="range-pick" title="">
@@ -370,12 +374,63 @@
             <th>Amazon SKU</th><th>発送</th>
             <th>楽天 商品管理番号</th><th>発送</th>
             <th class="r">楽天 販売価格</th>
-            <th class="r">原価</th><th>広告方針</th>
+            <th class="r">原価</th><th>広告方針</th><th></th>
           </tr></thead>
           <tbody id="products"></tbody>
         </table>
       </div>
-      <p class="empty hidden" id="no-products">まだ商品が登録されていません。上の欄から取り込んでください。</p>
+      <p class="empty hidden" id="no-products">まだ商品が登録されていません。上の欄から取り込むか、「商品を追加」から1件ずつ登録してください。</p>
+      <div class="btns"><button class="act primary" id="btn-pd-new">商品を追加</button>
+        <span class="note">ヘッダーで選んでいる案件に追加します。何十件もまとめて変えるときは、上の取り込みのほうが速く済みます。</span></div>
+    </div>
+
+    <div id="pd-form-wrap" class="hidden">
+      <h2 id="pd-form-title">商品を追加</h2>
+      <div class="card">
+        <div class="pd-grid">
+          <label>自社SKU<input id="pd-sku" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"></label>
+          <label class="wide">商品名<input id="pd-name" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"></label>
+          <label>JANコード<input id="pd-jan" placeholder="8桁か13桁（任意）" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"></label>
+          <label>状態<select id="pd-status" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"><option>販売中</option><option>販売終了</option></select></label>
+          <label>Amazon SKU<input id="pd-amazonSku" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"></label>
+          <label>ASIN<input id="pd-asin" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"></label>
+          <label>Amazon発送方法<select id="pd-amazonFulfillment" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"><option value="">（既定に従う）</option><option>FBA</option><option>自社発送</option><option>マルチチャネル</option></select></label>
+          <label>楽天商品管理番号<input id="pd-rakutenId" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"></label>
+          <label>楽天発送方法<select id="pd-rakutenFulfillment" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"><option value="">（既定に従う）</option><option>FBA</option><option>自社発送</option><option>マルチチャネル</option></select></label>
+          <label>広告方針<select id="pd-adPolicy" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"><option>利益重視</option><option>シェア獲得</option><option>育成中</option></select></label>
+          <label>仕入原価（円）<input id="pd-unitCost" placeholder="買い方で変わるときは ?" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"></label>
+          <label>原価の適用開始日<input type="date" id="pd-effectiveFrom" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"></label>
+          <label>自社発送の送料（円）<input id="pd-shippingCost" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"></label>
+          <label>梱包資材費（円）<input id="pd-packagingCost" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"></label>
+          <label>目標粗利率（%）<input id="pd-targetMargin" placeholder="空欄＝案件の設定に従う" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"></label>
+          <label>在庫アラート日数<input id="pd-stockAlertDays" placeholder="空欄＝案件の設定に従う" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"></label>
+        </div>
+        <div class="btns">
+          <button class="act primary" id="btn-pd-save">保存</button>
+          <button class="act" id="btn-pd-cancel">やめる</button>
+          <button class="act hidden" id="btn-pd-del" style="margin-left:auto">削除</button>
+          <span class="note" id="pd-msg"></span>
+        </div>
+        <div id="pd-history" style="margin-top:10px"></div>
+        <p class="note" style="margin-top:8px">原価を変えたときは<strong>適用開始日から先だけ</strong>新しい原価で計算します（それより前の粗利は当時の原価のまま）。原価を変えないときは、適用開始日は触らなくて大丈夫です。
+          Amazon SKU と楽天商品管理番号は、どちらか一方は必要です。</p>
+      </div>
+    </div>
+
+    <div>
+      <h2>スプレッドシート用に書き出す<span class="hint">スプシ側のマスタを、管理画面の内容に合わせるとき</span></h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0">
+          <select id="pd-exp-scope" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink)">
+            <option value="case">ヘッダーで選んでいる案件</option><option value="all">全案件</option></select>
+          <button class="act primary" id="btn-pd-exp">書き出す</button>
+          <button class="act" id="btn-pd-exp-copy" disabled>全文をコピー</button>
+          <button class="act" id="btn-pd-exp-save" disabled>ファイルで保存（.tsv）</button>
+          <span class="note" id="pd-exp-msg"></span>
+        </div>
+        <textarea id="pd-exp-text" readonly class="hidden" style="margin-top:10px;min-height:200px"></textarea>
+        <p class="note" style="margin-top:8px">取り込みと<strong>同じ列・同じ書き方</strong>（見出しつき・タブ区切り）で出します。スプレッドシートの「商品マスタ」シートの A1 を選んで貼り付けると、列ごとに分かれて入ります。
+          原価が要手計算の商品は「?」、空欄の項目は空欄のまま出るので、このまま取り込み直しても同じ内容になります。</p>
     </div>
   </section>
 
@@ -939,7 +994,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.14.1";
+  const UI_VERSION = "0.15.0";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
@@ -1118,7 +1173,7 @@
     const d = await get("/api/products" + (currentCase ? `?case_id=${encodeURIComponent(currentCase)}` : ""));
     const list = d.products || [];
     $("no-products").classList.toggle("hidden", list.length > 0);
-    $("products").innerHTML = list.map((p) => `<tr>
+    $("products").innerHTML = list.map((p) => `<tr${p.status !== "active" ? ' style="opacity:.55"' : ""}>
       <td>${esc(p.case_name)}</td><td>${esc(p.sku)}</td><td>${esc(p.name)}</td>
       <td>${p.amazon_sku ? `<span class="tag pill-a">${esc(p.amazon_sku)}</span>` : "—"}</td>
       <td>${FFL[p.amazon_fulfillment] || "—"}</td>
@@ -1129,13 +1184,112 @@
       <td class="r">${p.cost_manual
         ? `<span class="tag warn" title="買い方によって原価が変わる商品です。担当者が手で計算して入れてください">要手計算</span>`
         : yen(p.unit_cost)}</td>
-      <td>${POLICY[p.ad_policy] || "—"}</td></tr>`).join("");
+      <td>${POLICY[p.ad_policy] || "—"}${p.status !== "active" ? ` <span class="tag wait">販売終了</span>` : ""}</td>
+      <td><button class="act" data-pd-edit="${esc(p.id)}" style="padding:3px 10px;font-size:12px">編集</button></td></tr>`).join("");
     const cases = await get("/api/cases");
     const manual = list.filter((p) => p.cost_manual).length;
     $("case-summary").innerHTML = esc((cases.cases || [])
       .map((c) => `${c.name} ${c.products}件`).join(" ／ "))
       + (manual ? `　<span class="tag warn">原価の手計算待ち ${manual}件</span>` : "");
   }
+
+  /* ---------- 商品マスタ：画面から編集 ---------- */
+  const PD_FIELDS = ["sku", "name", "jan", "status", "amazonSku", "asin", "amazonFulfillment", "rakutenId", "rakutenFulfillment",
+    "adPolicy", "unitCost", "effectiveFrom", "shippingCost", "packagingCost", "targetMargin", "stockAlertDays"];
+  const FUL_LABEL = { fba: "FBA", own: "自社発送", mcf: "マルチチャネル" };
+  const POL_LABEL = { profit: "利益重視", share: "シェア獲得", nurture: "育成中" };
+  let pdEditing = null;
+  function pdOpen(p) {
+    pdEditing = p || null;
+    const v = p ? {
+      sku: p.sku, name: p.name, jan: p.jan || "", status: p.status === "active" ? "販売中" : "販売終了",
+      amazonSku: p.amazonSku || "", asin: p.asin || "", amazonFulfillment: FUL_LABEL[p.amazonFulfillment] || "",
+      rakutenId: p.rakutenId || "", rakutenFulfillment: FUL_LABEL[p.rakutenFulfillment] || "", adPolicy: POL_LABEL[p.adPolicy] || "利益重視",
+      unitCost: p.cost ? (p.cost.manual ? "?" : (p.cost.unitCost ?? "")) : "", effectiveFrom: "",
+      shippingCost: p.cost ? (p.cost.shippingCost || "") : "", packagingCost: p.cost ? (p.cost.packagingCost || "") : "",
+      targetMargin: p.targetMargin ?? "", stockAlertDays: p.stockAlertDays ?? "",
+    } : { status: "販売中", adPolicy: "利益重視" };
+    PD_FIELDS.forEach((f) => { $("pd-" + f).value = v[f] ?? ""; });
+    // 原価の適用開始日は、変えるときだけ入れる（空欄なら今日から）
+    $("pd-effectiveFrom").placeholder = "";
+    $("pd-form-title").textContent = p ? `「${p.sku}」を編集` : `商品を追加（${caseName()}）`;
+    $("btn-pd-del").classList.toggle("hidden", !p);
+    $("btn-pd-del").textContent = "削除"; delete $("btn-pd-del").dataset.confirm;
+    $("pd-msg").textContent = "";
+    $("pd-history").innerHTML = p && p.costHistory.length ? `<div class="note" style="margin-bottom:4px">原価の履歴</div>
+      <div class="tablewrap"><table style="min-width:420px"><thead><tr><th>適用開始日</th><th class="r">仕入原価</th><th class="r">送料</th><th class="r">梱包資材費</th></tr></thead>
+      <tbody>${p.costHistory.map((c) => `<tr><td>${esc(c.effectiveFrom)}</td><td class="r">${c.manual ? `<span class="tag warn">要手計算</span>` : yen(c.unitCost)}</td>
+        <td class="r">${yen(c.shippingCost)}</td><td class="r">${yen(c.packagingCost)}</td></tr>`).join("")}</tbody></table></div>` : "";
+    $("pd-form-wrap").classList.remove("hidden");
+    $("pd-form-title").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  $("btn-pd-new").addEventListener("click", () => {
+    if (!currentCase) { $("pd-msg").textContent = "ヘッダーで案件を選んでください"; return; }
+    pdOpen(null);
+  });
+  $("btn-pd-cancel").addEventListener("click", () => { $("pd-form-wrap").classList.add("hidden"); pdEditing = null; });
+  $("products").addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-pd-edit]");
+    if (!b) return;
+    const d = await get(`/api/products/one?id=${encodeURIComponent(b.dataset.pdEdit)}`);
+    if (d.product) pdOpen(d.product);
+  });
+  $("btn-pd-save").addEventListener("click", async () => {
+    const body = { caseId: pdEditing ? pdEditing.caseId : currentCase };
+    if (pdEditing) body.id = pdEditing.id;
+    PD_FIELDS.forEach((f) => { body[f] = String($("pd-" + f).value ?? "").trim(); });
+    $("btn-pd-save").disabled = true;
+    try {
+      const r = await fetch("/api/products/save", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const d = await r.json();
+      if (!r.ok) { $("pd-msg").innerHTML = `<span class="tag ng">保存できません</span> ${(d.errors || [d.error]).map(esc).join(" ／ ")}`; return; }
+      $("pd-msg").innerHTML = `<span class="tag ok">保存しました</span>`;
+      await loadProducts();
+      const one = await get(`/api/products/one?id=${encodeURIComponent(d.id)}`);
+      if (one.product) { pdOpen(one.product); $("pd-msg").innerHTML = `<span class="tag ok">保存しました</span>`; }
+    } finally { $("btn-pd-save").disabled = false; }
+  });
+  $("btn-pd-del").addEventListener("click", async () => {
+    if (!pdEditing) return;
+    const btn = $("btn-pd-del");
+    // ブラウザのダイアログは使わず、ボタンをもう一度押してもらう
+    if (btn.dataset.confirm !== "1") { btn.dataset.confirm = "1"; btn.textContent = "本当に削除する"; return; }
+    const r = await fetch("/api/products/delete", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: pdEditing.id, caseId: pdEditing.caseId, sku: pdEditing.sku }) });
+    const d = await r.json();
+    if (!r.ok) { $("pd-msg").innerHTML = `<span class="tag ng">削除できません</span> ${esc(d.error)}`; btn.textContent = "削除"; delete btn.dataset.confirm; return; }
+    $("pd-form-wrap").classList.add("hidden"); pdEditing = null;
+    await loadProducts();
+  });
+
+  /* ---------- 商品マスタ：スプレッドシート用に書き出す ---------- */
+  $("btn-pd-exp").addEventListener("click", async () => {
+    const all = $("pd-exp-scope").value === "all";
+    const d = await get(`/api/products/export?${all ? "all=1" : `case_id=${encodeURIComponent(currentCase)}`}`);
+    const ta = $("pd-exp-text");
+    ta.value = d.text || "";
+    ta.classList.remove("hidden");
+    ta.focus(); ta.select();
+    $("btn-pd-exp-copy").disabled = false; $("btn-pd-exp-save").disabled = false;
+    $("pd-exp-msg").textContent = `${d.rows}件を出しました（見出しつき）`;
+  });
+  $("btn-pd-exp-copy").addEventListener("click", async () => {
+    const ta = $("pd-exp-text");
+    ta.focus(); ta.select();
+    let ok = false;
+    try { await navigator.clipboard.writeText(ta.value); ok = true; } catch (e) { try { ok = document.execCommand("copy"); } catch (e2) { ok = false; } }
+    $("pd-exp-msg").innerHTML = ok ? `<span class="tag ok">コピーしました</span> スプレッドシートの A1 を選んで貼り付けてください`
+      : "ボタンでコピーできませんでした。欄が選択された状態なので Ctrl+C（Macは ⌘C）を押してください";
+  });
+  $("btn-pd-exp-save").addEventListener("click", () => {
+    // BOM は付けない（Googleスプレッドシートで読み込むと先頭の見出しに余計な文字が入ることがあるため）
+    const blob = new Blob([$("pd-exp-text").value], { type: "text/tab-separated-values;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `商品マスタ_${$("pd-exp-scope").value === "all" ? "全案件" : caseName()}_${jstDay(0)}.tsv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
 
   $("btn-rakuten-items").addEventListener("click", async () => {
     const btn = $("btn-rakuten-items");

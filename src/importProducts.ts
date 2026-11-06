@@ -44,6 +44,7 @@ export interface ParsedProduct {
 /** 見出しのゆらぎを吸収する（全角空白・単位つき・大文字小文字） */
 function normalizeHeader(h: string): string {
   return h
+    .replace(/^\ufeff/, "")
     .replace(/[（(][^）)]*[）)]/g, "")
     .replace(/[\s　]/g, "")
     .toLowerCase();
@@ -117,6 +118,75 @@ function toDate(v: string): string | null {
   return iso;
 }
 
+/**
+ * 1行ぶんを検証して、取り込める形にする。スプレッドシートの取り込みと、画面からの追加・編集の両方で使う
+ * （どちらから入れても同じ決まりで弾くため）
+ */
+export function validateProductRow(r: Row, line: number, today: string): ParsedProduct | RowError {
+  r = { caseName: "", sku: "", name: "", ...r };
+  const msgs: string[] = [];
+  if (!r.caseName) msgs.push("案件が空です");
+  if (!r.sku) msgs.push("自社SKUが空です");
+  if (!r.name) msgs.push("商品名が空です");
+  if (!r.amazonSku && !r.rakutenId) msgs.push("Amazon SKU と 楽天 商品管理番号 の両方が空です（どちらか一方は必要）");
+
+  const costManual = isManualMark(r.unitCost ?? "");
+  const unitCost = costManual ? null : toInt(r.unitCost ?? "");
+  if (!costManual && Number.isNaN(unitCost)) {
+    msgs.push("仕入原価が数値ではありません（買い方で原価が変わる商品は「?」と入れてください）");
+  }
+  const shippingCost = toInt(r.shippingCost ?? "") ?? 0;
+  if (Number.isNaN(shippingCost)) msgs.push("自社発送の送料が数値ではありません");
+  const packagingCost = toInt(r.packagingCost ?? "") ?? 0;
+  if (Number.isNaN(packagingCost)) msgs.push("梱包資材費が数値ではありません");
+  const targetMargin = toInt(r.targetMargin ?? "");
+  if (Number.isNaN(targetMargin)) msgs.push("目標粗利率が数値ではありません");
+  const stockAlertDays = toInt(r.stockAlertDays ?? "");
+  if (Number.isNaN(stockAlertDays)) msgs.push("在庫アラート日数が数値ではありません");
+
+  let effectiveFrom = today;
+  if (r.effectiveFrom) {
+    const d = toDate(r.effectiveFrom);
+    if (!d) msgs.push("原価の適用開始日は YYYY-MM-DD の形式で入れてください");
+    else effectiveFrom = d;
+  }
+
+  const amazonFulfillment = r.amazonFulfillment ? FULFILLMENT[r.amazonFulfillment.toLowerCase()] : null;
+  if (r.amazonFulfillment && !amazonFulfillment) msgs.push(`Amazon 発送方法「${r.amazonFulfillment}」は選べません`);
+  const rakutenFulfillment = r.rakutenFulfillment ? FULFILLMENT[r.rakutenFulfillment.toLowerCase()] : null;
+  if (r.rakutenFulfillment && !rakutenFulfillment) msgs.push(`楽天 発送方法「${r.rakutenFulfillment}」は選べません`);
+
+  const adPolicy = r.adPolicy ? AD_POLICY[r.adPolicy] : "profit";
+  if (r.adPolicy && !adPolicy) msgs.push(`広告方針「${r.adPolicy}」は選べません`);
+  const status = r.status ? STATUS[r.status] : "active";
+  if (r.status && !status) msgs.push(`状態「${r.status}」は選べません`);
+
+  if (r.jan && !/^\d{8}$|^\d{13}$/.test(r.jan)) msgs.push("JANコードは8桁か13桁の数字です");
+
+  if (msgs.length) return { line, sku: r.sku || "(SKU未入力)", messages: msgs };
+  return {
+    line,
+    caseName: r.caseName,
+    sku: r.sku,
+    name: r.name,
+    jan: r.jan || null,
+    amazonSku: r.amazonSku || null,
+    asin: r.asin || null,
+    amazonFulfillment,
+    rakutenId: r.rakutenId || null,
+    rakutenFulfillment,
+    unitCost,
+    costManual,
+    effectiveFrom,
+    shippingCost,
+    packagingCost,
+    targetMargin,
+    adPolicy: adPolicy || "profit",
+    stockAlertDays,
+    status: status || "active",
+  };
+}
+
 export function parseProductSheet(
   text: string,
   today: string
@@ -150,71 +220,9 @@ export function parseProductSheet(
     if (!r.caseName && !r.sku && !r.name) { skipped++; continue; }
     if (r.caseName.startsWith("（記入例）") || r.caseName.startsWith("(記入例)")) { skipped++; continue; }
 
-    const msgs: string[] = [];
-    if (!r.caseName) msgs.push("案件が空です");
-    if (!r.sku) msgs.push("自社SKUが空です");
-    if (!r.name) msgs.push("商品名が空です");
-    if (!r.amazonSku && !r.rakutenId) msgs.push("Amazon SKU と 楽天 商品管理番号 の両方が空です（どちらか一方は必要）");
-
-    const costManual = isManualMark(r.unitCost ?? "");
-    const unitCost = costManual ? null : toInt(r.unitCost ?? "");
-    if (!costManual && Number.isNaN(unitCost)) {
-      msgs.push("仕入原価が数値ではありません（買い方で原価が変わる商品は「?」と入れてください）");
-    }
-    const shippingCost = toInt(r.shippingCost ?? "") ?? 0;
-    if (Number.isNaN(shippingCost)) msgs.push("自社発送の送料が数値ではありません");
-    const packagingCost = toInt(r.packagingCost ?? "") ?? 0;
-    if (Number.isNaN(packagingCost)) msgs.push("梱包資材費が数値ではありません");
-    const targetMargin = toInt(r.targetMargin ?? "");
-    if (Number.isNaN(targetMargin)) msgs.push("目標粗利率が数値ではありません");
-    const stockAlertDays = toInt(r.stockAlertDays ?? "");
-    if (Number.isNaN(stockAlertDays)) msgs.push("在庫アラート日数が数値ではありません");
-
-    let effectiveFrom = today;
-    if (r.effectiveFrom) {
-      const d = toDate(r.effectiveFrom);
-      if (!d) msgs.push("原価の適用開始日は YYYY-MM-DD の形式で入れてください");
-      else effectiveFrom = d;
-    }
-
-    const amazonFulfillment = r.amazonFulfillment ? FULFILLMENT[r.amazonFulfillment.toLowerCase()] : null;
-    if (r.amazonFulfillment && !amazonFulfillment) msgs.push(`Amazon 発送方法「${r.amazonFulfillment}」は選べません`);
-    const rakutenFulfillment = r.rakutenFulfillment ? FULFILLMENT[r.rakutenFulfillment.toLowerCase()] : null;
-    if (r.rakutenFulfillment && !rakutenFulfillment) msgs.push(`楽天 発送方法「${r.rakutenFulfillment}」は選べません`);
-
-    const adPolicy = r.adPolicy ? AD_POLICY[r.adPolicy] : "profit";
-    if (r.adPolicy && !adPolicy) msgs.push(`広告方針「${r.adPolicy}」は選べません`);
-    const status = r.status ? STATUS[r.status] : "active";
-    if (r.status && !status) msgs.push(`状態「${r.status}」は選べません`);
-
-    if (r.jan && !/^\d{8}$|^\d{13}$/.test(r.jan)) msgs.push("JANコードは8桁か13桁の数字です");
-
-    if (msgs.length) {
-      errors.push({ line: i + 1, sku: r.sku || "(SKU未入力)", messages: msgs });
-      continue;
-    }
-
-    rows.push({
-      line: i + 1,
-      caseName: r.caseName,
-      sku: r.sku,
-      name: r.name,
-      jan: r.jan || null,
-      amazonSku: r.amazonSku || null,
-      asin: r.asin || null,
-      amazonFulfillment,
-      rakutenId: r.rakutenId || null,
-      rakutenFulfillment,
-      unitCost,
-      costManual,
-      effectiveFrom,
-      shippingCost,
-      packagingCost,
-      targetMargin,
-      adPolicy: adPolicy || "profit",
-      stockAlertDays,
-      status: status || "active",
-    });
+    const v = validateProductRow(r, i + 1, today);
+    if ("messages" in v) { errors.push(v); continue; }
+    rows.push(v);
   }
 
   // 同じ案件のなかで自社SKUが重複していないか
