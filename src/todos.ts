@@ -133,6 +133,22 @@ export async function doneInMonth(db: D1Database, caseId: string, month: string)
   }));
 }
 
+/** 期間の中で「対応済み」「自由記述」にしたもの（週次レポート用）。期間の最後の操作で判断する */
+export async function actionsBetween(db: D1Database, caseId: string, from: string, to: string): Promise<DoneItem[]> {
+  const { results } = await db.prepare(
+    `SELECT e.key, e.status, e.title, e.basis, e.area, e.day, e.changed_by, e.note
+       FROM todo_events e
+      WHERE e.case_id = ? AND e.day BETWEEN ? AND ? AND e.changed_by IS NOT 'system'
+        AND e.changed_at = (SELECT MAX(changed_at) FROM todo_events x
+                             WHERE x.case_id = e.case_id AND x.key = e.key AND x.day BETWEEN ? AND ? AND x.changed_by IS NOT 'system')
+      ORDER BY e.day, e.changed_at`
+  ).bind(caseId, from, to, from, to).all<Record<string, string | null>>();
+  return results.filter((r) => r.status === "done" || r.status === "other").map((r) => ({
+    key: String(r.key), title: String(r.title ?? ""), basis: r.basis, area: r.area, day: String(r.day), by: r.changed_by, note: r.note,
+    status: r.status as "done" | "other",
+  }));
+}
+
 /** 「今はしない」にしたもの（画面でまとめて見せる） */
 export async function skippedTodos(db: D1Database, caseId: string) {
   const { results } = await db.prepare(

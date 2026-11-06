@@ -118,6 +118,33 @@
   .msg ul{margin:7px 0 0;padding-left:1.2em}
   .empty{color:var(--muted);font-size:13px;padding:14px 0}
   .hidden{display:none!important}
+  /* 週次レポート（画面のプレビューと、PDF用の印刷） */
+  .rep{background:#fff;color:#161F1E;border:1px solid var(--line);border-radius:6px;padding:32px 36px;
+    --ink:#161F1E;--ink-2:#3B4846;--muted:#66746F;--line:#DCE3E0;--surface:#fff;--surface-2:#EFF3F2;
+    --series-1:#2a78d6;--grid:#E6EBE9;--chart-surface:#fff;--ok:#2C6A40;--ok-soft:#E3F0E7;--warn:#855200;--warn-soft:#F7EEDC;
+    --risk:#9E2F26;--risk-soft:#F7E7E4;--amazon:#8A5A00;--rakuten:#A5232D}
+  .rep h1{font-size:20px;margin:0 0 4px}
+  .rep .meta{font-size:12px;color:var(--muted);margin:0 0 18px}
+  .rep h2{font-size:14.5px;margin:22px 0 8px;padding-bottom:5px;border-bottom:2px solid #145A60;color:#161F1E}
+  .rep h3{font-size:13px;margin:14px 0 6px;color:#161F1E}
+  .rep .kpis .kpi{background:#F6F8F7;border-color:#DCE3E0}
+  .rep table{min-width:0;font-size:12px}
+  .rep th,.rep td{padding:5px 8px}
+  .rep .tablewrap{border-color:#DCE3E0;background:#fff}
+  .rep thead th{background:#EFF3F2;color:#66746F}
+  .rep .note{color:#66746F}
+  .rep ul{margin:4px 0 0;padding-left:1.2em;font-size:12.5px}
+  .rep .sec{break-inside:avoid}
+  @media print {
+    @page{size:A4;margin:12mm}
+    body{background:#fff!important}
+    header,.nav2wrap,nav,#rep-controls,.tip,main>section:not(#p-report),.msg.ng{display:none!important}
+    main{padding:0;max-width:none}
+    .rep{border:none;padding:0}
+    .rep .tablewrap{overflow:visible}
+    .rep h2{break-after:avoid}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  }
   /* ヘッダーの案件選択。ここで選んだ案件が全タブに効く */
   .case-pick{display:flex;gap:8px;align-items:center}
   .case-pick label{font-size:12px;color:var(--muted)}
@@ -171,7 +198,7 @@
 <body>
 <header>
   <div class="bar">
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.12.0</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.13.0</span></div>
     <div class="picks">
       <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
       <div class="range-pick" id="range-pick" title="">
@@ -184,6 +211,7 @@
           <option value="last90">直近90日</option>
           <option value="this_month">今月</option>
           <option value="last_month">先月</option>
+          <option value="last_week">先週（月〜日）</option>
           <option value="all">全期間</option>
           <option value="custom">期間を指定</option>
         </select>
@@ -211,6 +239,7 @@
       <button role="tab" id="t-sales" aria-selected="false">売上</button>
       <button role="tab" id="t-ads" aria-selected="false">広告</button>
       <button role="tab" id="t-stock" aria-selected="false">在庫</button>
+      <button role="tab" id="t-report" aria-selected="false">レポート</button>
     </nav>
     <nav class="nav2 hidden" role="tablist" aria-label="設定の画面" id="sub-set">
       <button role="tab" id="t-cases" aria-selected="false">案件</button>
@@ -630,6 +659,26 @@
   </section>
 
   <!-- 設定 -->
+  <!-- 週次レポート -->
+  <section id="p-report" class="hidden">
+    <div id="rep-controls">
+      <h2>週次レポート<span class="hint">ヘッダーで選んだ案件・期間で作ります</span></h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0">
+          <button class="act" id="btn-rep-week">期間を先週（月〜日）にする</button>
+          <label style="display:flex;gap:6px;align-items:center;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="rep-cost" checked>原価・粗利を載せる</label>
+          <button class="act primary" id="btn-rep-xlsx">Excelで保存</button>
+          <button class="act primary" id="btn-rep-pdf">PDFで保存（印刷）</button>
+          <span class="note" id="rep-msg"></span>
+        </div>
+        <p class="note" style="margin-top:8px">先方資料の素材として、下のプレビューと同じ内容を Excel（シートごとに表）と PDF で書き出します。
+          PDF は印刷画面が開くので、送り先で「PDFに保存」を選んでください。お客様にそのまま渡すときは「原価・粗利を載せる」を外すと、原価・粗利・粗利率の列と数字を省きます。</p>
+      </div>
+    </div>
+    <div id="rep"></div>
+  </section>
+
   <!-- 案件の管理 -->
   <section id="p-cases" class="hidden">
     <div>
@@ -839,17 +888,17 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.12.0";
+  const UI_VERSION = "0.13.0";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
   const FFL = { fba: "FBA", own: "自社発送", mcf: "マルチチャネル" };
   const POLICY = { profit: "利益重視", share: "シェア獲得", nurture: "育成中" };
 
-  const tabs = [["t-dash", "p-dash"], ["t-master", "p-master"], ["t-sales", "p-sales"], ["t-stock", "p-stock"], ["t-ads", "p-ads"], ["t-settings", "p-settings"], ["t-conn", "p-conn"], ["t-status", "p-status"], ["t-cases", "p-cases"]];
+  const tabs = [["t-dash", "p-dash"], ["t-master", "p-master"], ["t-sales", "p-sales"], ["t-stock", "p-stock"], ["t-ads", "p-ads"], ["t-settings", "p-settings"], ["t-conn", "p-conn"], ["t-status", "p-status"], ["t-cases", "p-cases"], ["t-report", "p-report"]];
   // 2段のメニュー。上の段（グループ）ごとに、最後に開いていた画面を覚えておく
   const GROUPS = {
-    dash: { btn: "grp-dash", sub: "sub-dash", tabs: ["t-dash", "t-sales", "t-ads", "t-stock"], last: "t-dash" },
+    dash: { btn: "grp-dash", sub: "sub-dash", tabs: ["t-dash", "t-sales", "t-ads", "t-stock", "t-report"], last: "t-dash" },
     set: { btn: "grp-set", sub: "sub-set", tabs: ["t-cases", "t-settings", "t-conn", "t-status", "t-master"], last: "t-cases" },
   };
   const groupOf = (t) => Object.keys(GROUPS).find((g) => GROUPS[g].tabs.includes(t));
@@ -910,13 +959,14 @@
     if (p === "p-settings") return loadSettings();
     if (p === "p-conn") return loadConnections();
     if (p === "p-cases") return loadCases();
+    if (p === "p-report") return loadReport();
   }
   const activePanel = () => (tabs.find(([t]) => $(t).getAttribute("aria-selected") === "true") || tabs[0])[1];
 
   /* ---------- 期間の選択（ヘッダー） ---------- */
   // 期間は案件をまたいで共通。「全期間」だけは案件ごとにデータがある範囲を聞いて決める
   const jstDay = (n) => new Date(Date.now() + 9 * 3600 * 1000 - n * 86400000).toISOString().slice(0, 10);
-  const RANGE_TABS = ["p-dash", "p-sales", "p-ads"];
+  const RANGE_TABS = ["p-dash", "p-sales", "p-ads", "p-report"];
   let range = { preset: "last30", from: jstDay(30), to: jstDay(1) };
   function presetDates(p) {
     const y = jstDay(1);
@@ -925,6 +975,12 @@
     if (p === "last14") return [jstDay(14), y];
     if (p === "last90") return [jstDay(90), y];
     if (p === "this_month") return [y.slice(0, 7) + "-01", y];
+    if (p === "last_week") {
+      const t = new Date(jstDay(0) + "T00:00:00Z");
+      const dow = (t.getUTCDay() + 6) % 7;
+      const end = new Date(t.getTime() - (dow + 1) * 86400000);
+      return [new Date(end.getTime() - 6 * 86400000).toISOString().slice(0, 10), end.toISOString().slice(0, 10)];
+    }
     if (p === "last_month") {
       const end = new Date(Date.parse(y.slice(0, 7) + "-01T00:00:00Z") - 86400000).toISOString().slice(0, 10);
       return [end.slice(0, 7) + "-01", end];
@@ -2460,6 +2516,235 @@
       <td class="r">${p.costManual ? `<span class="tag warn">要手計算</span>` : yen(p.gross)}</td>
       <td class="r">${p.costManual ? "—" : pctS(p.grossRate)}</td><td class="r">${yen(p.adCost)}</td></tr>`).join("") || emptyRow(7, "この期間の売上がありません。");
 
+  }
+
+  /* ---------- 週次レポート ---------- */
+  let repData = null;
+  const nf = (v) => (v == null ? "—" : Number(v).toLocaleString("ja-JP"));
+  const LV_JA = { out: "在庫切れ", risk: "欠品間近", watch: "注意", ok: "問題なし", unknown: "判定不可" };
+  async function loadReport() {
+    if (!currentCase) return;
+    $("rep-msg").textContent = "作成中…";
+    repData = await get(`/api/report?case_id=${encodeURIComponent(currentCase)}&${rangeQS()}`);
+    if (repData.error) { $("rep-msg").textContent = repData.error; return; }
+    $("rep-msg").textContent = "";
+    renderReport();
+  }
+  function renderReport() {
+    const d = repData; if (!d) return;
+    const s = d.summary, P = s.period, cost = $("rep-cost").checked;
+    const adCost = s.ads.totals.reduce((t, a) => t + a.cost, 0), adSales = s.ads.totals.reduce((t, a) => t + a.sales, 0);
+    const tbl = (head, rows, rightFrom = 99) => rows.length ? `<div class="tablewrap"><table><thead><tr>${head.map((h, i) =>
+      `<th${i >= rightFrom ? ' class="r"' : ""}>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((v, i) =>
+      `<td${i >= rightFrom ? ' class="r"' : ""} style="white-space:normal">${v}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
+      : `<p class="note">該当なし</p>`;
+    const chg = s.sales.changeRate == null ? "前期間比 —" : `前期間比 ${s.sales.changeRate >= 0 ? "+" : ""}${s.sales.changeRate}%`;
+    const kpis = [
+      kpi("売上", yen(s.sales.total.revenue), chg),
+      kpi("販売数", nf(s.sales.total.units) + "個", `1日平均 ${yen(s.sales.perDay)}`),
+      cost ? kpi("粗利（広告費前）", yen(s.pl.gross), `粗利率 ${pctS(s.pl.grossRate)}`) : "",
+      kpi("広告費", s.ads.totals.length ? yen(adCost) : "—", s.ads.totals.length ? `ROAS ${adCost ? Math.round(adSales / adCost * 100) / 100 : "—"}` : ""),
+      kpi("TACoS", pctS(s.ads.tacos), "広告費 ÷ 総売上"),
+      cost ? kpi("広告費を引いた利益", yen(s.ads.profitAfterAds), "粗利 − 広告費") : "",
+    ].join("");
+    const plHead = cost ? ["モール", "売上", "販売数", "原価", "手数料", "粗利", "粗利率"] : ["モール", "売上", "販売数"];
+    const plRows = s.pl.byMall.map((m) => {
+      const cov = m.revenue - m.revenueWithoutCost;
+      const base = [esc(MALL_JA[m.mall] || m.mall), yen(m.revenue), nf(m.units)];
+      return cost ? [...base, yen(m.cost), yen(m.fees) + (m.feesEst > 0 ? "（概算含む）" : ""), yen(m.gross),
+        cov > 0 ? (Math.round(m.gross / cov * 1000) / 10) + "%" : "—"] : base;
+    });
+    const prodHead = cost ? ["SKU", "商品名", "販売数", "売上", "粗利", "粗利率", "広告費"] : ["SKU", "商品名", "販売数", "売上", "広告費"];
+    const prodRows = s.products.map((p) => cost
+      ? [esc(p.sku), esc(p.name), nf(p.units), yen(p.revenue), p.costManual ? "要手計算" : yen(p.gross), p.costManual ? "—" : pctS(p.grossRate), yen(p.adCost)]
+      : [esc(p.sku), esc(p.name), nf(p.units), yen(p.revenue), yen(p.adCost)]);
+    const inv = s.inventory.filter((r) => ["out", "risk", "watch"].includes(r.level));
+    const okN = s.inventory.length - inv.length;
+    const nextTodo = s.todo.filter((t) => t.priority !== "info" && (t.status || "open") === "open");
+
+    $("rep").innerHTML = `<div class="rep">
+      <h1>${esc(s.caseName)}　週次レポート</h1>
+      <p class="meta">集計期間：${esc(P.from)} 〜 ${esc(P.to)}（${P.days}日間）／比較：直前の${P.days}日（${esc(s.prev.from)} 〜 ${esc(s.prev.to)}）／作成：${esc(s.generatedAt)}／対象：${esc(s.malls.map((m) => MALL_JA[m] || m).join("・"))}</p>
+      <div class="kpis">${kpis}</div>
+      <div class="sec"><h2>1. 売上の推移</h2><div id="rep-chart"></div></div>
+      <div class="sec"><h2>2. モール別</h2>${tbl(plHead, plRows, 1)}</div>
+      <div class="sec"><h2>3. 商品別</h2>${tbl(prodHead, prodRows, 2)}</div>
+      <div class="sec"><h2>4. 広告</h2>
+        ${tbl(["モール", "広告費", "広告経由売上", "ROAS", "クリック", "注文", "帰属期間"], s.ads.totals.map((a) =>
+          [esc(MALL_JA[a.mall] || a.mall), yen(a.cost), yen(a.sales), a.roas ?? "—", nf(a.clicks), nf(a.orders), esc(a.attribution || "—")]), 1)}
+        <h3>キャンペーン別（広告費の多い順）</h3>
+        ${tbl(["モール", "種類", "キャンペーン", "広告費", "広告経由売上", "ROAS"], s.ads.campaigns.slice(0, 10).map((c) =>
+          [esc(MALL_JA[c.mall] || c.mall), esc(ADTYPE_JA[c.adType] || c.adType || "—"), esc(c.name), yen(c.cost), yen(c.sales), c.roas ?? "—"]), 3)}
+        <h3>成果の出ている検索語</h3>
+        ${tbl(["検索語", "種類", "広告費", "広告経由売上", "ROAS", "注文"], s.ads.winningTerms.map((w) =>
+          [esc(w.term), esc(ADTYPE_JA[w.adType] || w.adType), yen(w.cost), yen(w.sales), w.roas, nf(w.orders)]), 2)}
+        <h3>売上につながっていない検索語</h3>
+        ${tbl(["検索語", "種類", "広告費", "クリック"], s.ads.wastedTerms.map((w) =>
+          [esc(w.term), esc(ADTYPE_JA[w.adType] || w.adType), yen(w.cost), nf(w.clicks)]), 2)}
+      </div>
+      <div class="sec"><h2>5. 在庫</h2>
+        ${tbl(["状態", "モール", "SKU", "商品名", "販売可能", "残り日数", "理由"], inv.map((r) =>
+          [LV_JA[r.level], esc(MALL_JA[r.mall] || r.mall), esc(r.sku), esc(r.name), nf(r.qty), r.daysOfSupply ?? "—", esc(r.reason)]), 4)}
+        <p class="note" style="margin-top:4px">ほか ${okN} 件は問題なし・判定不可。在庫は作成時点の状態です。</p>
+      </div>
+      <div class="sec"><h2>6. 期間中に対応したこと</h2>
+        ${d.actions.length ? `<ul>${d.actions.map((a) => `<li>${esc(a.day.slice(5).replace("-", "/"))}　${esc(a.status === "other"
+          ? `${a.note}（${a.title.replace(/。.*$/, "")}）` : (a.note || a.title.replace(/。.*$/, "")))}</li>`).join("")}</ul>`
+          : `<p class="note">期間中に「対応済み」にした項目はありません。</p>`}
+      </div>
+      <div class="sec"><h2>7. 次にやること</h2>
+        ${nextTodo.length ? `<ul>${nextTodo.map((t) => `<li>${esc(t.text)}${t.basis ? `<span class="note">（${esc(t.basis)}）</span>` : ""}</li>`).join("")}</ul>`
+          : `<p class="note">未対応の項目はありません。</p>`}
+      </div>
+      <p class="note" style="margin-top:18px">注記：広告の売上は帰属期間がモール・種類ごとに異なります（楽天RPP 30日／Amazon SP 7日／SB 14日）。
+        ${s.malls.includes("rakuten") ? "楽天の手数料は請求明細を取り込むまで料率からの概算です。" : ""}${cost ? "原価が分からない商品の売上は粗利の計算から除いています。" : ""}</p>
+    </div>`;
+
+    // 売上の推移（データの無い日は空ける）
+    const byDate = new Map(s.sales.trend.map((t) => [t.date, t]));
+    const days = [];
+    for (let t = Date.parse(P.from); t <= Date.parse(P.to); t += 86400000) {
+      const k = new Date(t).toISOString().slice(0, 10); const x = byDate.get(k);
+      days.push({ date: k, revenue: x ? x.revenue : 0, units: x ? x.units : 0 });
+    }
+    const bk = bucketize(days, ["revenue", "units"]);
+    columnChart($("rep-chart"), bk.rows.map((x) => ({ label: x.label, value: x.revenue,
+      tip: `<div><strong>${esc(x.title)}</strong></div><div><span class="k">売上</span><span class="v">${yen(x.revenue)}</span></div>` })), yen);
+  }
+  $("rep-cost").addEventListener("change", renderReport);
+  $("btn-rep-week").addEventListener("click", () => changeRange({ preset: "last_week" }));
+  $("btn-rep-pdf").addEventListener("click", () => {
+    if (!repData) return;
+    // 印刷のときはライトの色で出す（ダークのまま印刷すると黒い紙になるため）
+    const prev = document.documentElement.dataset.theme;
+    document.documentElement.dataset.theme = "light";
+    const old = document.title;
+    document.title = `週次レポート_${caseName()}_${range.from}_${range.to}`;
+    renderReport();
+    setTimeout(() => {
+      window.print();
+      document.title = old;
+      if (prev) document.documentElement.dataset.theme = prev; else delete document.documentElement.dataset.theme;
+    }, 100);
+  });
+
+  /** ExcelJS は大きいので、Excel を作るときだけ読み込む（アプリ内に置いてあるので外部の CDN は使わない） */
+  function loadExcelJS() {
+    if (window.ExcelJS) return Promise.resolve(window.ExcelJS);
+    return new Promise((ok, ng) => {
+      const sc = document.createElement("script");
+      sc.src = "/vendor/exceljs-4.4.0.min.js";
+      sc.onload = () => ok(window.ExcelJS); sc.onerror = () => ng(new Error("ExcelJS を読み込めませんでした"));
+      document.head.appendChild(sc);
+    });
+  }
+  $("btn-rep-xlsx").addEventListener("click", async () => {
+    if (!repData) return;
+    $("rep-msg").textContent = "Excelを作成中…";
+    try {
+      const ExcelJS = await loadExcelJS();
+      const blob = await buildWorkbook(ExcelJS, repData, $("rep-cost").checked);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `週次レポート_${caseName()}_${repData.summary.period.from}_${repData.summary.period.to}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      $("rep-msg").innerHTML = `<span class="tag ok">保存しました</span>`;
+    } catch (e) {
+      $("rep-msg").textContent = "Excelを作れませんでした：" + (e && e.message ? e.message : e);
+    }
+  });
+
+  async function buildWorkbook(ExcelJS, d, cost) {
+    const s = d.summary, P = s.period;
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "モール横断ダッシュボード";
+    const YEN = '"¥"#,##0', INT = "#,##0", PCT = '0.0"%"', RATIO = "0.00";
+    const HEAD = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2EDEC" } };
+    /** 1枚のシートに、見出しつきの表を置く。fmt は列ごとの数値の書式 */
+    function sheet(name, title, head, rows, fmt = [], widths = []) {
+      const ws = wb.addWorksheet(name, { views: [{ state: "frozen", ySplit: 3 }] });
+      ws.addRow([title]).font = { bold: true, size: 13 };
+      ws.addRow([`${s.caseName}／${P.from} 〜 ${P.to}（${P.days}日間）`]).font = { color: { argb: "FF66746F" }, size: 9 };
+      const h = ws.addRow(head);
+      h.font = { bold: true }; h.eachCell((c) => { c.fill = HEAD; c.border = { bottom: { style: "thin", color: { argb: "FFC3CECA" } } }; });
+      rows.forEach((r) => {
+        const row = ws.addRow(r.map((v) => (v === undefined ? null : v)));
+        fmt.forEach((f, i) => { if (f) row.getCell(i + 1).numFmt = f; });
+      });
+      head.forEach((hh, i) => { ws.getColumn(i + 1).width = widths[i] || Math.max(10, Math.min(40, String(hh).length * 2 + 4)); });
+      if (!rows.length) ws.addRow(["（該当なし）"]).font = { color: { argb: "FF66746F" } };
+      return ws;
+    }
+    const adCost = s.ads.totals.reduce((t, a) => t + a.cost, 0), adSales = s.ads.totals.reduce((t, a) => t + a.sales, 0);
+
+    // サマリ
+    const sum = [
+      ["売上", s.sales.total.revenue, YEN], ["直前の期間の売上", s.sales.prev.revenue, YEN],
+      ["前期間比（%）", s.sales.changeRate, PCT], ["販売数", s.sales.total.units, INT], ["1日あたりの売上", s.sales.perDay, YEN],
+      ...(cost ? [["粗利（広告費前）", s.pl.gross, YEN], ["粗利率（%）", s.pl.grossRate, PCT], ["損益分岐ROAS", s.pl.breakEvenRoas, RATIO]] : []),
+      ["広告費", s.ads.totals.length ? adCost : null, YEN], ["広告経由売上", s.ads.totals.length ? adSales : null, YEN],
+      ["ROAS", adCost ? Math.round(adSales / adCost * 100) / 100 : null, RATIO], ["TACoS（%）", s.ads.tacos, PCT],
+      ...(cost ? [["広告費を引いた利益", s.ads.profitAfterAds, YEN]] : []),
+    ];
+    const ws0 = sheet("サマリ", `${s.caseName} 週次レポート`, ["指標", "値"], sum.map(([k, v]) => [k, v]), [null, null], [26, 18]);
+    sum.forEach(([, , f], i) => { ws0.getRow(4 + i).getCell(2).numFmt = f; });
+    ws0.addRow([]);
+    ws0.addRow([`比較：直前の${P.days}日（${s.prev.from} 〜 ${s.prev.to}）／作成：${s.generatedAt}`]).font = { size: 9, color: { argb: "FF66746F" } };
+    ws0.addRow(["広告の売上は帰属期間がモール・種類ごとに異なります（楽天RPP 30日／Amazon SP 7日／SB 14日）"]).font = { size: 9, color: { argb: "FF66746F" } };
+
+    // 日別売上（データの無い日も行を作り、空欄にする）
+    const byDate = new Map(s.sales.trend.map((t) => [t.date, t]));
+    const dayRows = [];
+    for (let t = Date.parse(P.from); t <= Date.parse(P.to); t += 86400000) {
+      const k = new Date(t).toISOString().slice(0, 10); const x = byDate.get(k);
+      dayRows.push([k, x ? x.revenue : null, x ? x.units : null]);
+    }
+    sheet("日別売上", "日別の売上", ["日付", "売上", "販売数"], dayRows, [null, YEN, INT], [14, 14, 10]);
+
+    sheet("モール別", "モール別", cost ? ["モール", "売上", "販売数", "原価", "手数料", "うち概算", "粗利", "粗利率（%）", "原価不明の売上"] : ["モール", "売上", "販売数"],
+      s.pl.byMall.map((m) => { const cov = m.revenue - m.revenueWithoutCost; const base = [MALL_JA[m.mall] || m.mall, m.revenue, m.units];
+        return cost ? [...base, m.cost, m.fees, m.feesEst, m.gross, cov > 0 ? Math.round(m.gross / cov * 1000) / 10 : null, m.revenueWithoutCost] : base; }),
+      cost ? [null, YEN, INT, YEN, YEN, YEN, YEN, PCT, YEN] : [null, YEN, INT]);
+
+    sheet("商品別", "商品別（売上の多い順）", cost ? ["SKU", "商品名", "販売数", "売上", "粗利", "粗利率（%）", "広告費"] : ["SKU", "商品名", "販売数", "売上", "広告費"],
+      s.products.map((p) => cost ? [p.sku, p.name, p.units, p.revenue, p.costManual ? "要手計算" : p.gross, p.costManual ? null : p.grossRate, p.adCost]
+        : [p.sku, p.name, p.units, p.revenue, p.adCost]),
+      cost ? [null, null, INT, YEN, YEN, PCT, YEN] : [null, null, INT, YEN, YEN], [18, 46]);
+
+    sheet("広告", "広告（キャンペーン別）", ["モール", "種類", "キャンペーン", "広告費", "広告経由売上", "ROAS", "損益分岐を下回る"],
+      s.ads.campaigns.map((c) => [MALL_JA[c.mall] || c.mall, ADTYPE_JA[c.adType] || c.adType || "", c.name, c.cost, c.sales, c.roas, c.belowBreakEven ? "はい" : ""]),
+      [null, null, null, YEN, YEN, RATIO], [10, 8, 40]);
+
+    sheet("検索語", "検索語（成果の出ているもの／売上につながっていないもの）", ["区分", "検索語", "種類", "広告費", "広告経由売上", "ROAS", "注文・クリック"],
+      [...s.ads.winningTerms.map((w) => ["成果あり", w.term, ADTYPE_JA[w.adType] || w.adType, w.cost, w.sales, w.roas, w.orders]),
+       ...s.ads.wastedTerms.map((w) => ["売上0", w.term, ADTYPE_JA[w.adType] || w.adType, w.cost, 0, 0, w.clicks])],
+      [null, null, null, YEN, YEN, RATIO, INT], [10, 34]);
+
+    const a = d.advice;
+    sheet("提案_入札", "入札の見直し（提案）", ["操作", "モール", "キャンペーン", "広告グループ", "キーワード・ターゲット", "クリック", "広告費", "注文", "ROAS", "目標ROAS", "今", "提案", "理由"],
+      a.bids.map((b) => [{ up: "上げる", down: "下げる", pause: "停止を検討" }[b.action], MALL_JA[b.mall] || b.mall, b.campaign, b.adGroup, b.keyword,
+        b.clicks, b.cost, b.orders, b.roas, b.target.roas, b.currentBid ?? b.cpc, b.suggestedBid, b.reason]),
+      [null, null, null, null, null, INT, YEN, INT, RATIO, RATIO, YEN, YEN], [10, 8, 30, 16, 26, 8, 10, 6, 7, 9, 8, 8, 60]);
+    sheet("提案_除外", "除外キーワードの候補", ["検索語", "種類", "キャンペーン", "クリック", "広告費", "注文", "理由"],
+      a.negatives.map((x) => [x.searchTerm, x.kind === "product" ? "除外商品（ASIN）" : "除外キーワード", x.campaign, x.clicks, x.cost, x.orders, x.reason]),
+      [null, null, null, INT, YEN, INT], [28, 16, 30, 8, 10, 6, 60]);
+    sheet("提案_追加", "完全一致で追加する候補", ["検索語", "追加のしかた", "キャンペーン", "注文", "広告費", "ROAS", "提案入札", "理由"],
+      a.harvest.map((x) => [x.searchTerm, x.kind === "product" ? "商品ターゲティング" : "完全一致キーワード", x.campaign, x.orders, x.cost, x.roas, x.suggestedBid, x.reason]),
+      [null, null, null, INT, YEN, RATIO, YEN], [28, 18, 30, 6, 10, 7, 9, 60]);
+
+    sheet("在庫", "在庫（作成時点）", ["状態", "モール", "SKU", "商品名", "販売可能", "納品中", "1日あたり販売", "残り日数", "定期便30日見込み", "理由"],
+      s.inventory.map((r) => [LV_JA[r.level], MALL_JA[r.mall] || r.mall, r.sku, r.name, r.qty, r.inbound, r.velocity, r.daysOfSupply, r.snsNext30, r.reason]),
+      [null, null, null, null, INT, INT, "0.0", INT, INT], [10, 8, 18, 36]);
+
+    sheet("対応したこと", "期間中に対応したこと", ["日付", "分野", "内容", "メモ", "担当"],
+      d.actions.map((x) => [x.day, x.area || "", x.title, x.note || "", x.by || ""]), [], [12, 8, 60, 40, 24]);
+    sheet("次にやること", "次にやること（未対応）", ["優先度", "分野", "内容", "根拠"],
+      s.todo.filter((t) => t.priority !== "info" && (t.status || "open") === "open").map((t) => [PRI[t.priority][1], t.area, t.text, t.basis || ""]),
+      [], [12, 8, 70, 50]);
+
+    const buf = await wb.xlsx.writeBuffer();
+    return new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   }
 
   /* ---------- 案件の管理 ---------- */

@@ -212,7 +212,7 @@ export interface CaseSummary {
 
 export const PRESETS: Record<string, string> = {
   yesterday: "昨日", last7: "直近7日", last14: "直近14日", last30: "直近30日", last90: "直近90日",
-  this_month: "今月", last_month: "先月", all: "全期間", custom: "期間を指定",
+  this_month: "今月", last_month: "先月", last_week: "先週（月〜日）", all: "全期間", custom: "期間を指定",
 };
 
 /** 案件のデータがある範囲。売上と広告のうち、いちばん古い日〜いちばん新しい日 */
@@ -247,6 +247,14 @@ export async function resolvePeriod(
     case "last14": return { ...back(14), preset };
     case "last90": return { ...back(90), preset };
     case "this_month": { const f = `${y.slice(0, 7)}-01`; return { from: f, to: y, preset }; }
+    case "last_week": {
+      // 週次レポート用。直近の月曜〜日曜（今日が月曜なら、昨日までの1週間）
+      const t = new Date(`${jst(0)}T00:00:00Z`);
+      const dow = (t.getUTCDay() + 6) % 7;                  // 月曜＝0
+      const end = new Date(t.getTime() - (dow + 1) * 86400000);
+      const start = new Date(end.getTime() - 6 * 86400000);
+      return { from: start.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10), preset };
+    }
     case "last_month": {
       const first = new Date(`${y.slice(0, 7)}-01T00:00:00Z`);
       const end = new Date(first.getTime() - 86400000).toISOString().slice(0, 10);
@@ -356,7 +364,7 @@ const daysBetween = (a: string, b: string) => Math.round((Date.parse(b) - Date.p
 export async function buildCaseSummary(
   db: D1Database, caseId: string,
   q: { preset?: string | null; from?: string | null; to?: string | null } = {},
-  opts: { trackTodos?: boolean } = {},
+  opts: { trackTodos?: boolean; productLimit?: number } = {},
 ): Promise<CaseSummary | null> {
   const c = await db.prepare("SELECT id, name FROM cases WHERE id = ?").bind(caseId).first<{ id: string; name: string }>();
   if (!c) return null;
@@ -439,8 +447,8 @@ export async function buildCaseSummary(
               AND a.date BETWEEN ? AND ?) AS ad_cost
        FROM daily_sales s JOIN products p ON p.id = s.product_id
       WHERE s.case_id = ? AND s.date BETWEEN ? AND ?
-      GROUP BY p.id ORDER BY SUM(s.revenue) DESC LIMIT 15`
-  ).bind(from, to, caseId, from, to).all<Record<string, string | number | null>>();
+      GROUP BY p.id ORDER BY SUM(s.revenue) DESC LIMIT ?`
+  ).bind(from, to, caseId, from, to, Math.min(200, opts.productLimit ?? 15)).all<Record<string, string | number | null>>();
 
   const products = prod.map((p) => {
     const rev = n(p.revenue);

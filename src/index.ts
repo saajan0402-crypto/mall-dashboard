@@ -27,14 +27,14 @@ import { renderCaseMarkdown } from "./caseReport";
 import { postSlack, listCaseSlack, saveCaseSlack } from "./slack";
 import { sendDailySummaries } from "./dailySummary";
 import { listAllCases, createCase, renameCase, setCaseStatus, copySettings, setNotify, notifyEnabled } from "./cases";
-import { setTodoStatus, doneInMonth, skippedTodos, STATUS_JA, type TodoStatus } from "./todos";
+import { setTodoStatus, doneInMonth, actionsBetween, skippedTodos, STATUS_JA, type TodoStatus } from "./todos";
 import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./adsApi";
 
 /**
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.12.0";
+const APP_VERSION = "0.13.0";
 
 export interface Env {
   DB: D1Database;
@@ -575,6 +575,26 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const b = (await req.json().catch(() => ({}))) as { caseId?: string };
     const results = await sendDailySummaries(env, b.caseId);
     return json({ ok: results.every((r) => r.ok), results });
+  }
+
+  /* ───────── 週次レポート ───────── */
+
+  // レポートに載せる数字をまとめて返す。Excel と PDF は画面側で作る（Worker の処理時間を使わないため）
+  if (path === "/api/report") {
+    const u = new URL(req.url);
+    const caseId = u.searchParams.get("case_id");
+    if (!caseId) return json({ error: "案件を指定してください" }, 400);
+    const s = await buildCaseSummary(env.DB, caseId, periodQuery(u), { trackTodos: false, productLimit: 200 });
+    if (!s) return json({ error: "案件が見つかりません" }, 404);
+    const st = await resolveSettings(env.DB, { caseId, mall: "amazon" });
+    const am = st.case.find((x) => x.key === "ad_profit_margin")?.effective ?? 10;
+    const adv = await buildAdAdvice(env.DB, caseId, s.period.from, s.period.to, am);
+    return json({
+      summary: s,
+      actions: await actionsBetween(env.DB, caseId, s.period.from, s.period.to),
+      advice: { bids: adv.bids.slice(0, 30), negatives: adv.negatives.slice(0, 30), harvest: adv.harvest.slice(0, 20),
+        budgets: adv.budgets, impact: adv.impact, assumptions: adv.assumptions },
+    });
   }
 
   /* ───────── 要対応の状態 ───────── */
