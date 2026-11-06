@@ -41,7 +41,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.18.5";
+const APP_VERSION = "0.18.6";
 
 export interface Env {
   DB: D1Database;
@@ -292,7 +292,9 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
 
     // 日ごとの合計もここで出す。画面側で足し算させない
     const { results: dailyRows } = await env.DB.prepare(
-      `SELECT date, COALESCE(SUM(units), 0) AS units, COALESCE(SUM(revenue), 0) AS revenue, COALESCE(SUM(sessions), 0) AS sessions
+      `SELECT date, COALESCE(SUM(units), 0) AS units, COALESCE(SUM(revenue), 0) AS revenue, COALESCE(SUM(sessions), 0) AS sessions,
+              COALESCE(SUM(CASE WHEN mall = 'amazon' THEN revenue ELSE 0 END), 0) AS amazon,
+              COALESCE(SUM(CASE WHEN mall = 'rakuten' THEN revenue ELSE 0 END), 0) AS rakuten
          FROM daily_sales WHERE date BETWEEN ? AND ? ${caseId ? "AND case_id = ?" : ""}
         GROUP BY date ORDER BY date DESC`
     ).bind(...(caseId ? [from, to, caseId] : [from, to])).all<{ date: string; units: number; revenue: number; sessions: number }>();

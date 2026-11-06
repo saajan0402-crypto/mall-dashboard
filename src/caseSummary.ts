@@ -210,7 +210,7 @@ export interface CaseSummary {
     perDay: number;
     /** 期間の最終日 */
     last: { date: string; revenue: number; units: number };
-    trend: Array<{ date: string; revenue: number; units: number }>;
+    trend: Array<{ date: string; revenue: number; units: number; amazon: number; rakuten: number }>;
   };
   /** 期間の損益 */
   pl: PeriodSummary;
@@ -423,9 +423,11 @@ export async function buildCaseSummary(
 
   /* 売上の推移（期間内） */
   const { results: trend } = await db.prepare(
-    `SELECT date, SUM(revenue) AS revenue, SUM(units) AS units, SUM(sessions) AS sessions
+    `SELECT date, SUM(revenue) AS revenue, SUM(units) AS units, SUM(sessions) AS sessions,
+            SUM(CASE WHEN mall = 'amazon' THEN revenue ELSE 0 END) AS amazon,
+            SUM(CASE WHEN mall = 'rakuten' THEN revenue ELSE 0 END) AS rakuten
        FROM daily_sales WHERE case_id = ? AND date BETWEEN ? AND ? GROUP BY date ORDER BY date`
-  ).bind(caseId, from, to).all<{ date: string; revenue: number; units: number; sessions: number | null }>();
+  ).bind(caseId, from, to).all<{ date: string; revenue: number; units: number; sessions: number | null; amazon: number; rakuten: number }>();
   const prevAgg = await db.prepare(
     `SELECT COALESCE(SUM(revenue), 0) AS revenue, COALESCE(SUM(units), 0) AS units, COUNT(DISTINCT date) AS n
        FROM daily_sales WHERE case_id = ? AND date BETWEEN ? AND ?`
@@ -590,7 +592,7 @@ export async function buildCaseSummary(
       changeRate: prevComplete && prevRevenue ? round1(((revenue - prevRevenue) / prevRevenue) * 100) : null,
       perDay: Math.round(revenue / days),
       last: { date: to, revenue: n(lastDay?.revenue), units: n(lastDay?.units) },
-      trend: trend.map((t) => ({ date: t.date, revenue: n(t.revenue), units: n(t.units) })),
+      trend: trend.map((t) => ({ date: t.date, revenue: n(t.revenue), units: n(t.units), amazon: n(t.amazon), rakuten: n(t.rakuten) })),
     },
     pl,
     ads: {

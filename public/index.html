@@ -13,7 +13,8 @@
 </script>
 <style>
   :root {
-    --page-max: 1680px;  /* 画面の横幅の上限。左右の余白を減らして表を広く使う */
+    --page-max: 1440px;
+    --bar-amazon: var(--amazon); --bar-rakuten: var(--rakuten);  /* 売上の棒グラフのモール別の色 */  /* 画面の横幅の上限。左右の余白を減らして表を広く使う */
     color-scheme: light;
     --bg:#F6F8F7; --surface:#fff; --surface-2:#EFF3F2; --ink:#161F1E; --ink-2:#3B4846;
     --muted:#66746F; --line:#DCE3E0; --line-strong:#C3CECA; --accent:#145A60; --accent-soft:#E2EDEC;
@@ -203,7 +204,7 @@
 <body>
 <header>
   <div class="bar">
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.18.5</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.18.6</span></div>
     <div class="picks">
       <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
       <div class="range-pick" id="range-pick" title="">
@@ -1024,7 +1025,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.18.5";
+  const UI_VERSION = "0.18.6";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -1690,6 +1691,16 @@
   }
 
   /** 縦棒。data = [{label, value, tip}] */
+  /** 積み上げ用の段と、ツールチップの内訳（モールが2つあるときだけ） */
+  function mallStack(x) {
+    if (!(x.amazon || x.rakuten)) return {};
+    const stack = [{ key: "amazon", value: x.amazon || 0 }, { key: "rakuten", value: x.rakuten || 0 }];
+    const sum = (x.amazon || 0) + (x.rakuten || 0);
+    const pct = (v) => sum ? `（${Math.round(v / sum * 1000) / 10}%）` : "";
+    const tip = `<div><span class="k">　Amazon</span><span class="v">${yen(x.amazon || 0)}${pct(x.amazon || 0)}</span></div>
+      <div><span class="k">　楽天</span><span class="v">${yen(x.rakuten || 0)}${pct(x.rakuten || 0)}</span></div>`;
+    return { stack, tip };
+  }
   function columnChart(host, data, fmt) {
     host.innerHTML = "";
     if (!data.length) return emptyChart(host, "表示できるデータがありません。");
@@ -1739,7 +1750,21 @@
     data.forEach((d, i) => {
       const x = PAD.l + i * band + (band - bw) / 2;
       const h = Math.max(0, PAD.t + plotH - y(d.value));
-      if (h > 0) {
+      if (h > 0 && d.stack && d.stack.some((sg) => sg.value > 0)) {
+        // モール別に積み上げる（下＝Amazon、上＝楽天）。いちばん上の段だけ角を丸める。段の間に細いすき間を入れて境目を見せる
+        const g = el("g", {});
+        let base = 0;
+        const segs = d.stack.filter((sg) => sg.value > 0);
+        segs.forEach((sg, k) => {
+          const y0 = y(base), y1 = y(base + sg.value);
+          const hh = Math.max(0, y0 - y1 - (k < segs.length - 1 ? 1 : 0));
+          if (hh > 0) g.appendChild(el("path", { d: k === segs.length - 1 ? barUp(x, y1, bw, hh) : `M${x},${y1 + 1} h${bw} v${hh} h${-bw} Z`,
+            fill: `var(--bar-${sg.key})` }));
+          base += sg.value;
+        });
+        bindTip(g, d.tip);
+        svg.appendChild(g);
+      } else if (h > 0) {
         const bar = el("path", { d: barUp(x, y(d.value), bw, h), fill: "var(--series-1)" });
         bindTip(bar, d.tip);
         svg.appendChild(bar);
@@ -1759,6 +1784,17 @@
       }
     });
     host.appendChild(svg);
+    // 積み上げのときはモールの凡例と、期間全体の比率を出す
+    if (data.some((d) => d.stack)) {
+      const tot = { amazon: 0, rakuten: 0 };
+      data.forEach((d) => (d.stack || []).forEach((sg) => { tot[sg.key] = (tot[sg.key] || 0) + sg.value; }));
+      const sum = tot.amazon + tot.rakuten;
+      const ml = document.createElement("div");
+      ml.className = "note"; ml.style.cssText = "display:flex;gap:16px;flex-wrap:wrap;margin-top:6px;font-size:12px";
+      ml.innerHTML = [["amazon", "Amazon"], ["rakuten", "楽天"]].filter(([k]) => tot[k] > 0).map(([k, label]) =>
+        `<span><span style="display:inline-block;width:11px;height:11px;border-radius:2px;vertical-align:-1px;margin-right:5px;background:var(--bar-${k})"></span>${label} ${fmt(tot[k])}${sum ? `（${Math.round(tot[k] / sum * 1000) / 10}%）` : ""}</span>`).join("");
+      host.appendChild(ml);
+    }
     // 凡例。その期間に出てくるイベントの名前も並べる
     const all = data.flatMap((d) => d.ev || []);
     if (all.length) {
@@ -1993,13 +2029,15 @@
       ? `${daily[0].date} 〜 ${daily[daily.length - 1].date}　合計 ${yen(daily.reduce((n, x) => n + x.revenue, 0))}`
       : "";
 
-    const bk = bucketize(daily, ["revenue", "units", "sessions"]);
+    const bk = bucketize(daily, ["revenue", "units", "sessions", "amazon", "rakuten"]);
     $("chart-rev-sub").textContent += daily.length ? `　${UNIT_JA[bk.unit]}` : "";
+    const twoMalls = daily.some((x) => x.amazon > 0) && daily.some((x) => x.rakuten > 0);
     columnChart($("chart-rev"), bk.rows.map((x) => {
       const ev = evOverlap(salesEvents, x.from, x.to);
-      return { label: x.label, value: x.revenue, ev,
+      const ms = twoMalls ? mallStack(x) : {};
+      return { label: x.label, value: x.revenue, ev, stack: ms.stack,
         tip: `<div><strong>${esc(x.title)}</strong></div>
-            <div><span class="k">売上</span><span class="v">${yen(x.revenue)}</span></div>
+            <div><span class="k">売上</span><span class="v">${yen(x.revenue)}</span></div>${ms.tip || ""}
             <div><span class="k">販売数</span><span class="v">${x.units}</span></div>${evTip(ev)}` };
     }), yen);
 
@@ -2962,17 +3000,21 @@
     for (let t = Date.parse(P.from); t <= Date.parse(P.to); t += 86400000) {
       const d = new Date(t).toISOString().slice(0, 10);
       const x = byDate.get(d);
-      days.push({ date: d, revenue: x ? x.revenue : 0, units: x ? x.units : 0, has: x ? 1 : 0 });
+      days.push({ date: d, revenue: x ? x.revenue : 0, units: x ? x.units : 0, has: x ? 1 : 0,
+        amazon: x ? x.amazon || 0 : 0, rakuten: x ? x.rakuten || 0 : 0 });
     }
-    const bk = bucketize(days, ["revenue", "units", "has"]);
+    const bk = bucketize(days, ["revenue", "units", "has", "amazon", "rakuten"]);
+    // 両方のモールの売上がある期間だけ、モール別に積み上げる
+    const twoMalls = days.some((x) => x.amazon > 0) && days.some((x) => x.rakuten > 0);
     const trendTotal = trendRows.reduce((n, x) => n + (x.revenue || 0), 0);
-    $("dash-trend-sub").textContent = `${UNIT_JA[bk.unit]}・${s.malls.map((x) => MALL_JA[x] || x).join("＋") || "全モール"}の合計　${yen(trendTotal)}`
+    $("dash-trend-sub").textContent = `${UNIT_JA[bk.unit]}・${twoMalls ? "Amazon＋楽天" : (s.malls.map((x) => MALL_JA[x] || x).join("＋") || "全モール")}の合計　${yen(trendTotal)}`
       + (salesBasis === "posted" ? `（出荷日ベース）${basisNote}` : "（注文日ベース）");
     columnChart($("dash-trend"), bk.rows.map((x) => {
       const ev = evOverlap(s.events, x.from, x.to);
-      return { label: x.label, value: x.revenue, ev,
+      const ms = twoMalls ? mallStack(x) : {};
+      return { label: x.label, value: x.revenue, ev, stack: ms.stack,
         tip: (x.has ? `<div><strong>${esc(x.title)}</strong></div><div><span class="k">売上</span><span class="v">${yen(x.revenue)}</span></div>
-                <div><span class="k">販売数</span><span class="v">${x.units}</span></div>`
+                ${ms.tip || ""}<div><span class="k">販売数</span><span class="v">${x.units}</span></div>`
              : `<div><strong>${esc(x.title)}</strong></div><div class="k">データなし</div>`) + evTip(ev) };
     }), yen);
 
@@ -3197,13 +3239,15 @@
     const days = [];
     for (let t = Date.parse(P.from); t <= Date.parse(P.to); t += 86400000) {
       const k = new Date(t).toISOString().slice(0, 10); const x = byDate.get(k);
-      days.push({ date: k, revenue: x ? x.revenue : 0, units: x ? x.units : 0 });
+      days.push({ date: k, revenue: x ? x.revenue : 0, units: x ? x.units : 0, amazon: x ? x.amazon || 0 : 0, rakuten: x ? x.rakuten || 0 : 0 });
     }
-    const bk = bucketize(days, ["revenue", "units"]);
+    const bk = bucketize(days, ["revenue", "units", "amazon", "rakuten"]);
+    const twoMalls = days.some((x) => x.amazon > 0) && days.some((x) => x.rakuten > 0);
     columnChart($("rep-chart"), bk.rows.map((x) => {
       const ev = evOverlap(s.events, x.from, x.to);
-      return { label: x.label, value: x.revenue, ev,
-        tip: `<div><strong>${esc(x.title)}</strong></div><div><span class="k">売上</span><span class="v">${yen(x.revenue)}</span></div>${evTip(ev)}` };
+      const ms = twoMalls ? mallStack(x) : {};
+      return { label: x.label, value: x.revenue, ev, stack: ms.stack,
+        tip: `<div><strong>${esc(x.title)}</strong></div><div><span class="k">売上</span><span class="v">${yen(x.revenue)}</span></div>${ms.tip || ""}${evTip(ev)}` };
     }), yen);
   }
   $("rep-cost").addEventListener("change", renderReport);
@@ -3501,7 +3545,8 @@
   let todoList = [];
   const ST_JA = { open: "未対応", done: "対応済み", skip: "今はしない", other: "自由記述…" };
   function todoRow(t, i) {
-    const st = t.pending || t.status || "open";
+    // 「把握」はお知らせなので、対応の状態は持たない（プルダウンを出さない）
+    const st = t.priority === "info" ? "open" : (t.pending || t.status || "open");
     // サーバーの時刻は UTC。日本時間に直して「11/06 08:41」の形で出す
     const when = t.statusAt ? (() => {
       const raw = String(t.statusAt);
@@ -3512,9 +3557,9 @@
       <span class="tag ${PRI[t.priority][0]}">${PRI[t.priority][1]}</span>
       <span class="note">${esc(t.area)}</span>
       <span>${esc(t.text)}</span>
-      <span class="st"><select data-todo="${i}" class="${st}" aria-label="状態">
+      <span class="st">${t.priority === "info" ? "" : `<select data-todo="${i}" class="${st}" aria-label="状態">
         ${Object.entries(ST_JA).map(([k, v]) => `<option value="${k}"${k === st ? " selected" : ""}>${v}</option>`).join("")}
-      </select></span>
+      </select>`}</span>
       ${t.basis ? `<span class="b">${esc(t.basis)}</span>` : ""}
       ${t.pending === "other" ? `<span class="who">自由記述（例：お客様に通達済み）
         <span style="display:flex;gap:6px;margin-top:4px"><input data-other="${i}" placeholder="内容を入れて「保存」" autofocus
@@ -3529,10 +3574,11 @@
   function renderTodos(list, openSection) {
     todoList = list;
     const idx = list.map((t, i) => [t, i]);
-    const open = idx.filter(([t]) => (t.status || "open") === "open" || t.pending);
-    const done = idx.filter(([t]) => t.status === "done" && !t.pending);
-    const skip = idx.filter(([t]) => t.status === "skip" && !t.pending);
-    const other = idx.filter(([t]) => t.status === "other" && !t.pending);
+    const isInfo = (t) => t.priority === "info";
+    const open = idx.filter(([t]) => isInfo(t) || (t.status || "open") === "open" || t.pending);
+    const done = idx.filter(([t]) => !isInfo(t) && t.status === "done" && !t.pending);
+    const skip = idx.filter(([t]) => !isInfo(t) && t.status === "skip" && !t.pending);
+    const other = idx.filter(([t]) => !isInfo(t) && t.status === "other" && !t.pending);
     // 状態を変えた直後は、その項目が入った欄を開いておく（続けてメモを書けるように）
     const block = (title, rows, key) => rows.length
       ? `<details class="todo-more"${openSection === key ? " open" : ""}><summary>${title}（${rows.length}件）</summary>${rows.map(([t, i]) => todoRow(t, i)).join("")}</details>` : "";

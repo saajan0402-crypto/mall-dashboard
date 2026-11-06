@@ -148,20 +148,22 @@ export async function monthlyStatement(db: D1Database, caseId: string, month: st
 /** 出荷日ベースの日別の販売数・売上（Amazon は新APIの出荷、楽天は注文日のまま） */
 export async function postedDaily(db: D1Database, caseId: string | null, from: string, to: string) {
   const { results } = await db.prepare(
-    `SELECT date, SUM(units) AS units, SUM(revenue) AS revenue FROM (
+    `SELECT date, SUM(units) AS units, SUM(revenue) AS revenue, SUM(amazon) AS amazon, SUM(rakuten) AS rakuten FROM (
        SELECT date,
               SUM(CASE WHEN event_type = 'shipment' THEN COALESCE(quantity, 0) ELSE 0 END) AS units,
-              SUM(CASE WHEN event_type = 'shipment' AND kind = 'charge' AND name NOT LIKE 'Shipping%' THEN amount ELSE 0 END) AS revenue
+              SUM(CASE WHEN event_type = 'shipment' AND kind = 'charge' AND name NOT LIKE 'Shipping%' THEN amount ELSE 0 END) AS revenue,
+              SUM(CASE WHEN event_type = 'shipment' AND kind = 'charge' AND name NOT LIKE 'Shipping%' THEN amount ELSE 0 END) AS amazon,
+              0 AS rakuten
          FROM fee_events WHERE mall = 'amazon' AND basis = 'posted' AND date BETWEEN ? AND ? ${caseId ? "AND case_id = ?" : ""}
          GROUP BY date
        UNION ALL
-       SELECT date, SUM(units), SUM(revenue) FROM daily_sales
+       SELECT date, SUM(units), SUM(revenue), 0, SUM(revenue) FROM daily_sales
         WHERE mall = 'rakuten' AND date BETWEEN ? AND ? ${caseId ? "AND case_id = ?" : ""} GROUP BY date)
      GROUP BY date ORDER BY date`
-  ).bind(...(caseId ? [from, to, caseId, from, to, caseId] : [from, to, from, to])).all<{ date: string; units: number; revenue: number }>();
+  ).bind(...(caseId ? [from, to, caseId, from, to, caseId] : [from, to, from, to])).all<{ date: string; units: number; revenue: number; amazon: number; rakuten: number }>();
   const cov = await db.prepare(
     `SELECT COUNT(DISTINCT period_start) AS d FROM ingests WHERE mall = 'amazon' AND kind = 'transactions' AND status = 'ok'
         AND period_start BETWEEN ? AND ? ${caseId ? "AND case_id = ?" : ""}`
   ).bind(...(caseId ? [from, to, caseId] : [from, to])).first<{ d: number }>();
-  return { daily: results.map((r) => ({ date: r.date, units: n(r.units), revenue: n(r.revenue) })), coveredDays: n(cov?.d) };
+  return { daily: results.map((r) => ({ date: r.date, units: n(r.units), revenue: n(r.revenue), amazon: n(r.amazon), rakuten: n(r.rakuten) })), coveredDays: n(cov?.d) };
 }
