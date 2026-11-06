@@ -470,7 +470,7 @@
       </div>
     </div>
     <div>
-      <h2>Amazon 月次確定（明細ベース）<span class="hint">月はすぐ下の「請求明細の取り込み」の対象月で選びます</span></h2>
+      <h2>Amazon 月次確定（明細ベース）<span class="hint">ヘッダーの期間を「先月」など1か月ちょうどにするとその月を表示。ほかの期間のときは、すぐ下の「対象月」で選びます</span></h2>
       <div class="card">
         <div id="amz-monthly"></div>
         <p class="note" style="margin-top:8px">セラーセントラルの「日付範囲レポート」と同じ並び・同じ数え方（計上日）で、Amazon の入金明細をまとめたものです。
@@ -1010,7 +1010,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.17.0";
+  const UI_VERSION = "0.17.2";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
@@ -1075,7 +1075,7 @@
     if (p === "p-dash") return loadDashboard();
     if (p === "p-master") return loadProducts();
     if (p === "p-status") return loadStatus();
-    if (p === "p-sales") return loadSales().then(loadSummary).then(loadCharges).then(loadBackfill).then(loadAmzMonthly);
+    if (p === "p-sales") { syncMonthFromRange(); return loadSales().then(loadSummary).then(loadCharges).then(loadBackfill).then(loadAmzMonthly); }
     if (p === "p-stock") return loadStock();
     if (p === "p-ads") return loadAds();
     if (p === "p-settings") return loadSettings();
@@ -1839,6 +1839,7 @@
       const d = new Date(Date.now() + 9 * 3600 * 1000 - 24 * 3600 * 1000);
       $("sales-date").value = d.toISOString().slice(0, 10);
       $("sum-month").value = d.toISOString().slice(0, 7);
+      syncMonthFromRange();
       salesCasesLoaded = true;
       applyCase();
     }
@@ -2119,6 +2120,15 @@
   $("sum-month").addEventListener("change", () => { loadSummary(); loadCharges(); loadAmzMonthly(); });
 
   /* ---------- Amazon 月次確定（明細ベース） ---------- */
+  // ヘッダーの期間が1か月ちょうど（例：先月＝10/1〜10/31）のときは、月次確定と請求明細の「対象月」をその月に合わせる。
+  // 期間を10月にしたのに表が11月のまま、という食い違いを防ぐため
+  function syncMonthFromRange() {
+    const f = range.from, t = range.to;
+    if (!f || !t || f.slice(0, 7) !== t.slice(0, 7) || f.slice(8) !== "01") return;
+    const [y, m] = f.split("-").map(Number);
+    const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    if (Number(t.slice(8)) === last) $("sum-month").value = f.slice(0, 7);
+  }
   async function loadAmzMonthly() {
     const caseId = $("sales-case").value, month = $("sum-month").value;
     if (!caseId || !month) { $("amz-monthly").innerHTML = ""; return; }
@@ -2130,9 +2140,12 @@
     const groups = [["商品売上（税込）", t.sales], ["配送料", t.shipping], ["返金", t.refunds], ["プロモーション割引", t.promotions],
       ["Amazonポイントの費用", t.points], ["注文ごとの手数料（販売手数料・FBA）", t.orderFees], ["月額登録料・保管料など", t.accountFees],
       ["補填・調整", t.adjustments]].filter(([, v]) => v);
-    const status = d.coveredDays < d.days
-      ? `<span class="tag warn">取り込み途中</span> ${d.coveredDays}/${d.days}日分の入金明細から集計しています`
-      : (d.closed ? `<span class="tag ok">確定</span> ${d.days}日分すべての入金明細から集計しています` : `<span class="tag wait">今月</span>`);
+    // 今月はまだ途中なので「取り込み途中」とは出さない（締まった月で日が欠けているときだけ警告する）
+    const status = !d.closed
+      ? `<span class="tag wait">今月（途中）</span> ここまでの ${d.coveredDays}日分の入金明細から集計しています`
+      : d.coveredDays < d.days
+        ? `<span class="tag warn">取り込み途中</span> ${d.coveredDays}/${d.days}日分の入金明細から集計しています`
+        : `<span class="tag ok">確定</span> ${d.days}日分すべての入金明細から集計しています`;
     const ob = d.orderBasis;
     const diff = ob ? `<p class="note" style="margin-top:10px">比較：ふだんの数字（注文日ベース）の同じ月は 売上 <strong>${yen(ob.revenue)}</strong>（${ob.units}個）。
         明細の商品売上との差 ${signed(t.sales - ob.revenue)} は、月をまたいだ注文（月末に注文・翌月に出荷など）の分です。</p>` : "";
