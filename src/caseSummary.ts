@@ -12,6 +12,7 @@ import { listEvents, type SaleEvent } from "./events";
 import { applyTodoStatus, doneInMonth, isoWeek, textKey, type TodoStatus, type DoneItem } from "./todos";
 import { notifyEnabled } from "./cases";
 import { amazonFinance, finCost, coveredSql, feeBasis } from "./amazonFin";
+import { buildAllocation, type Allocation } from "./adAllocation";
 import { latestCompleteMonth } from "./mallCharges";
 import { buildAdAdvice, type BidAdvice, type NegativeAdvice, type HarvestAdvice } from "./adAdvice";
 
@@ -225,6 +226,8 @@ export interface CaseSummary {
     wastedKeywords: Array<{ term: string; product: string; cost: number; clicks: number }>;
   };
   /** 広告の改善提案（件数と上位だけ。全部は広告タブで） */
+  /** Amazon と楽天の間の広告費の配分（提案があれば proposal に入る） */
+  allocation: Allocation;
   advice: {
     counts: { up: number; down: number; pause: number; negatives: number; harvest: number; budgets: number };
     impact: { wastedCost: number; bidDownCost: number };
@@ -392,6 +395,17 @@ function buildTodo(s: Omit<CaseSummary, "todo" | "doneThisMonth">): Todo[] {
       text: `粗利率が目標（${s.settings.targetMargin}%・広告費前）を下回る商品が ${low.length} 件。価格・原価・送料の設定を確認する（${low.slice(0, 3).map((p) => p.sku).join("、")}）`,
       basis: low.slice(0, 3).map((p) => `${p.sku} ${p.grossRate}%`).join(" / "),
     });
+
+  // モール間の広告費の配分（両方のモールに広告があり、差が大きいとき）
+  const ap = s.allocation?.proposal;
+  if (ap) {
+    const ja = (m: string | null) => (m === "rakuten" ? "楽天" : m === "amazon" ? "Amazon" : "");
+    out.push({ key: `alloc:${wk}`, priority: "mid", area: "広告",
+      text: ap.action === "shift"
+        ? `広告費の配分：${ja(ap.fromMall)}から${ja(ap.toMall)}へ30日あたり ¥${ap.amount30d.toLocaleString("ja-JP")} 移す（ダッシュボードの「モール間の広告費の配分」に根拠）`
+        : `広告費の配分：${ja(ap.fromMall)}の広告費を30日あたり ¥${ap.amount30d.toLocaleString("ja-JP")} 減らす（赤字のため）`,
+      basis: `利益の増え方の目安 30日あたり ¥${ap.expectedProfit30d.toLocaleString("ja-JP")}` });
+  }
 
   for (const w of s.warnings) out.push({ key: `info:${textKey(w)}`, priority: "info", area: "データ", text: w });
   const rank = { high: 0, mid: 1, info: 2 };
@@ -579,7 +593,9 @@ export async function buildCaseSummary(
     warnings.push(`比べる直前の期間（${prevFrom}〜${prevTo}）の売上データが${n(prevAgg?.n) ? "一部しか無い" : "無い"}ため、前期間比は出していません`);
 
   const events = await listEvents(db, caseId, from, to);
+  const allocation = await buildAllocation(db, caseId, from, to);
   const base: Omit<CaseSummary, "todo" | "doneThisMonth"> = {
+    allocation,
     caseId, caseName: c.name,
     period: { from, to, days, preset: per.preset },
     prev: { from: prevFrom, to: prevTo },

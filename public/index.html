@@ -204,7 +204,7 @@
 <body>
 <header>
   <div class="bar">
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.18.6</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.19.1</span></div>
     <div class="picks">
       <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
       <div class="range-pick" id="range-pick" title="">
@@ -289,9 +289,19 @@
       <p class="sub" id="dash-trend-sub"></p>
       <div id="dash-trend"></div>
     </div>
+    <div class="chart">
+      <h3>月次推移<span class="hint" style="margin-left:8px">直近12か月・ヘッダーの期間に関係なく表示</span></h3>
+      <p class="sub" id="dash-monthly-sub"></p>
+      <div id="dash-monthly"></div>
+      <div id="dash-monthly-table" style="margin-top:12px"></div>
+    </div>
     <div class="grid2">
       <div><h2>期間の損益<span class="hint">広告費を引く前</span></h2><div id="dash-pl"></div></div>
       <div><h2>データの鮮度</h2><div class="card" id="dash-fresh"></div></div>
+    </div>
+    <div>
+      <h2>モール間の広告費の配分<span class="hint">ヘッダーの期間で計算</span></h2>
+      <div class="card" id="dash-alloc"></div>
     </div>
     <div>
       <h2>広告<span class="hint" id="dash-ads-hint"></span></h2>
@@ -1025,7 +1035,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.18.6";
+  const UI_VERSION = "0.19.1";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -1224,6 +1234,69 @@
     $("case-summary").innerHTML = esc((cases.cases || [])
       .map((c) => `${c.name} ${c.products}件`).join(" ／ "))
       + (manual ? `　<span class="tag warn">原価の手計算待ち ${manual}件</span>` : "");
+  }
+
+  /* ---------- 月次推移（ダッシュボード） ---------- */
+  async function loadMonthly() {
+    if (!currentCase) return;
+    const caseAtStart = currentCase;
+    const d = await get(`/api/monthly-trend?case_id=${encodeURIComponent(currentCase)}&months=12`);
+    if (caseAtStart !== currentCase) return;
+    const rows = d.months || [];
+    if (!rows.length) { $("dash-monthly").innerHTML = `<p class="note">まだ月次のデータがありません。</p>`; $("dash-monthly-table").innerHTML = ""; return; }
+    const ja = (m) => (m === "amazon" ? "Amazon" : m === "rakuten" ? "楽天" : m);
+    const two = rows.some((r) => (r.byMall.amazon || {}).revenue > 0) && rows.some((r) => (r.byMall.rakuten || {}).revenue > 0);
+    $("dash-monthly-sub").textContent = `売上の棒${two ? "（下＝Amazon・上＝楽天）" : ""}。数字は表で。今月は昨日までの途中経過です`;
+    columnChart($("dash-monthly"), rows.map((r) => {
+      const a = (r.byMall.amazon || {}).revenue || 0, k = (r.byMall.rakuten || {}).revenue || 0;
+      const ms = two ? mallStack({ amazon: a, rakuten: k }) : {};
+      return { label: r.month.slice(2).replace("-", "/") + (r.partial ? "*" : ""), value: r.revenue, stack: ms.stack,
+        tip: `<div><strong>${esc(r.month)}${r.partial ? "（途中）" : ""}</strong></div>
+          <div><span class="k">売上</span><span class="v">${yen(r.revenue)}</span></div>${ms.tip || ""}
+          <div><span class="k">粗利（広告費前）</span><span class="v">${yen(r.gross)}</span></div>
+          <div><span class="k">広告費</span><span class="v">${yen(r.adCost)}</span></div>
+          <div><span class="k">広告費後の利益</span><span class="v">${yen(r.profitAfterAds)}</span></div>` };
+    }), yen);
+    const pctS2 = (a, b) => (b ? `${Math.round(a / b * 1000) / 10}%` : "—");
+    const malls = ["amazon", "rakuten"].filter((m) => rows.some((r) => r.byMall[m]));
+    $("dash-monthly-table").innerHTML = `<div class="tablewrap"><table style="min-width:860px">
+      <thead><tr><th>月</th><th class="r">売上</th>${two ? malls.map((m) => `<th class="r">うち${ja(m)}</th>`).join("") : ""}
+        <th class="r">粗利（広告費前）</th><th class="r">粗利率</th><th class="r">広告費</th>${two ? malls.map((m) => `<th class="r">うち${ja(m)}</th>`).join("") : ""}
+        <th class="r">広告経由の売上</th><th class="r">広告経由の比率</th><th class="r">ROAS</th><th class="r">TACoS</th><th class="r">広告費後の利益</th></tr></thead>
+      <tbody>${rows.slice().reverse().map((r) => `<tr${r.partial ? ' style="color:var(--muted)"' : ""}>
+        <td>${esc(r.month)}${r.partial ? "（途中）" : ""}</td><td class="r">${yen(r.revenue)}</td>
+        ${two ? malls.map((m) => `<td class="r">${yen((r.byMall[m] || {}).revenue || 0)}</td>`).join("") : ""}
+        <td class="r">${yen(r.gross)}</td><td class="r">${pctS2(r.gross, r.revenue)}</td><td class="r">${yen(r.adCost)}</td>
+        ${two ? malls.map((m) => `<td class="r">${yen((r.byMall[m] || {}).adCost || 0)}</td>`).join("") : ""}
+        <td class="r">${yen(r.adSales)}</td><td class="r">${pctS2(r.adSales, r.revenue)}</td>
+        <td class="r">${r.adCost ? Math.round(r.adSales / r.adCost * 100) / 100 : "—"}</td><td class="r">${pctS2(r.adCost, r.revenue)}</td>
+        <td class="r" style="${r.profitAfterAds < 0 ? "color:var(--risk)" : ""}">${yen(r.profitAfterAds)}</td></tr>`).join("")}</tbody></table></div>
+      <p class="note" style="margin-top:6px">粗利率は原価の分かる商品の売上も含めた総売上で割った目安です。広告経由の売上は帰属期間がモールで違うので（楽天RPP 30日／Amazon 7〜14日）、合計は目安として見てください。</p>`;
+  }
+
+  /* ---------- モール間の広告費の配分 ---------- */
+  function renderAlloc(al) {
+    const host = $("dash-alloc");
+    if (!al || !al.malls || !al.malls.length) { host.innerHTML = `<p class="note">この期間の広告データがありません。</p>`; return; }
+    const ja = (m) => (m === "amazon" ? "Amazon" : m === "rakuten" ? "楽天" : m);
+    const rows = al.malls.map((m) => `<tr><td>${mallTag(m.mall)}</td><td class="r">${yen(m.adCost)}</td><td class="r">${yen(m.adSales)}</td>
+      <td class="r">${m.roas ?? "—"}</td><td class="r">${m.grossMargin == null ? "—" : Math.round(m.grossMargin * 1000) / 10 + "%"}</td>
+      <td class="r">${m.breakEvenRoas ?? "—"}</td>
+      <td class="r" style="font-weight:700;${(m.profitPerYen ?? 0) < 0 ? "color:var(--risk)" : ""}">${m.profitPerYen == null ? "—" : m.profitPerYen + "円"}</td>
+      <td class="r">${m.adProfit == null ? "—" : yen(m.adProfit)}</td>
+      <td>${m.budgetLimited == null ? "—" : m.budgetLimited ? `<span class="tag warn">予算切れあり</span>` : "なし"}</td><td class="note">${esc(m.attributionDays || "—")}</td></tr>`).join("");
+    const p = al.proposal;
+    const prop = p ? `<div style="margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2)">
+        <strong>${p.action === "shift" ? `提案：${ja(p.fromMall)} → ${ja(p.toMall)} へ 30日あたり ${yen(p.amount30d)}` : `提案：${ja(p.fromMall)} の広告費を 30日あたり ${yen(p.amount30d)} 減らす`}</strong>
+        <span class="note">（利益の増え方の目安 30日あたり ${yen(p.expectedProfit30d)}）</span>
+        <p style="margin:6px 0 0">${esc(p.reason)}</p>
+        <ul class="note" style="margin:6px 0 0;padding-left:18px">${p.cautions.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>`
+      : `<p class="note" style="margin-top:10px">配分を動かす提案はありません（どちらも黒字で、効率の差が小さいか、片方のモールにしか広告がありません）。</p>`;
+    host.innerHTML = `<div class="tablewrap"><table style="min-width:760px">
+      <thead><tr><th>モール</th><th class="r">広告費</th><th class="r">広告経由の売上</th><th class="r">ROAS</th><th class="r">粗利率（広告費前）</th>
+        <th class="r">損益分岐ROAS</th><th class="r">広告1円あたりの利益</th><th class="r">広告で生んだ利益</th><th>予算切れ</th><th>帰属期間</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+      <p class="note" style="margin-top:6px">広告1円あたりの利益 ＝ ROAS × 粗利率（広告費前）− 1。プラスなら広告が利益を生み、マイナスなら広告で赤字です。差が大きいときに、低い方から高い方へ最大20%移す提案を出します。</p>${prop}`;
   }
 
   /* ---------- 照合し直し ---------- */
@@ -1704,7 +1777,11 @@
   function columnChart(host, data, fmt) {
     host.innerHTML = "";
     if (!data.length) return emptyChart(host, "表示できるデータがありません。");
-    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+    // セール・イベントは棒の後ろに色を塗らず、横軸の下に「イベントの帯」として別の段に出す
+    //（棒をモール別に色分けしたので、後ろに同じ系統の色を塗ると見分けにくくなるため）
+    const evMallsAll = ["rakuten", "amazon"].filter((m) => data.some((d) => (d.ev || []).some((e) => e.mall === m)));
+    const LANE = 15, extra = evMallsAll.length ? evMallsAll.length * LANE + 8 : 0;
+    const svg = el("svg", { viewBox: `0 0 ${W} ${H + extra}`, role: "img" });
     const plotW = W - PAD.l - PAD.r, plotH = H - PAD.t - PAD.b;
     const ax = axis(Math.max(...data.map((d) => d.value)));
     const max = ax.max;
@@ -1722,29 +1799,31 @@
     const band = plotW / data.length;
     // イベントの色を塗るときは棒を細くして、棒のすき間から背景の色（特に下半分）が見えるようにする
     const hasEv = data.some((d) => d.ev && d.ev.length);
-    const bw = Math.max(3, Math.min(24, hasEv ? band * 0.6 : band - 2));
+    const bw = Math.max(3, Math.min(24, band * 0.72));
     const maxIdx = data.reduce((m, d, i) => (d.value > data[m].value ? i : m), 0);
 
-    // セール・イベントの日は背景に色をつける。
-    // 両方のモールのイベントが出てくるグラフでは、上半分＝楽天・下半分＝Amazon に固定して横に帯でつなぐ。
-    // 続いている日はまとめて1本の帯にする（1日ずつ塗ると継ぎ目が縦じまに見えるため）
-    const evMalls = ["rakuten", "amazon"].filter((m) => data.some((d) => (d.ev || []).some((e) => e.mall === m)));
-    evMalls.forEach((m, j) => {
-      const top = evMalls.length === 2 ? PAD.t + (plotH / 2) * j : PAD.t;
-      const hh = evMalls.length === 2 ? plotH / 2 : plotH;
-      let runStart = -1;
-      const flush = (end) => {
-        if (runStart < 0) return;
-        svg.insertBefore(el("rect", { x: PAD.l + runStart * band, y: top, width: (end - runStart) * band, height: hh,
-          fill: m === "rakuten" ? "var(--rakuten)" : "var(--amazon)", "fill-opacity": 0.16 }), svg.firstChild);
-        runStart = -1;
-      };
-      data.forEach((d, i) => {
-        const on = (d.ev || []).some((e) => e.mall === m);
-        if (on && runStart < 0) runStart = i;
-        if (!on) flush(i);
-      });
-      flush(data.length);
+    // イベントの日：グラフの中はうすい灰色で日付の範囲だけ示し、どのモールのイベントかは下の帯で見せる
+    const runs = (pred) => {
+      const out = []; let st = -1;
+      data.forEach((d, i) => { const on = pred(d); if (on && st < 0) st = i; if (!on && st >= 0) { out.push([st, i]); st = -1; } });
+      if (st >= 0) out.push([st, data.length]);
+      return out;
+    };
+    for (const [a, b] of runs((d) => (d.ev || []).length > 0)) {
+      svg.insertBefore(el("rect", { x: PAD.l + a * band, y: PAD.t, width: (b - a) * band, height: plotH,
+        fill: "var(--ink)", "fill-opacity": 0.045 }), svg.firstChild);
+    }
+    evMallsAll.forEach((m, j) => {
+      const ly = H + 4 + j * LANE;
+      svg.appendChild(el("text", { x: PAD.l - 8, y: ly + 9, "text-anchor": "end", fill: muted, "font-size": 10 }, m === "rakuten" ? "楽天" : "Amazon"));
+      svg.appendChild(el("line", { x1: PAD.l, x2: W - PAD.r, y1: ly + 5, y2: ly + 5, stroke: grid, "stroke-width": 1 }));
+      for (const [a, b] of runs((d) => (d.ev || []).some((e) => e.mall === m))) {
+        const names = [...new Set(data.slice(a, b).flatMap((d) => (d.ev || []).filter((e) => e.mall === m).map((e) => e.name)))];
+        const r = el("rect", { x: PAD.l + a * band + 1, y: ly, width: Math.max(2, (b - a) * band - 2), height: 10, rx: 3,
+          fill: `var(--${m})`, "fill-opacity": 0.85 });
+        bindTip(r, `<div><strong>${m === "rakuten" ? "楽天" : "Amazon"}のイベント</strong></div><div>${esc(names.join("・"))}</div>`);
+        svg.appendChild(r);
+      }
     });
 
     data.forEach((d, i) => {
@@ -1801,10 +1880,9 @@
       const names = (m) => [...new Set(all.filter((e) => e.mall === m).map((e) => e.name))].join("・");
       const lg = document.createElement("div");
       lg.className = "note"; lg.style.cssText = "display:flex;gap:16px;flex-wrap:wrap;margin-top:6px;font-size:12px";
-      const both = all.some((e) => e.mall === "rakuten") && all.some((e) => e.mall === "amazon");
       lg.innerHTML = ["rakuten", "amazon"].filter((m) => all.some((e) => e.mall === m)).map((m) =>
-        `<span><span style="display:inline-block;width:11px;height:11px;border-radius:2px;vertical-align:-1px;margin-right:5px;
-          background:color-mix(in srgb,var(--${m}) 22%,transparent);border:1px solid color-mix(in srgb,var(--${m}) 45%,transparent)"></span>${m === "rakuten" ? "楽天" : "Amazon"}のイベント${both ? (m === "rakuten" ? "（上半分）" : "（下半分）") : ""}：${esc(names(m))}</span>`).join("");
+        `<span><span style="display:inline-block;width:14px;height:6px;border-radius:3px;vertical-align:2px;margin-right:5px;
+          background:var(--${m});opacity:.85"></span>${m === "rakuten" ? "楽天" : "Amazon"}のイベント（横軸の下の帯）：${esc(names(m))}</span>`).join("");
       host.appendChild(lg);
     }
   }
@@ -2983,10 +3061,14 @@
         s.ads.totals.length ? `ROAS ${adCost ? Math.round(adSales / adCost * 100) / 100 : "—"}／損益分岐 ${pl.breakEvenRoas ?? "—"}` : "広告データなし"),
       kpi("TACoS", pctS(s.ads.tacos), "広告費 ÷ 総売上"),
       kpi("広告費を引いた利益", yen(s.ads.profitAfterAds), "粗利 − 広告費"),
+      kpi("広告経由の売上", s.ads.totals.length ? yen(adSales) : "—",
+        s.ads.totals.length && sl.total.revenue ? `総売上の ${Math.round(adSales / sl.total.revenue * 1000) / 10}%（帰属期間はモールで違う）` : "広告データなし"),
     ].join("");
 
     renderTodos(s.todo || []);
     loadDone();
+    renderAlloc(s.allocation);
+    loadMonthly();
 
     // 期間の枠を作り、データの無い日は空けておく（0円とは区別する）。長い期間は週・月にまとめる
     let trendRows = sl.trend, basisNote = "";

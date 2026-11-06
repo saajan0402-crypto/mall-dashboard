@@ -77,6 +77,8 @@ export function renderCaseMarkdown(s: CaseSummary, opts: { url?: string } = {}):
   L.push(`- 売上：${yen(sl.total.revenue)}（${num(sl.total.units)}個・1日平均 ${yen(sl.perDay)}）／直前の期間 ${yen(sl.prev.revenue)}／前期間比 ${pct(sl.changeRate)}`);
   L.push(`- 粗利（広告費前）：${yen(s.pl.gross)}／粗利率 ${pct(s.pl.grossRate)}`);
   L.push(`- 広告費：${yen(adCost)}／広告費を引いた利益 ${yen(s.ads.profitAfterAds)}／TACoS（広告費 ÷ 総売上）${pct(s.ads.tacos)}`);
+  const adSales = s.ads.totals.reduce((t, a) => t + a.sales, 0);
+  L.push(`- 広告経由の売上：${yen(adSales)}（総売上の ${sl.total.revenue ? Math.round((adSales / sl.total.revenue) * 1000) / 10 : "—"}%。帰属期間がモールで違うので目安）`);
   L.push("");
 
   L.push("## ツールが検出した要対応");
@@ -176,6 +178,28 @@ export function renderCaseMarkdown(s: CaseSummary, opts: { url?: string } = {}):
   L.push(table(["検索語", "キャンペーン", "注文", "広告費", "ROAS", "目標ROAS", "提案入札", "理由"],
     s.advice.topHarvest.map((x) => [x.searchTerm, x.campaign, num(x.orders), yen(x.cost), x.roas, x.target.roas, yen(x.suggestedBid), x.reason])));
   L.push("");
+
+  // モール間の広告費の配分
+  const al = s.allocation;
+  if (al && al.malls.length) {
+    L.push("## モール間の広告費の配分（ツール算出）");
+    L.push("");
+    L.push("広告1円あたりの利益 ＝ ROAS × 広告費前の粗利率 − 1。プラスなら広告が利益を生み、マイナスなら広告で赤字。帰属期間がモールで違う（楽天RPP 30日／Amazon 7〜14日）ので、楽天の ROAS は高めに出やすい点を割り引いてください。");
+    L.push("");
+    L.push(table(["モール", "広告費", "広告経由売上", "ROAS", "粗利率（広告費前）", "損益分岐ROAS", "広告1円あたりの利益", "広告で生んだ利益", "予算切れ"],
+      al.malls.map((m) => [MALL[m.mall] ?? m.mall, yen(m.adCost), yen(m.adSales), m.roas ?? "—",
+        m.grossMargin == null ? "—" : `${Math.round(m.grossMargin * 1000) / 10}%`, m.breakEvenRoas ?? "—",
+        m.profitPerYen == null ? "—" : `${m.profitPerYen}円`, m.adProfit == null ? "—" : yen(m.adProfit),
+        m.budgetLimited == null ? "—" : m.budgetLimited ? "あり" : "なし"])));
+    L.push("");
+    if (al.proposal) {
+      L.push(`**提案：** ${al.proposal.reason}（利益の増え方の目安：30日あたり ${yen(al.proposal.expectedProfit30d)}）`);
+      for (const c of al.proposal.cautions) L.push(`- ${c}`);
+    } else {
+      L.push("配分を動かす提案はありません（どちらも黒字で、効率の差が小さい）。");
+    }
+    L.push("");
+  }
 
   L.push("## 商品別（売上の多い順）");
   L.push("");

@@ -17,6 +17,7 @@ import { monthlyStatement, feeBasis, postedDaily } from "./amazonFin";
 import { pumpTransactions, ingestTransactionsDay } from "./ingestTransactions";
 import { startRakutenBackfill, rakutenBackfillStatus, runRakutenBackfill } from "./rakutenBackfill";
 import { startRematch, rematchStatus, runRematch } from "./rematch";
+import { monthlyTrend } from "./adAllocation";
 import { ingestInventory, pumpInventory, inventoryStatus, notifyInventory } from "./ingestInventory";
 import { ingestSns, pumpSns } from "./ingestSns";
 import { startBackfill, runBackfill, backfillStatus } from "./backfill";
@@ -41,7 +42,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.18.6";
+const APP_VERSION = "0.19.1";
 
 export interface Env {
   DB: D1Database;
@@ -549,6 +550,14 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const s = await buildCaseSummary(env.DB, caseId, periodQuery(u));
     if (!s) return json({ error: "案件が見つかりません" }, 404);
     return json(s);
+  }
+
+  // 月次推移（直近12か月）：売上・粗利・広告費・広告経由売上をモール別に
+  if (path === "/api/monthly-trend") {
+    const u = new URL(req.url);
+    const caseId = u.searchParams.get("case_id");
+    if (!caseId) return json({ error: "案件を指定してください" }, 400);
+    return json({ months: await monthlyTrend(env.DB, caseId, Math.min(24, Number(u.searchParams.get("months") ?? 12))) });
   }
 
   // 画面の「データを直接コピー」用。共有URLを使わずにAIへ渡せる
