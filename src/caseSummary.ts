@@ -8,6 +8,7 @@
 import { feeLabel, isKnownFee } from "./feeNames";
 import { inventoryStatus, type InventoryRow } from "./ingestInventory";
 import { resolveSettings } from "./settings";
+import { listEvents, type SaleEvent } from "./events";
 import { applyTodoStatus, doneInMonth, isoWeek, textKey, type TodoStatus, type DoneItem } from "./todos";
 import { buildAdAdvice, type BidAdvice, type NegativeAdvice, type HarvestAdvice } from "./adAdvice";
 
@@ -202,6 +203,8 @@ export interface CaseSummary {
   warnings: string[];
   /** やること。画面とAIの両方に同じものを出す */
   todo: Todo[];
+  /** 期間にかかるセール・イベント（参加しなかったものも含む。participating で見分ける） */
+  events: SaleEvent[];
   /** 今月「対応済み」にしたこと（お客様向けレポート用） */
   doneThisMonth: DoneItem[];
   settings: { targetMargin: number; adMargin: number; stockAlertDays: number; rakutenFeeRate: number | null; amazonFeeRate: number | null;
@@ -532,6 +535,7 @@ export async function buildCaseSummary(
   if (!prevComplete && per.preset !== "all")
     warnings.push(`比べる直前の期間（${prevFrom}〜${prevTo}）の売上データが${n(prevAgg?.n) ? "一部しか無い" : "無い"}ため、前期間比は出していません`);
 
+  const events = await listEvents(db, caseId, from, to);
   const base: Omit<CaseSummary, "todo" | "doneThisMonth"> = {
     caseId, caseName: c.name,
     period: { from, to, days, preset: per.preset },
@@ -579,7 +583,7 @@ export async function buildCaseSummary(
       impact: adv.impact,
       topBids: adv.bids.slice(0, 10), topNegatives: adv.negatives.slice(0, 10), topHarvest: adv.harvest.slice(0, 10),
     },
-    products, inventory, freshness, warnings,
+    products, inventory, freshness, warnings, events,
     settings: {
       targetMargin, adMargin,
       stockAlertDays: val(sAmz.case, "stock_alert_days", 14),

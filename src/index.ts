@@ -26,6 +26,7 @@ import { buildAdAdvice } from "./adAdvice";
 import { renderCaseMarkdown } from "./caseReport";
 import { postSlack, listCaseSlack, saveCaseSlack } from "./slack";
 import { sendDailySummaries } from "./dailySummary";
+import { listEvents, saveEvent, deleteEvent, setParticipation } from "./events";
 import { listAllCases, createCase, renameCase, setCaseStatus, copySettings, setNotify, notifyEnabled } from "./cases";
 import { setTodoStatus, doneInMonth, actionsBetween, skippedTodos, STATUS_JA, type TodoStatus } from "./todos";
 import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./adsApi";
@@ -34,7 +35,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.13.0";
+const APP_VERSION = "0.14.0";
 
 export interface Env {
   DB: D1Database;
@@ -575,6 +576,30 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const b = (await req.json().catch(() => ({}))) as { caseId?: string };
     const results = await sendDailySummaries(env, b.caseId);
     return json({ ok: results.every((r) => r.ok), results });
+  }
+
+  /* ───────── セール・イベント ───────── */
+
+  if (path === "/api/events" && req.method === "GET") {
+    const u = new URL(req.url);
+    const caseId = u.searchParams.get("case_id");
+    if (!caseId) return json({ events: [] });
+    const from = u.searchParams.get("from") ?? "2000-01-01", to = u.searchParams.get("to") ?? "2100-12-31";
+    return json({ events: await listEvents(env.DB, caseId, from, to) });
+  }
+  if (path === "/api/events" && req.method === "POST") {
+    const b = (await req.json()) as Record<string, unknown> & { action?: string };
+    try {
+      if (b.action === "delete") { await deleteEvent(env.DB, String(b.id)); return json({ ok: true }); }
+      if (b.action === "participation") {
+        await setParticipation(env.DB, String(b.caseId), String(b.eventId), Boolean(b.participating), viewer(req));
+        return json({ ok: true });
+      }
+      const id = await saveEvent(env.DB, b as Parameters<typeof saveEvent>[1], viewer(req));
+      return json({ ok: true, id });
+    } catch (e) {
+      return json({ error: String(e instanceof Error ? e.message : e) }, 400);
+    }
   }
 
   /* ───────── 週次レポート ───────── */

@@ -96,6 +96,16 @@ export function renderCaseMarkdown(s: CaseSummary, opts: { url?: string } = {}):
   }
   L.push("");
 
+  const evs = s.events.filter((e) => e.participating);
+  if (evs.length) {
+    L.push("## 期間中のセール・イベント（参加したもの）");
+    L.push("");
+    L.push("売上の増減を読むときの前提です。イベント中は売上・広告費とも普段より大きく動きます。");
+    L.push("");
+    L.push(table(["モール", "イベント", "期間", "日程の確度"], evs.map((e) => [MALL[e.mall] ?? e.mall, e.name,
+      `${e.presaleAt ? `先行 ${e.presaleAt} ／ ` : ""}${e.startAt} 〜 ${e.endAt}`, e.confidence === "estimated" ? "要確認" : "確定"])));
+    L.push("");
+  }
   L.push("## 損益（モール別）");
   L.push("");
   L.push(plTable(s.pl));

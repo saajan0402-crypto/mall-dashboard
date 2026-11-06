@@ -198,7 +198,7 @@
 <body>
 <header>
   <div class="bar">
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.13.0</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.14.0</span></div>
     <div class="picks">
       <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
       <div class="range-pick" id="range-pick" title="">
@@ -244,6 +244,7 @@
     <nav class="nav2 hidden" role="tablist" aria-label="設定の画面" id="sub-set">
       <button role="tab" id="t-cases" aria-selected="false">案件</button>
       <button role="tab" id="t-settings" aria-selected="false">設定</button>
+      <button role="tab" id="t-events" aria-selected="false">セール・イベント</button>
       <button role="tab" id="t-conn" aria-selected="false">接続</button>
       <button role="tab" id="t-status" aria-selected="false">連携ステータス</button>
       <button role="tab" id="t-master" aria-selected="false">商品マスタ</button>
@@ -494,7 +495,7 @@
       <h2>日別の合計</h2>
       <div class="tablewrap">
         <table>
-          <thead><tr><th>日付</th><th class="r">販売数</th><th class="r">売上</th><th class="r">セッション</th><th class="r">CVR</th></tr></thead>
+          <thead><tr><th>日付</th><th class="r">販売数</th><th class="r">売上</th><th class="r">セッション</th><th class="r">CVR</th><th>セール・イベント</th></tr></thead>
           <tbody id="sales-daily"></tbody>
         </table>
       </div>
@@ -659,6 +660,56 @@
   </section>
 
   <!-- 設定 -->
+  <!-- セール・イベント -->
+  <section id="p-events" class="hidden">
+    <div>
+      <h2>セール・イベント<span class="hint" id="ev-case"></span></h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0">
+          <label class="note" for="ev-year">年</label>
+          <select id="ev-year" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink)"></select>
+          <span class="note" id="ev-msg"></span>
+        </div>
+        <p class="note" style="margin-top:8px">ここに登録したイベントの期間は、売上のグラフの背景に色がつき、日別の表・レポートにも印がつきます。
+          <strong>参加しなかったイベントはチェックを外してください</strong>（この案件だけに効きます）。案件がつないでいるモールのイベントだけを出しています。</p>
+        <p class="note" style="margin-top:6px">楽天・Amazonの主なイベントは、公開されているまとめ情報から最初に登録してあります。
+          <span class="tag warn">要確認</span> は日程が予想や未確認のものです。実際の日程と違っていたら「直す」で修正してください。</p>
+      </div>
+    </div>
+    <div>
+      <div class="tablewrap">
+        <table style="min-width:820px">
+          <thead><tr><th>参加</th><th>モール</th><th>イベント</th><th>期間（日本時間）</th><th>グラフに色がつく日</th><th>登録</th><th></th></tr></thead>
+          <tbody id="ev-rows"></tbody>
+        </table>
+      </div>
+    </div>
+    <div>
+      <h2 id="ev-form-title">イベントを追加</h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0">
+          <select id="ev-mall" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink)"><option value="rakuten">楽天</option><option value="amazon">Amazon</option></select>
+          <input id="ev-name" placeholder="イベント名（例：自社クーポン配布、5と0のつく日）" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);min-width:280px">
+          <select id="ev-scope" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink)"><option value="case">この案件だけ</option><option value="all">全案件共通</option></select>
+        </div>
+        <div class="btns">
+          <span class="note">開始</span><input type="datetime-local" id="ev-start" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink)">
+          <span class="note">終了</span><input type="datetime-local" id="ev-end" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink)">
+          <span class="note">先行セール（任意）</span><input type="datetime-local" id="ev-pre" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink)">
+        </div>
+        <div class="btns">
+          <label style="display:flex;gap:6px;align-items:center;font-size:13px;cursor:pointer"><input type="checkbox" id="ev-est">日程は要確認</label>
+          <input id="ev-note" placeholder="メモ（任意）" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);min-width:240px">
+          <button class="act primary" id="btn-ev-save">追加する</button>
+          <button class="act hidden" id="btn-ev-cancel">やめる</button>
+          <span class="note" id="ev-form-msg"></span>
+        </div>
+        <p class="note" style="margin-top:8px">自社のクーポンやタイムセールのように、その案件だけのキャンペーンも登録できます。楽天のイベントは20:00開始・翌日01:59終了のことが多いので、
+          終わりの3時間はグラフの色から外しています（最終日はほぼ通常の日のため）。</p>
+      </div>
+    </div>
+  </section>
+
   <!-- 週次レポート -->
   <section id="p-report" class="hidden">
     <div id="rep-controls">
@@ -888,18 +939,18 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.13.0";
+  const UI_VERSION = "0.14.0";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
   const FFL = { fba: "FBA", own: "自社発送", mcf: "マルチチャネル" };
   const POLICY = { profit: "利益重視", share: "シェア獲得", nurture: "育成中" };
 
-  const tabs = [["t-dash", "p-dash"], ["t-master", "p-master"], ["t-sales", "p-sales"], ["t-stock", "p-stock"], ["t-ads", "p-ads"], ["t-settings", "p-settings"], ["t-conn", "p-conn"], ["t-status", "p-status"], ["t-cases", "p-cases"], ["t-report", "p-report"]];
+  const tabs = [["t-dash", "p-dash"], ["t-master", "p-master"], ["t-sales", "p-sales"], ["t-stock", "p-stock"], ["t-ads", "p-ads"], ["t-settings", "p-settings"], ["t-conn", "p-conn"], ["t-status", "p-status"], ["t-cases", "p-cases"], ["t-report", "p-report"], ["t-events", "p-events"]];
   // 2段のメニュー。上の段（グループ）ごとに、最後に開いていた画面を覚えておく
   const GROUPS = {
     dash: { btn: "grp-dash", sub: "sub-dash", tabs: ["t-dash", "t-sales", "t-ads", "t-stock", "t-report"], last: "t-dash" },
-    set: { btn: "grp-set", sub: "sub-set", tabs: ["t-cases", "t-settings", "t-conn", "t-status", "t-master"], last: "t-cases" },
+    set: { btn: "grp-set", sub: "sub-set", tabs: ["t-cases", "t-settings", "t-events", "t-conn", "t-status", "t-master"], last: "t-cases" },
   };
   const groupOf = (t) => Object.keys(GROUPS).find((g) => GROUPS[g].tabs.includes(t));
   function openTab(t) {
@@ -960,6 +1011,7 @@
     if (p === "p-conn") return loadConnections();
     if (p === "p-cases") return loadCases();
     if (p === "p-report") return loadReport();
+    if (p === "p-events") return loadEvents();
   }
   const activePanel = () => (tabs.find(([t]) => $(t).getAttribute("aria-selected") === "true") || tabs[0])[1];
 
@@ -1436,6 +1488,17 @@
     const bw = Math.max(3, Math.min(24, band - 2));
     const maxIdx = data.reduce((m, d, i) => (d.value > data[m].value ? i : m), 0);
 
+    // セール・イベントの日は背景に色をつける（楽天とAmazonが重なる日は左右に分ける）
+    data.forEach((d, i) => {
+      if (!d.ev || !d.ev.length) return;
+      const malls = [...new Set(d.ev.map((e) => e.mall))].sort((a, b) => (a === "rakuten" ? -1 : 1));
+      malls.forEach((m, j) => {
+        const r = el("rect", { x: PAD.l + i * band + (band / malls.length) * j, y: PAD.t, width: band / malls.length + 0.5, height: plotH,
+          fill: m === "rakuten" ? "var(--rakuten)" : "var(--amazon)", "fill-opacity": 0.13 });
+        svg.insertBefore(r, svg.firstChild);
+      });
+    });
+
     data.forEach((d, i) => {
       const x = PAD.l + i * band + (band - bw) / 2;
       const h = Math.max(0, PAD.t + plotH - y(d.value));
@@ -1459,7 +1522,27 @@
       }
     });
     host.appendChild(svg);
+    // 凡例。その期間に出てくるイベントの名前も並べる
+    const all = data.flatMap((d) => d.ev || []);
+    if (all.length) {
+      const names = (m) => [...new Set(all.filter((e) => e.mall === m).map((e) => e.name))].join("・");
+      const lg = document.createElement("div");
+      lg.className = "note"; lg.style.cssText = "display:flex;gap:16px;flex-wrap:wrap;margin-top:6px;font-size:12px";
+      lg.innerHTML = ["rakuten", "amazon"].filter((m) => all.some((e) => e.mall === m)).map((m) =>
+        `<span><span style="display:inline-block;width:11px;height:11px;border-radius:2px;vertical-align:-1px;margin-right:5px;
+          background:color-mix(in srgb,var(--${m}) 22%,transparent);border:1px solid color-mix(in srgb,var(--${m}) 45%,transparent)"></span>${m === "rakuten" ? "楽天" : "Amazon"}のイベント（${esc(names(m))}）</span>`).join("");
+      host.appendChild(lg);
+    }
   }
+
+  /** その期間にかかる、参加したイベント。グラフの背景と表の印に使う */
+  function evOverlap(events, from, to) {
+    return (events || []).filter((e) => e.participating && e.dayFrom <= to && e.dayTo >= from)
+      .map((e) => ({ mall: e.mall, name: e.name }))
+      .filter((e, i, a) => a.findIndex((x) => x.mall === e.mall && x.name === e.name) === i);
+  }
+  const evTip = (ev) => ev && ev.length
+    ? ev.map((e) => `<div><span class="k">${e.mall === "rakuten" ? "楽天" : "Amazon"}</span><span>${esc(e.name)}</span></div>`).join("") : "";
 
   /** 折れ線。data = [{label, value, tip}] */
   function lineChart(host, data, fmt) {
@@ -1543,6 +1626,7 @@
 
   /* ---------- 売上 ---------- */
   let salesCasesLoaded = false;
+  let salesEvents = [];
   let salesView = "table";
 
   async function loadSales() {
@@ -1560,11 +1644,15 @@
     const d = await get(`/api/sales?from=${range.from}&to=${range.to}` + (caseId ? `&case_id=${encodeURIComponent(caseId)}` : ""));
     $("sales-rows-hint").textContent = d.truncated ? "新しい順・期間が長いため最新2000行まで（日別の合計とグラフは全期間ぶん）" : "新しい順";
 
+    salesEvents = caseId ? ((await get(`/api/events?case_id=${encodeURIComponent(caseId)}&from=${range.from}&to=${range.to}`)).events || []) : [];
     $("sales-daily").innerHTML = (d.daily || []).map((x) => {
       const cvr = x.sessions ? ((x.units / x.sessions) * 100).toFixed(1) + "%" : "—";
-      return `<tr><td>${esc(x.date)}</td><td class="r">${x.units}</td>
-        <td class="r">${yen(x.revenue)}</td><td class="r">${x.sessions || "—"}</td><td class="r">${cvr}</td></tr>`;
-    }).join("") || `<tr><td colspan="5" style="color:var(--muted)">まだデータがありません。</td></tr>`;
+      const ev = evOverlap(salesEvents, x.date, x.date);
+      const tint = ev.length ? ` style="background:color-mix(in srgb,var(--${ev[0].mall}) 9%,transparent)"` : "";
+      return `<tr${tint}><td>${esc(x.date)}</td><td class="r">${x.units}</td>
+        <td class="r">${yen(x.revenue)}</td><td class="r">${x.sessions || "—"}</td><td class="r">${cvr}</td>
+        <td>${ev.map((e) => `<span class="tag ${e.mall === "rakuten" ? "pill-r" : "pill-a"}">${esc(e.name)}</span>`).join(" ")}</td></tr>`;
+    }).join("") || `<tr><td colspan="6" style="color:var(--muted)">まだデータがありません。</td></tr>`;
 
     const rows = d.rows || [];
     $("no-sales").classList.toggle("hidden", rows.length > 0);
@@ -1613,6 +1701,10 @@
     }
     const rows = [...map.values()].map((b) => ({
       ...b,
+      from: unit === "month" ? b.key + "-01" : b.key,
+      to: unit === "day" ? b.key : unit === "week"
+        ? new Date(Date.parse(b.key + "T00:00:00Z") + 6 * 86400000).toISOString().slice(0, 10)
+        : new Date(Date.UTC(Number(b.key.slice(0, 4)), Number(b.key.slice(5, 7)), 0)).toISOString().slice(0, 10),
       label: unit === "month" ? b.key.slice(2).replace("-", "/") : b.key.slice(5).replace("-", "/"),
       title: unit === "month" ? `${b.key}（月）` : unit === "week" ? `${b.key} の週` : b.key
     }));
@@ -1629,12 +1721,13 @@
 
     const bk = bucketize(daily, ["revenue", "units", "sessions"]);
     $("chart-rev-sub").textContent += daily.length ? `　${UNIT_JA[bk.unit]}` : "";
-    columnChart($("chart-rev"), bk.rows.map((x) => ({
-      label: x.label, value: x.revenue,
-      tip: `<div><strong>${esc(x.title)}</strong></div>
+    columnChart($("chart-rev"), bk.rows.map((x) => {
+      const ev = evOverlap(salesEvents, x.from, x.to);
+      return { label: x.label, value: x.revenue, ev,
+        tip: `<div><strong>${esc(x.title)}</strong></div>
             <div><span class="k">売上</span><span class="v">${yen(x.revenue)}</span></div>
-            <div><span class="k">販売数</span><span class="v">${x.units}</span></div>`
-    })), yen);
+            <div><span class="k">販売数</span><span class="v">${x.units}</span></div>${evTip(ev)}` };
+    }), yen);
 
     lineChart($("chart-sess"), bk.rows.map((x) => ({
       label: x.label, value: x.sessions || 0,
@@ -2466,12 +2559,13 @@
     }
     const bk = bucketize(days, ["revenue", "units", "has"]);
     $("dash-trend-sub").textContent = `${UNIT_JA[bk.unit]}・${s.malls.map((x) => MALL_JA[x] || x).join("＋") || "全モール"}の合計　${yen(sl.total.revenue)}`;
-    columnChart($("dash-trend"), bk.rows.map((x) => ({
-      label: x.label, value: x.revenue,
-      tip: x.has ? `<div><strong>${esc(x.title)}</strong></div><div><span class="k">売上</span><span class="v">${yen(x.revenue)}</span></div>
+    columnChart($("dash-trend"), bk.rows.map((x) => {
+      const ev = evOverlap(s.events, x.from, x.to);
+      return { label: x.label, value: x.revenue, ev,
+        tip: (x.has ? `<div><strong>${esc(x.title)}</strong></div><div><span class="k">売上</span><span class="v">${yen(x.revenue)}</span></div>
                 <div><span class="k">販売数</span><span class="v">${x.units}</span></div>`
-             : `<div><strong>${esc(x.title)}</strong></div><div class="k">データなし</div>`
-    })), yen);
+             : `<div><strong>${esc(x.title)}</strong></div><div class="k">データなし</div>`) + evTip(ev) };
+    }), yen);
 
     const plRows = pl.byMall.map((x) => `<tr><td>${mallTag(x.mall)}</td><td class="r">${yen(x.revenue)}</td>
       <td class="r">${yen(x.cost)}</td><td class="r">${yen(x.fees)}${x.feesEst > 0 ? `<span class="tag wait" style="margin-left:5px">概算</span>` : ""}</td>
@@ -2517,6 +2611,90 @@
       <td class="r">${p.costManual ? "—" : pctS(p.grossRate)}</td><td class="r">${yen(p.adCost)}</td></tr>`).join("") || emptyRow(7, "この期間の売上がありません。");
 
   }
+
+  /* ---------- セール・イベント ---------- */
+  let evList = [], evEditing = null;
+  const dtLocal = (s) => (s ? s.replace(" ", "T") : "");
+  const dtStore = (v) => (v ? v.replace("T", " ").slice(0, 16) : null);
+  async function loadEvents() {
+    if (!currentCase) return;
+    const ys = [];
+    for (let y = Number(jstDay(0).slice(0, 4)) + 1; y >= 2025; y--) ys.push(y);
+    if (!$("ev-year").options.length) {
+      $("ev-year").innerHTML = ys.map((y) => `<option value="${y}">${y}年</option>`).join("");
+      $("ev-year").value = jstDay(0).slice(0, 4);
+    }
+    $("ev-case").textContent = caseName();
+    const y = $("ev-year").value;
+    evList = (await get(`/api/events?case_id=${encodeURIComponent(currentCase)}&from=${y}-01-01&to=${y}-12-31`)).events || [];
+    $("ev-rows").innerHTML = evList.map((e, i) => `<tr${e.participating ? "" : ' style="opacity:.5"'}>
+      <td><input type="checkbox" data-ev-part="${i}" ${e.participating ? "checked" : ""} aria-label="参加"></td>
+      <td>${mallTag(e.mall)}</td>
+      <td>${esc(e.name)} ${e.confidence === "estimated" ? `<span class="tag warn">要確認</span>` : ""}${e.note ? `<div class="note">${esc(e.note)}</div>` : ""}</td>
+      <td style="white-space:nowrap">${e.presaleAt ? `<div class="note">先行 ${esc(e.presaleAt)}〜</div>` : ""}${esc(e.startAt)} 〜 ${esc(e.endAt)}</td>
+      <td>${esc(e.dayFrom.slice(5))} 〜 ${esc(e.dayTo.slice(5))}</td>
+      <td>${e.caseId ? "この案件だけ" : e.source === "preset" ? "最初から" : "全案件共通"}</td>
+      <td style="white-space:nowrap"><button class="act" data-ev-edit="${i}" style="padding:3px 10px;font-size:12px">直す</button>
+        ${e.source === "manual" ? `<button class="act" data-ev-del="${i}" style="padding:3px 10px;font-size:12px">消す</button>` : ""}</td>
+    </tr>`).join("") || `<tr><td colspan="7" style="color:var(--muted)">この年のイベントはまだありません。</td></tr>`;
+  }
+  $("ev-year").addEventListener("change", loadEvents);
+  function evFormReset() {
+    evEditing = null;
+    ["ev-name", "ev-start", "ev-end", "ev-pre", "ev-note"].forEach((id) => { $(id).value = ""; });
+    $("ev-est").checked = false; $("ev-scope").disabled = false;
+    $("ev-form-title").textContent = "イベントを追加"; $("btn-ev-save").textContent = "追加する";
+    $("btn-ev-cancel").classList.add("hidden");
+  }
+  $("btn-ev-cancel").addEventListener("click", evFormReset);
+  $("ev-rows").addEventListener("change", async (e) => {
+    const cb = e.target.closest("[data-ev-part]");
+    if (!cb) return;
+    const ev = evList[Number(cb.dataset.evPart)];
+    const r = await fetch("/api/events", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "participation", caseId: currentCase, eventId: ev.id, participating: cb.checked }) });
+    $("ev-msg").innerHTML = r.ok ? `<span class="tag ok">保存しました</span> ${esc(ev.name)} を${cb.checked ? "参加" : "不参加"}にしました` : "保存できませんでした";
+    if (r.ok) loadEvents();
+  });
+  $("ev-rows").addEventListener("click", async (e) => {
+    const ed = e.target.closest("[data-ev-edit]"), del = e.target.closest("[data-ev-del]");
+    if (ed) {
+      const ev = evList[Number(ed.dataset.evEdit)];
+      evEditing = ev;
+      $("ev-mall").value = ev.mall; $("ev-name").value = ev.name; $("ev-scope").value = ev.caseId ? "case" : "all"; $("ev-scope").disabled = true;
+      $("ev-start").value = dtLocal(ev.startAt); $("ev-end").value = dtLocal(ev.endAt); $("ev-pre").value = dtLocal(ev.presaleAt);
+      $("ev-est").checked = ev.confidence === "estimated"; $("ev-note").value = ev.note || "";
+      $("ev-form-title").textContent = `「${ev.name}」を直す`; $("btn-ev-save").textContent = "保存する";
+      $("btn-ev-cancel").classList.remove("hidden");
+      $("ev-form-title").scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    if (del) {
+      const ev = evList[Number(del.dataset.evDel)];
+      // 消すのは手で登録したイベントだけ。その場で確認の文言を出してからもう一度押してもらう
+      if (del.dataset.confirm !== "1") { del.dataset.confirm = "1"; del.textContent = "本当に消す"; return; }
+      const r = await fetch("/api/events", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "delete", id: ev.id }) });
+      const d = await r.json();
+      $("ev-msg").innerHTML = r.ok ? `<span class="tag ok">消しました</span>` : esc(d.error || "消せませんでした");
+      loadEvents();
+    }
+  });
+  $("btn-ev-save").addEventListener("click", async () => {
+    const body = {
+      id: evEditing ? evEditing.id : undefined,
+      caseId: evEditing ? evEditing.caseId : ($("ev-scope").value === "case" ? currentCase : null),
+      mall: $("ev-mall").value, kind: evEditing ? evEditing.kind : "own", name: $("ev-name").value,
+      startAt: dtStore($("ev-start").value), endAt: dtStore($("ev-end").value), presaleAt: dtStore($("ev-pre").value),
+      confidence: $("ev-est").checked ? "estimated" : "confirmed", note: $("ev-note").value,
+    };
+    const r = await fetch("/api/events", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) { $("ev-form-msg").innerHTML = `<span class="tag ng">NG</span> ${esc(d.error || "保存できませんでした")}`; return; }
+    $("ev-form-msg").innerHTML = `<span class="tag ok">保存しました</span>`;
+    if (body.startAt) $("ev-year").value = body.startAt.slice(0, 4);
+    evFormReset();
+    loadEvents();
+  });
 
   /* ---------- 週次レポート ---------- */
   let repData = null;
@@ -2566,7 +2744,10 @@
       <h1>${esc(s.caseName)}　週次レポート</h1>
       <p class="meta">集計期間：${esc(P.from)} 〜 ${esc(P.to)}（${P.days}日間）／比較：直前の${P.days}日（${esc(s.prev.from)} 〜 ${esc(s.prev.to)}）／作成：${esc(s.generatedAt)}／対象：${esc(s.malls.map((m) => MALL_JA[m] || m).join("・"))}</p>
       <div class="kpis">${kpis}</div>
-      <div class="sec"><h2>1. 売上の推移</h2><div id="rep-chart"></div></div>
+      <div class="sec"><h2>1. 売上の推移</h2><div id="rep-chart"></div>
+        ${s.events.filter((e) => e.participating).length ? `<h3>期間中のセール・イベント</h3>${tbl(["モール", "イベント", "期間"],
+          s.events.filter((e) => e.participating).map((e) => [esc(MALL_JA[e.mall] || e.mall), esc(e.name),
+            esc(`${e.presaleAt ? `先行 ${e.presaleAt.slice(5)}〜／` : ""}${e.startAt.slice(5)} 〜 ${e.endAt.slice(5)}`)]))}` : ""}</div>
       <div class="sec"><h2>2. モール別</h2>${tbl(plHead, plRows, 1)}</div>
       <div class="sec"><h2>3. 商品別</h2>${tbl(prodHead, prodRows, 2)}</div>
       <div class="sec"><h2>4. 広告</h2>
@@ -2608,8 +2789,11 @@
       days.push({ date: k, revenue: x ? x.revenue : 0, units: x ? x.units : 0 });
     }
     const bk = bucketize(days, ["revenue", "units"]);
-    columnChart($("rep-chart"), bk.rows.map((x) => ({ label: x.label, value: x.revenue,
-      tip: `<div><strong>${esc(x.title)}</strong></div><div><span class="k">売上</span><span class="v">${yen(x.revenue)}</span></div>` })), yen);
+    columnChart($("rep-chart"), bk.rows.map((x) => {
+      const ev = evOverlap(s.events, x.from, x.to);
+      return { label: x.label, value: x.revenue, ev,
+        tip: `<div><strong>${esc(x.title)}</strong></div><div><span class="k">売上</span><span class="v">${yen(x.revenue)}</span></div>${evTip(ev)}` };
+    }), yen);
   }
   $("rep-cost").addEventListener("change", renderReport);
   $("btn-rep-week").addEventListener("click", () => changeRange({ preset: "last_week" }));
@@ -2698,9 +2882,11 @@
     const dayRows = [];
     for (let t = Date.parse(P.from); t <= Date.parse(P.to); t += 86400000) {
       const k = new Date(t).toISOString().slice(0, 10); const x = byDate.get(k);
-      dayRows.push([k, x ? x.revenue : null, x ? x.units : null]);
+      dayRows.push([k, x ? x.revenue : null, x ? x.units : null, evOverlap(s.events, k, k).map((e) => `${MALL_JA[e.mall] || e.mall}：${e.name}`).join("／")]);
     }
-    sheet("日別売上", "日別の売上", ["日付", "売上", "販売数"], dayRows, [null, YEN, INT], [14, 14, 10]);
+    const wsDay = sheet("日別売上", "日別の売上", ["日付", "売上", "販売数", "セール・イベント"], dayRows, [null, YEN, INT], [14, 14, 10, 40]);
+    // イベントの日は行に色をつける（グラフの背景と同じ考え方）
+    dayRows.forEach((r, i) => { if (r[3]) wsDay.getRow(4 + i).eachCell((c) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFBEFE6" } }; }); });
 
     sheet("モール別", "モール別", cost ? ["モール", "売上", "販売数", "原価", "手数料", "うち概算", "粗利", "粗利率（%）", "原価不明の売上"] : ["モール", "売上", "販売数"],
       s.pl.byMall.map((m) => { const cov = m.revenue - m.revenueWithoutCost; const base = [MALL_JA[m.mall] || m.mall, m.revenue, m.units];
