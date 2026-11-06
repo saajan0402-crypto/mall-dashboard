@@ -16,6 +16,7 @@ import { ingestFinances, pumpFinances, reparseFinances } from "./ingestFinances"
 import { monthlyStatement, feeBasis, postedDaily } from "./amazonFin";
 import { pumpTransactions, ingestTransactionsDay } from "./ingestTransactions";
 import { startRakutenBackfill, rakutenBackfillStatus, runRakutenBackfill } from "./rakutenBackfill";
+import { startRematch, rematchStatus, runRematch } from "./rematch";
 import { ingestInventory, pumpInventory, inventoryStatus, notifyInventory } from "./ingestInventory";
 import { ingestSns, pumpSns } from "./ingestSns";
 import { startBackfill, runBackfill, backfillStatus } from "./backfill";
@@ -40,7 +41,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.18.4";
+const APP_VERSION = "0.18.5";
 
 export interface Env {
   DB: D1Database;
@@ -343,6 +344,19 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     }
     await runRakutenBackfill(env, { caseId: b.caseId, budgetMs: 20000 });
     return json({ progress: await rakutenBackfillStatus(env.DB, b.caseId) });
+  }
+
+  // 取り込み済みの Amazon のデータを、今の商品マスタで照合し直す（マスタの SKU を直したあと）
+  if (path === "/api/rematch" && req.method === "GET") {
+    const caseId = new URL(req.url).searchParams.get("case_id");
+    return json(caseId ? await rematchStatus(env.DB, caseId) : { running: false });
+  }
+  if (path === "/api/rematch" && req.method === "POST") {
+    const b = (await req.json().catch(() => ({}))) as { caseId?: string; action?: "start" | "run" };
+    if (!b.caseId) return json({ error: "案件を選んでください" }, 400);
+    if (b.action === "start") await startRematch(env.DB, b.caseId);
+    await runRematch(env, { caseId: b.caseId, budgetMs: 20000 });
+    return json(await rematchStatus(env.DB, b.caseId));
   }
 
   /* ───────── 請求明細（実額） ───────── */
@@ -1012,6 +1026,8 @@ export default {
           await pumpTransactions(env, { budgetMs: 60000 }).catch(() => 0);
           // 楽天の過去の売上（始めた案件だけ）
           await runRakutenBackfill(env, { budgetMs: 40000 }).catch(() => 0);
+          // 商品マスタを直したあとの照合し直し（日次売上をレポートの生データから作り直す）
+          await runRematch(env, { budgetMs: 40000 }).catch(() => 0);
           // 広告レポートは出来上がるまで数分〜数十分かかるので、ここで少しずつ取りに行く
           const ads = await env.DB
             .prepare("SELECT COUNT(*) AS n FROM ads_report_jobs WHERE status IN ('queued', 'requested')")

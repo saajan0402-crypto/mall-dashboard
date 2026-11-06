@@ -306,7 +306,7 @@ async function stepTraffic(
  * レポートの取り込みは日次売上の行を作り直すので、
  * 注文から拾った値引き額が消える。入れ直しておく
  */
-async function reapplyDiscounts(env: BackfillEnv, caseId: string, date: string): Promise<void> {
+export async function reapplyDiscounts(env: BackfillEnv, caseId: string, date: string): Promise<void> {
   await env.DB.prepare(
     `UPDATE daily_sales SET discounts = COALESCE((
         SELECT SUM(oi.discount) FROM order_items oi

@@ -1,4 +1,5 @@
 import { recalcFeeEst } from "./settings";
+import { startRematch } from "./rematch";
 
 /**
  * 商品マスタの取り込み
@@ -354,5 +355,7 @@ export async function importProducts(
 
   // 楽天RSLの暫定物流費が変わったかもしれないので、楽天の手数料の概算を引き直す
   for (const caseId of caseIds.values()) await recalcFeeEst(db, caseId, "rakuten");
+  // SKU を直した場合に備えて、取り込み済みの Amazon のデータを照合し直す（日次売上の作り直しは裏で進む）
+  for (const caseId of caseIds.values()) await startRematch(db, caseId);
   return counts;
 }

@@ -203,7 +203,7 @@
 <body>
 <header>
   <div class="bar">
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.18.4</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.18.5</span></div>
     <div class="picks">
       <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
       <div class="range-pick" id="range-pick" title="">
@@ -368,6 +368,10 @@
 
     <div>
       <h2>登録済みの商品<span class="hint" id="case-summary"></span></h2>
+      <div class="btns" style="margin:-4px 0 10px">
+        <button class="act" id="btn-rematch" style="padding:4px 12px;font-size:12.5px">取り込み済みのデータを照合し直す</button>
+        <span class="note" id="rematch-msg">SKU を直したら、Amazon の売上・手数料・広告を今のマスタで付け直します（保存・取り込みのたびに自動でも動きます）</span>
+      </div>
       <div class="tablewrap">
         <table>
           <thead><tr>
@@ -1020,7 +1024,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.18.4";
+  const UI_VERSION = "0.18.5";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -1085,7 +1089,7 @@
   function loadPanel(p) {
     markRangeTab(p);
     if (p === "p-dash") return loadDashboard();
-    if (p === "p-master") return loadProducts();
+    if (p === "p-master") return loadProducts().then(loadRematch);
     if (p === "p-status") return loadStatus();
     if (p === "p-sales") { syncMonthFromRange(); return loadSales().then(loadSummary).then(loadCharges).then(loadBackfill).then(loadAmzMonthly); }
     if (p === "p-stock") return loadStock();
@@ -1220,6 +1224,26 @@
       .map((c) => `${c.name} ${c.products}件`).join(" ／ "))
       + (manual ? `　<span class="tag warn">原価の手計算待ち ${manual}件</span>` : "");
   }
+
+  /* ---------- 照合し直し ---------- */
+  async function loadRematch() {
+    if (!currentCase) return;
+    const d = await get(`/api/rematch?case_id=${encodeURIComponent(currentCase)}`);
+    if (d.running) $("rematch-msg").innerHTML = `<span class="tag wait">照合し直し中</span> 日次売上を作り直しています（${esc(d.cursor || "")} より前が残り）。5分ごとに裏で進みます`;
+  }
+  $("btn-rematch").addEventListener("click", async () => {
+    if (!currentCase) return;
+    const b = $("btn-rematch"); b.disabled = true;
+    $("rematch-msg").textContent = "照合し直しています…";
+    try {
+      const r = await fetch("/api/rematch", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ caseId: currentCase, action: "start" }) });
+      const d = await r.json();
+      $("rematch-msg").innerHTML = d.running
+        ? `<span class="tag wait">照合し直し中</span> 入金明細・広告の付け直しは済みました。日次売上の作り直しは裏で続きます（${esc(d.cursor || "")} より前が残り）`
+        : `<span class="tag ok">完了</span> 照合し直しました`;
+    } finally { b.disabled = false; }
+  });
 
   /* ---------- 商品マスタ：画面から編集 ---------- */
   const PD_FIELDS = ["sku", "name", "jan", "status", "amazonSku", "asin", "amazonFulfillment", "rakutenId", "rakutenFulfillment",
