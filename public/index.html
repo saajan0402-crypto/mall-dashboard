@@ -404,6 +404,7 @@
           <label>梱包資材費（円）<input id="pd-packagingCost" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"></label>
           <label>目標粗利率（%）<input id="pd-targetMargin" placeholder="空欄＝案件の設定に従う" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"></label>
           <label>在庫アラート日数<input id="pd-stockAlertDays" placeholder="空欄＝案件の設定に従う" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"></label>
+          <label>楽天RSL物流費（暫定・1個あたり・円）<input id="pd-rslFee" placeholder="空欄＝0。RSLを使わない商品は空欄" title="楽天の請求明細（物流費）がそろうまで、楽天の手数料の概算に「この額 × 販売数」を足します。実額がそろった月は実額に置き換わります" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:100%"></label>
         </div>
         <div id="pd-policy-help" class="note" style="margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2)"></div>
         <div class="btns">
@@ -1011,7 +1012,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.18.0";
+  const UI_VERSION = "0.18.1";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
@@ -1212,7 +1213,7 @@
 
   /* ---------- 商品マスタ：画面から編集 ---------- */
   const PD_FIELDS = ["sku", "name", "jan", "status", "amazonSku", "asin", "amazonFulfillment", "rakutenId", "rakutenFulfillment",
-    "adPolicy", "unitCost", "effectiveFrom", "shippingCost", "packagingCost", "targetMargin", "stockAlertDays"];
+    "adPolicy", "unitCost", "effectiveFrom", "shippingCost", "packagingCost", "targetMargin", "stockAlertDays", "rslFee"];
   const FUL_LABEL = { fba: "FBA", own: "自社発送", mcf: "マルチチャネル" };
   const POL_LABEL = { profit: "利益重視", share: "シェア獲得", nurture: "育成中" };
   let pdEditing = null;
@@ -1240,7 +1241,7 @@
       rakutenId: p.rakutenId || "", rakutenFulfillment: FUL_LABEL[p.rakutenFulfillment] || "", adPolicy: POL_LABEL[p.adPolicy] || "利益重視",
       unitCost: p.cost ? (p.cost.manual ? "?" : (p.cost.unitCost ?? "")) : "", effectiveFrom: "",
       shippingCost: p.cost ? (p.cost.shippingCost || "") : "", packagingCost: p.cost ? (p.cost.packagingCost || "") : "",
-      targetMargin: p.targetMargin ?? "", stockAlertDays: p.stockAlertDays ?? "",
+      targetMargin: p.targetMargin ?? "", stockAlertDays: p.stockAlertDays ?? "", rslFee: p.rslFee ?? "",
     } : { status: "販売中", adPolicy: "利益重視" };
     PD_FIELDS.forEach((f) => { $("pd-" + f).value = v[f] ?? ""; });
     renderPolicyHelp();

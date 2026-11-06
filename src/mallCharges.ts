@@ -256,6 +256,13 @@ export async function monthStatus(db: D1Database, caseId: string, mall: string, 
   const missing: string[] = [];
   if (!results.some((r) => /^システム利用料_(PC|モバイル)/.test(r.name))) missing.push("システム利用料");
   if (!results.some((r) => /楽天ペイ利用料/.test(r.name))) missing.push("楽天ペイ利用料");
+  // RSL を使っている店舗は、物流費もそろうまで待つ（そろわないうちに実額へ切り替えると、暫定の物流費が消えて少なく見える）
+  if (!results.some((r) => r.category === "物流費")) {
+    const used = await db.prepare(
+      `SELECT 1 AS x FROM mall_charges WHERE case_id = ? AND mall = ? AND category = '物流費' LIMIT 1`
+    ).bind(caseId, mall).first<{ x: number }>();
+    if (used) missing.push("物流費（RSL）");
+  }
   return { complete: missing.length === 0, total, excluded, missing };
 }
 

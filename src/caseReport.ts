@@ -64,7 +64,7 @@ export function renderCaseMarkdown(s: CaseSummary, opts: { url?: string } = {}):
   L.push(`- 目標粗利率（広告費を引く前）は ${s.settings.targetMargin}%、広告費を引いた後の目標利益率は ${s.settings.adMargin}%、在庫アラートは残り ${s.settings.stockAlertDays} 日を基準にしています。`);
   L.push("- 広告の成果は帰属期間がモールごとに違います（楽天RPP 30日／Amazon スポンサープロダクト 7日／スポンサーブランド 14日）。**モールをまたいでROASをそのまま比べないでください。**楽天は直近の数字があとから伸びます。");
   if (s.malls.includes("rakuten"))
-    L.push(`- 楽天の手数料は、請求明細を入れるまでは料率（${s.settings.rakutenFeeRate ?? "—"}%）からの概算です。${s.settings.rakutenFeeFromDefault ? "料率はまだ既定値のままで、実態とずれている可能性があります。" : ""}`);
+    L.push(`- 楽天の手数料は、請求明細がそろうまでは料率（${s.settings.rakutenFeeRate ?? "—"}%）＋商品マスタの楽天RSL物流費（暫定・1個あたり）からの概算です。${s.settings.rakutenFeeFromDefault ? "料率はまだ既定値のままで、実態とずれている可能性があります。" : ""}`);
   L.push("- 原価が分からない商品（「要手計算」＝買い方で原価が変わるもの、原価未登録）の売上は、**粗利・粗利率・損益分岐ROASの計算から除いています**。表の「うち原価不明の売上」がその金額です。");
   L.push("- 入札・予算の変更は担当者が手作業で行います。このツールはモールに書き込みません。打ち手は「どのキャンペーン／キーワードを、いくらからいくらへ」の形にすると、そのまま作業に移せます。");
   L.push("- 「—」はデータが無いことを表し、0とは区別しています。");

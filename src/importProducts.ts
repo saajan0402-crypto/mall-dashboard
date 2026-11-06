@@ -1,3 +1,5 @@
+import { recalcFeeEst } from "./settings";
+
 /**
  * 商品マスタの取り込み
  *
@@ -38,6 +40,8 @@ export interface ParsedProduct {
   targetMargin: number | null;
   adPolicy: string;
   stockAlertDays: number | null;
+  /** 楽天RSLの物流費（1個あたり・税込）。請求明細の実額がそろうまでの暫定値。空欄＝0 */
+  rslFee: number | null;
   status: string;
 }
 
@@ -68,6 +72,8 @@ const HEADER_MAP: Record<string, string> = {
   目標粗利率: "targetMargin",
   広告方針: "adPolicy",
   在庫アラート日数: "stockAlertDays",
+  楽天rsl物流費: "rslFee",
+  rsl物流費: "rslFee",
   状態: "status",
   備考: "note",
 };
@@ -143,6 +149,9 @@ export function validateProductRow(r: Row, line: number, today: string): ParsedP
   if (Number.isNaN(targetMargin)) msgs.push("目標粗利率が数値ではありません");
   const stockAlertDays = toInt(r.stockAlertDays ?? "");
   if (Number.isNaN(stockAlertDays)) msgs.push("在庫アラート日数が数値ではありません");
+  const rslFee = toInt(r.rslFee ?? "");
+  if (Number.isNaN(rslFee)) msgs.push("楽天RSL物流費が数値ではありません");
+  else if (rslFee != null && rslFee < 0) msgs.push("楽天RSL物流費はマイナスにできません");
 
   let effectiveFrom = today;
   if (r.effectiveFrom) {
@@ -183,6 +192,7 @@ export function validateProductRow(r: Row, line: number, today: string): ParsedP
     targetMargin,
     adPolicy: adPolicy || "profit",
     stockAlertDays,
+    rslFee,
     status: status || "active",
   };
 }
@@ -328,6 +338,7 @@ export async function importProducts(
     const overrides: Array<[string, unknown]> = [];
     if (r.targetMargin !== null) overrides.push(["target_margin", r.targetMargin]);
     if (r.stockAlertDays !== null) overrides.push(["stock_alert_days", r.stockAlertDays]);
+    if (r.rslFee !== null && r.rslFee !== undefined) overrides.push(["rsl_fee", r.rslFee]);
     for (const [key, value] of overrides) {
       await db
         .prepare(
@@ -341,5 +352,7 @@ export async function importProducts(
     }
   }
 
+  // 楽天RSLの暫定物流費が変わったかもしれないので、楽天の手数料の概算を引き直す
+  for (const caseId of caseIds.values()) await recalcFeeEst(db, caseId, "rakuten");
   return counts;
 }

@@ -6,6 +6,7 @@
  */
 
 import { validateProductRow, importProducts, type Row, type ParsedProduct } from "./importProducts";
+import { recalcFeeEst } from "./settings";
 
 /** 取り込み用の見出し（この順番で書き出す） */
 export const SHEET_COLUMNS: Array<[string, keyof Row | string]> = [
@@ -13,7 +14,8 @@ export const SHEET_COLUMNS: Array<[string, keyof Row | string]> = [
   ["Amazon SKU", "amazonSku"], ["ASIN", "asin"], ["Amazon発送方法", "amazonFulfillment"],
   ["楽天商品管理番号", "rakutenId"], ["楽天発送方法", "rakutenFulfillment"],
   ["仕入原価", "unitCost"], ["原価の適用開始日", "effectiveFrom"], ["自社発送の送料", "shippingCost"], ["梱包資材費", "packagingCost"],
-  ["目標粗利率", "targetMargin"], ["広告方針", "adPolicy"], ["在庫アラート日数", "stockAlertDays"], ["状態", "status"],
+  ["目標粗利率", "targetMargin"], ["広告方針", "adPolicy"], ["在庫アラート日数", "stockAlertDays"],
+  ["楽天RSL物流費（暫定）", "rslFee"], ["状態", "status"],
 ];
 const FUL_JA: Record<string, string> = { fba: "FBA", own: "自社発送", mcf: "マルチチャネル" };
 const POLICY_JA: Record<string, string> = { profit: "利益重視", share: "シェア獲得", nurture: "育成中" };
@@ -27,7 +29,7 @@ interface ProductRecord {
   rakutenId: string | null; rakutenFulfillment: string | null;
   cost: { effectiveFrom: string; unitCost: number | null; shippingCost: number; packagingCost: number; manual: boolean } | null;
   costHistory: Array<{ effectiveFrom: string; unitCost: number | null; shippingCost: number; packagingCost: number; manual: boolean }>;
-  targetMargin: number | null; stockAlertDays: number | null;
+  targetMargin: number | null; stockAlertDays: number | null; rslFee: number | null;
 }
 
 /** 商品をまとめて読む（caseId を渡すとその案件だけ） */
@@ -62,7 +64,7 @@ export async function readProducts(db: D1Database, opts: { caseId?: string | nul
       jan: p.jan, adPolicy: String(p.ad_policy ?? "profit"), status: String(p.status),
       amazonSku: a?.external_id ?? null, asin: a?.asin ?? null, amazonFulfillment: a?.fulfillment ?? null,
       rakutenId: r?.external_id ?? null, rakutenFulfillment: r?.fulfillment ?? null,
-      cost: hist[0] ?? null, costHistory: hist, targetMargin: o("target_margin"), stockAlertDays: o("stock_alert_days"),
+      cost: hist[0] ?? null, costHistory: hist, targetMargin: o("target_margin"), stockAlertDays: o("stock_alert_days"), rslFee: o("rsl_fee"),
     };
   });
 }
@@ -80,7 +82,7 @@ export async function exportSheet(db: D1Database, caseId: string | null): Promis
       // 要手計算は取り込みと同じ「?」で書き出す（0 にすると粗利の計算に入ってしまう）
       unitCost: p.cost ? (p.cost.manual ? "?" : p.cost.unitCost) : "",
       effectiveFrom: p.cost?.effectiveFrom ?? "", shippingCost: p.cost?.shippingCost || "", packagingCost: p.cost?.packagingCost || "",
-      targetMargin: p.targetMargin, adPolicy: POLICY_JA[p.adPolicy] ?? "", stockAlertDays: p.stockAlertDays, status: STATUS_JA[p.status] ?? "",
+      targetMargin: p.targetMargin, adPolicy: POLICY_JA[p.adPolicy] ?? "", stockAlertDays: p.stockAlertDays, rslFee: p.rslFee, status: STATUS_JA[p.status] ?? "",
     };
     lines.push(SHEET_COLUMNS.map(([, k]) => cell(v[k as string])).join("\t"));
   }
@@ -140,6 +142,10 @@ export async function saveProduct(
   // 空欄にした上書き設定は消す（上の階層を継承に戻す）
   if (v.targetMargin === null) await db.prepare("DELETE FROM settings WHERE scope = 'listing' AND scope_id = ? AND key = 'target_margin'").bind(id).run();
   if (v.stockAlertDays === null) await db.prepare("DELETE FROM settings WHERE scope = 'listing' AND scope_id = ? AND key = 'stock_alert_days'").bind(id).run();
+  if (v.rslFee === null) {
+    await db.prepare("DELETE FROM settings WHERE scope = 'listing' AND scope_id = ? AND key = 'rsl_fee'").bind(id).run();
+    await recalcFeeEst(db, input.caseId, "rakuten");
+  }
   return { id };
 }
 

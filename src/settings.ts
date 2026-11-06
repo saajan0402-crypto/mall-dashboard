@@ -245,9 +245,16 @@ export async function feeRate(db: D1Database, caseId: string, mall: Mall): Promi
  */
 export async function recalcFeeEst(db: D1Database, caseId: string, mall: Mall): Promise<number> {
   const rate = await feeRate(db, caseId, mall);
+  // 楽天は、料率に楽天RSLの物流費（商品マスタの暫定値 × 販売数）を足す。
+  // 料率には物流費が入っていないので、RSLを使う商品は請求明細がそろうまで粗利が高く出すぎるため。
+  // 請求明細がそろった月は fee_actual（実額の按分）が優先されるので、この暫定値は使われなくなる
+  const rsl = mall === "rakuten"
+    ? ` + units * COALESCE((SELECT CAST(value AS INTEGER) FROM settings st
+          WHERE st.scope = 'listing' AND st.scope_id = daily_sales.product_id AND st.key = 'rsl_fee'), 0)`
+    : "";
   const r = await db
     .prepare(
-      `UPDATE daily_sales SET fee_est = CAST(ROUND(revenue * ? / 100.0) AS INTEGER)
+      `UPDATE daily_sales SET fee_est = CAST(ROUND(revenue * ? / 100.0) AS INTEGER)${rsl}
         WHERE case_id = ? AND mall = ?`
     )
     .bind(rate, caseId, mall)
