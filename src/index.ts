@@ -19,7 +19,7 @@ import { startBackfill, runBackfill, backfillStatus } from "./backfill";
 import { notifyLicenseExpiry, expiringLicenses } from "./licenseAlert";
 import { ingestRakutenSales, ingestRakutenInventory, pumpRakuten } from "./ingestRakuten";
 import { syncRakutenItems, pumpRakutenItems } from "./rakutenItems";
-import { importAdFile, adCoverage, adSummary, type ImportResult, type SummaryLevel } from "./ingestAds";
+import { importAdFile, importAdUpload, adCoverage, adSummary, type ImportResult, type SummaryLevel } from "./ingestAds";
 import { SETTINGS, settingsLog, resolveSettings, saveSettings, feeRate, recalcFeeEst, recalcAllFeeEst, type Scope } from "./settings";
 import { parseChargeCsv, saveCharges, listCharges, type ChargeRow } from "./mallCharges";
 import { buildCaseSummary, periodSummary, dataRange, resolvePeriod } from "./caseSummary";
@@ -36,7 +36,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.15.0";
+const APP_VERSION = "0.15.2";
 
 export interface Env {
   DB: D1Database;
@@ -515,7 +515,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     for (const entry of form.getAll("files")) {
       if (!(entry instanceof File)) continue;
       try {
-        results.push(await importAdFile(env, caseId, entry.name, await entry.arrayBuffer()));
+        results.push(...(await importAdUpload(env, caseId, entry.name, await entry.arrayBuffer())));
       } catch (e) {
         results.push({
           fileName: entry.name, ok: false, mall: "", level: "",
@@ -525,6 +525,32 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       }
     }
     return json({ results, coverage: await adCoverage(env.DB, caseId) });
+  }
+
+  // 外のプログラムから広告レポートを送り込む入口（楽天RPPの自動ダウンロード用）。
+  // Cloudflare Access のサービストークンで通す。案件は名前か ID で指定する
+  if (path === "/api/import/ads/push" && req.method === "POST") {
+    const form = await req.formData();
+    const key = String(form.get("case") ?? "").trim();
+    const c = await env.DB.prepare("SELECT id, name FROM cases WHERE id = ? OR name = ?").bind(key, key)
+      .first<{ id: string; name: string }>();
+    if (!c) return json({ error: `案件「${key}」が見つかりません（アプリに登録した案件名と同じにしてください）` }, 404);
+    const results: ImportResult[] = [];
+    for (const entry of form.getAll("files")) {
+      if (!(entry instanceof File)) continue;
+      try {
+        results.push(...(await importAdUpload(env, c.id, entry.name, await entry.arrayBuffer())));
+      } catch (e) {
+        results.push({ fileName: entry.name, ok: false, mall: "", level: "", periodStart: "", periodEnd: "", rows: 0, unknown: [],
+          message: `読み込みに失敗：${String(e instanceof Error ? e.message : e)}` });
+      }
+    }
+    const ng = results.filter((r) => !r.ok);
+    await env.DB.prepare(`INSERT INTO ingests (id, case_id, mall, kind, rows, status, error, source) VALUES (?, ?, 'rakuten', 'ads_push', ?, ?, ?, 'push')`)
+      .bind(crypto.randomUUID(), c.id, results.reduce((t, r) => t + r.rows, 0), ng.length ? "error" : "ok",
+        ng.length ? ng.map((r) => `${r.fileName}: ${r.message}`).join(" / ").slice(0, 500) : null).run();
+    if (ng.length) await postSlack(env, c.id, `:warning: 楽天RPPレポートの自動取り込みで ${ng.length}件 失敗しました\n${ng.slice(0, 5).map((r) => `• ${r.fileName}：${r.message}`).join("\n")}`).catch(() => null);
+    return json({ case: c.name, ok: ng.length === 0, results });
   }
 
   /* Amazon Ads API の自動取り込み */
@@ -813,6 +839,26 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
   return json({ error: "not found", path }, 404);
 }
 
+/**
+ * 楽天RPPのレポートが今朝届いたか。送り込みを使っている案件（直近14日に1度でも届いた案件）だけを見る
+ */
+async function checkRppPush(env: Env): Promise<void> {
+  const { results } = await env.DB.prepare(
+    `SELECT c.id, c.name,
+            (SELECT MAX(created_at) FROM ingests i WHERE i.case_id = c.id AND i.kind = 'ads_push') AS last
+       FROM cases c
+      WHERE c.status = 'active'
+        AND EXISTS (SELECT 1 FROM ingests i WHERE i.case_id = c.id AND i.kind = 'ads_push' AND i.created_at >= datetime('now', '-14 days'))`
+  ).all<{ id: string; name: string; last: string | null }>();
+  // 今日（日本時間）の0時を UTC にしたもの
+  const todayStartUtc = new Date(Date.parse(`${todayJst()}T00:00:00+09:00`)).toISOString().slice(0, 19).replace("T", " ");
+  for (const c of results) {
+    if (c.last && c.last >= todayStartUtc) continue;
+    await postSlack(env, c.id, `:warning: 今朝の楽天RPPレポートがまだ届いていません（最後に届いたのは ${c.last ? c.last.slice(0, 16) + "（UTC）" : "—"}）。` +
+      `ダウンロードするプログラムが止まっていないか確認してください`).catch(() => null);
+  }
+}
+
 /** 画面から来る期間の指定（preset か from/to） */
 function periodQuery(u: URL) {
   return { preset: u.searchParams.get("preset"), from: u.searchParams.get("from"), to: u.searchParams.get("to") };
@@ -882,6 +928,8 @@ export default {
         if (event.cron === "0 21 * * *") await notifyLicenseExpiry(env);
         // 日次サマリは7時の実行で送る。6時の実行で依頼したレポート（セッション数など）が揃ってから
         if (event.cron === "0 22 * * *") await sendDailySummaries(env);
+        // 楽天RPPのレポートは毎朝4〜5時に外のプログラムから届く。7時になっても届いていなければ知らせる
+        if (event.cron === "0 22 * * *") await checkRppPush(env);
         // 過去データの取り込みは5分ごとの実行に任せている
         const rows = results.reduce((n, r) => n + (r.rows ?? 0), 0)
           + fin.reduce((n, r) => n + (r.rows ?? 0), 0);

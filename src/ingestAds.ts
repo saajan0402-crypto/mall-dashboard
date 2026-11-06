@@ -6,6 +6,7 @@
  * 抜けを見せないと、気づかないまま分析が歪む。
  */
 
+import { unzipSync } from "fflate";
 import { parseAdFile, decodeCsv, levelLabel, type AdLevel, type AdRow, type SearchTermRow, type ParsedAdFile } from "./adImport";
 
 export interface AdsEnv {
@@ -60,6 +61,36 @@ export async function importAdFile(
 
   const saved = await saveParsedAds(env, caseId, parsed, { fileName, r2Key, source: "csv" });
   return { ...base, ok: true, rows: saved.rows, unknown: saved.unknown, message: saved.message };
+}
+
+/**
+ * ZIP も受け付ける入口。楽天のレポートは ZIP で落ちてくるので、中の CSV を1つずつ取り込む。
+ * ZIP でなければ、そのまま1ファイルとして取り込む
+ */
+export async function importAdUpload(env: AdsEnv, caseId: string, fileName: string, bytes: ArrayBuffer): Promise<ImportResult[]> {
+  const u8 = new Uint8Array(bytes);
+  const isZip = u8.length > 4 && u8[0] === 0x50 && u8[1] === 0x4b && u8[2] === 0x03 && u8[3] === 0x04;   // "PK\x03\x04"
+  if (!isZip) return [await importAdFile(env, caseId, fileName, bytes)];
+  // 元の ZIP も残しておく（中身の取り込みを直したときに入れ直せるように）
+  await env.FILES.put(`raw/zips/${caseId}/${Date.now()}_${fileName}`, bytes, { httpMetadata: { contentType: "application/zip" } });
+  const entries = unzipSync(u8, { filter: (f) => /\.(csv|tsv|txt)$/i.test(f.name) && !f.name.startsWith("__MACOSX/") });
+  const names = Object.keys(entries);
+  if (!names.length) {
+    return [{ fileName, ok: false, mall: "", level: "", periodStart: "", periodEnd: "", rows: 0, unknown: [],
+      message: "ZIP の中に CSV が見つかりませんでした" }];
+  }
+  const out: ImportResult[] = [];
+  for (const n of names) {
+    const e = entries[n];
+    const buf = e.buffer.slice(e.byteOffset, e.byteOffset + e.byteLength) as ArrayBuffer;
+    try {
+      out.push(await importAdFile(env, caseId, `${fileName} > ${n}`, buf));
+    } catch (err) {
+      out.push({ fileName: `${fileName} > ${n}`, ok: false, mall: "", level: "", periodStart: "", periodEnd: "", rows: 0, unknown: [],
+        message: `読み込みに失敗：${String(err instanceof Error ? err.message : err)}` });
+    }
+  }
+  return out;
 }
 
 /**
