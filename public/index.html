@@ -171,7 +171,7 @@
 <body>
 <header>
   <div class="bar">
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.11.0</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.12.0</span></div>
     <div class="picks">
       <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
       <div class="range-pick" id="range-pick" title="">
@@ -213,6 +213,7 @@
       <button role="tab" id="t-stock" aria-selected="false">在庫</button>
     </nav>
     <nav class="nav2 hidden" role="tablist" aria-label="設定の画面" id="sub-set">
+      <button role="tab" id="t-cases" aria-selected="false">案件</button>
       <button role="tab" id="t-settings" aria-selected="false">設定</button>
       <button role="tab" id="t-conn" aria-selected="false">接続</button>
       <button role="tab" id="t-status" aria-selected="false">連携ステータス</button>
@@ -629,6 +630,64 @@
   </section>
 
   <!-- 設定 -->
+  <!-- 案件の管理 -->
+  <section id="p-cases" class="hidden">
+    <div>
+      <h2>案件の一覧<span class="hint">休止中も含む／案件の追加・名前の変更・休止は管理者のみ</span></h2>
+      <div class="tablewrap">
+        <table style="min-width:900px">
+          <thead><tr><th>案件</th><th>状態</th><th class="r">商品</th><th>Amazon</th><th>楽天</th><th>Slack</th>
+            <th>売上データ</th><th>広告データ</th><th></th></tr></thead>
+          <tbody id="cases-rows"></tbody>
+        </table>
+      </div>
+      <p class="note" style="margin-top:6px"><strong>休止</strong>にすると、毎朝の取り込みと通知の対象から外れ、ヘッダーの案件一覧にも出なくなります。
+        データは消えないので、再開すれば元通り見られます。案件を消す操作はありません。</p>
+    </div>
+
+    <div>
+      <h2>新しい案件を追加</h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0">
+          <input id="new-case-name" placeholder="案件名（例：ブランド名）" autocomplete="off"
+            style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);min-width:260px">
+          <button class="act primary" id="btn-new-case">追加する</button>
+          <span class="note" id="new-case-msg"></span>
+        </div>
+        <p class="note" style="margin-top:8px">追加したら、ヘッダーでその案件を選び、下の「準備の進み具合」に沿って進めてください。
+          商品マスタの「案件」列には、ここで付けた名前と<strong>同じ名前</strong>を入れてください（名前で案件を見分けます）。</p>
+      </div>
+    </div>
+
+    <div>
+      <h2>準備の進み具合<span class="hint" id="setup-name"></span></h2>
+      <div class="card"><div id="setup-steps"></div></div>
+    </div>
+
+    <div class="grid2">
+      <div>
+        <h2>通知<span class="hint" id="notify-name"></span></h2>
+        <div class="card">
+          <div id="notify-box"></div>
+          <div class="btns"><button class="act primary" id="btn-notify-save">保存</button><span class="note" id="notify-msg"></span></div>
+          <p class="note" style="margin-top:8px">オフにしても、ダッシュボードの「要対応」や在庫タブには今まで通り出ます。止まるのは Slack への通知だけです。</p>
+        </div>
+      </div>
+      <div>
+        <h2>設定を別の案件からコピー<span class="hint" id="copy-name"></span></h2>
+        <div class="card">
+          <div class="btns" style="margin-top:0">
+            <select id="copy-from" style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink)"></select>
+            <button class="act" id="btn-copy-settings">この案件にコピー</button>
+            <span class="note" id="copy-msg"></span>
+          </div>
+          <p class="note" style="margin-top:8px">目標粗利率・広告後の目標利益率・在庫アラート日数と、Amazon・楽天の手数料率をコピーします。
+            コピー先の今の設定は上書きされます（変更は履歴とSlackに残ります）。接続情報と商品マスタはコピーしません。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section id="p-settings" class="hidden">
     <div>
       <h2>設定<span class="hint">会社共通 → 案件 → 案件×モール の順に継承します</span></h2>
@@ -780,18 +839,18 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.11.0";
+  const UI_VERSION = "0.12.0";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
   const FFL = { fba: "FBA", own: "自社発送", mcf: "マルチチャネル" };
   const POLICY = { profit: "利益重視", share: "シェア獲得", nurture: "育成中" };
 
-  const tabs = [["t-dash", "p-dash"], ["t-master", "p-master"], ["t-sales", "p-sales"], ["t-stock", "p-stock"], ["t-ads", "p-ads"], ["t-settings", "p-settings"], ["t-conn", "p-conn"], ["t-status", "p-status"]];
+  const tabs = [["t-dash", "p-dash"], ["t-master", "p-master"], ["t-sales", "p-sales"], ["t-stock", "p-stock"], ["t-ads", "p-ads"], ["t-settings", "p-settings"], ["t-conn", "p-conn"], ["t-status", "p-status"], ["t-cases", "p-cases"]];
   // 2段のメニュー。上の段（グループ）ごとに、最後に開いていた画面を覚えておく
   const GROUPS = {
     dash: { btn: "grp-dash", sub: "sub-dash", tabs: ["t-dash", "t-sales", "t-ads", "t-stock"], last: "t-dash" },
-    set: { btn: "grp-set", sub: "sub-set", tabs: ["t-settings", "t-conn", "t-status", "t-master"], last: "t-settings" },
+    set: { btn: "grp-set", sub: "sub-set", tabs: ["t-cases", "t-settings", "t-conn", "t-status", "t-master"], last: "t-cases" },
   };
   const groupOf = (t) => Object.keys(GROUPS).find((g) => GROUPS[g].tabs.includes(t));
   function openTab(t) {
@@ -850,6 +909,7 @@
     if (p === "p-ads") return loadAds();
     if (p === "p-settings") return loadSettings();
     if (p === "p-conn") return loadConnections();
+    if (p === "p-cases") return loadCases();
   }
   const activePanel = () => (tabs.find(([t]) => $(t).getAttribute("aria-selected") === "true") || tabs[0])[1];
 
@@ -2402,6 +2462,116 @@
 
   }
 
+  /* ---------- 案件の管理 ---------- */
+  let casesAll = [];
+  const NOTIFY_JA = { daily_summary: ["毎朝7時の日次サマリ", "前日の売上・粗利・広告費、今月の累計、未対応の「今週中」"],
+    stock_alert: ["在庫アラート", "在庫切れ・欠品間近。ダッシュボードの表示はオフでも残ります"],
+    settings_notice: ["設定の変更通知", "誰が・何を・いくつからいくつに変えたか"],
+    license_alert: ["楽天ライセンスキーの期限", "期限の2週間前から毎朝"] };
+  const yesNo = (v, y = "接続済み", n = "—") => v ? `<span class="tag ok">${y}</span>` : `<span class="note">${n}</span>`;
+  async function casesAction(body, msgId) {
+    const r = await fetch("/api/cases/manage", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) { if (msgId) $(msgId).innerHTML = `<span class="tag ng">NG</span> ${esc(d.error || "失敗しました")}`; return null; }
+    casesAll = d.cases || casesAll;
+    return d;
+  }
+  async function refreshHeaderCases() {
+    const keep = currentCase;
+    await initCases();
+    if ([...$("g-case").options].some((o) => o.value === keep)) { currentCase = keep; $("g-case").value = keep; }
+    salesCasesLoaded = stockCasesLoaded = adsCasesLoaded = setCasesLoaded = false;   // 各タブの案件の選択欄も作り直す
+  }
+  function renderCases() {
+    $("cases-rows").innerHTML = casesAll.map((c) => `<tr${c.status !== "active" ? ' style="opacity:.6"' : ""}>
+      <td><strong>${esc(c.name)}</strong>${c.id === currentCase ? ` <span class="tag ok">選択中</span>` : ""}</td>
+      <td>${c.status === "active" ? `<span class="tag ok">稼働中</span>` : `<span class="tag wait">休止中</span>`}</td>
+      <td class="r">${c.products}</td><td>${yesNo(c.amazon)}</td><td>${yesNo(c.rakuten)}</td>
+      <td>${c.slack ? `<span class="tag ok">${esc(c.channel || "登録済み")}</span>` : `<span class="note">全体のチャンネル</span>`}</td>
+      <td>${c.lastSales ? `${esc(c.firstSales)}〜${esc(c.lastSales)}` : "—"}</td><td>${c.lastAds ? `〜${esc(c.lastAds)}` : "—"}</td>
+      <td style="white-space:nowrap"><button class="act" data-case-rename="${esc(c.id)}" style="padding:3px 10px;font-size:12px">名前を変える</button>
+        <button class="act" data-case-status="${esc(c.id)}" data-to="${c.status === "active" ? "archived" : "active"}" style="padding:3px 10px;font-size:12px">${c.status === "active" ? "休止する" : "再開する"}</button></td>
+    </tr>`).join("") || `<tr><td colspan="9" style="color:var(--muted)">案件がまだありません。</td></tr>`;
+
+    const c = casesAll.find((x) => x.id === currentCase);
+    ["setup-name", "notify-name", "copy-name"].forEach((id) => { $(id).textContent = c ? c.name : ""; });
+    if (!c) { $("setup-steps").innerHTML = `<p class="note">ヘッダーで案件を選んでください。</p>`; $("notify-box").innerHTML = ""; return; }
+
+    // 新しい案件を立ち上げるときの手順。済んだものに印をつける
+    const steps = [
+      [c.amazon || c.rakuten, "モールと接続する", `設定 → 接続 で Amazon（SP-API）・楽天（RMS）の接続情報を入れ、「APIを一通り試す」で確認。Amazon広告はプロフィールIDも`],
+      [c.products > 0, "商品マスタを取り込む", `設定 → 商品マスタ。「案件」列は「${c.name}」にする`],
+      [c.hasSettings, "設定を整える", "下の「設定を別の案件からコピー」で始めて、設定タブで目標粗利率や手数料率を合わせる"],
+      [c.slack, "Slack の通知先を登録する", "設定 → 接続 の「Slack の通知先」。登録しなければ全体のチャンネルに送ります"],
+      [!!c.firstSales, "過去の売上を取り込む", "ダッシュボード → 売上 の「過去データの取り込み」（最大2年）"],
+      [!!c.lastAds, "過去の広告データを取り込む", "ダッシュボード → 広告。Amazonは「過去分を取り込む」、楽天RPPはCSVを日別で"],
+    ];
+    const doneN = steps.filter((x) => x[0]).length;
+    $("setup-steps").innerHTML = `<p class="note" style="margin-bottom:6px">${doneN} / ${steps.length} 完了</p>` + steps.map(([ok, t, d]) =>
+      `<div class="row" style="align-items:flex-start"><span><strong style="font-size:13.5px">${esc(t)}</strong><div class="note">${esc(d)}</div></span>
+        <span>${ok ? `<span class="tag ok">済み</span>` : `<span class="tag wait">まだ</span>`}</span></div>`).join("");
+
+    $("notify-box").innerHTML = Object.entries(NOTIFY_JA).map(([k, [t, d]]) => `
+      <label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px;cursor:pointer">
+        <input type="checkbox" data-notify="${k}" ${c.notify[k] ? "checked" : ""} style="margin-top:5px">
+        <span style="font-size:13px">${esc(t)}<span class="note" style="display:block">${esc(d)}</span></span></label>`).join("");
+
+    $("copy-from").innerHTML = casesAll.filter((x) => x.id !== c.id)
+      .map((x) => `<option value="${esc(x.id)}">${esc(x.name)}${x.status !== "active" ? "（休止中）" : ""}</option>`).join("");
+  }
+  async function loadCases() {
+    casesAll = (await get("/api/cases/all")).cases || [];
+    renderCases();
+  }
+  $("btn-new-case").addEventListener("click", async () => {
+    const name = $("new-case-name").value.trim();
+    if (!name) { $("new-case-msg").textContent = "案件名を入れてください"; return; }
+    const d = await casesAction({ action: "create", name }, "new-case-msg");
+    if (!d) return;
+    $("new-case-name").value = "";
+    await refreshHeaderCases();
+    currentCase = d.id; $("g-case").value = d.id;
+    try { localStorage.setItem("mall.case", d.id); } catch (e) { /* なくても動く */ }
+    renderCases();
+    $("new-case-msg").innerHTML = `<span class="tag ok">追加しました</span> ヘッダーで「${esc(name)}」を選んだ状態にしました。下の手順に沿って進めてください`;
+  });
+  $("cases-rows").addEventListener("click", async (e) => {
+    const rn = e.target.closest("[data-case-rename]");
+    const st = e.target.closest("[data-case-status]");
+    if (rn) {
+      const c = casesAll.find((x) => x.id === rn.dataset.caseRename);
+      const tr = rn.closest("tr");
+      // 名前の入力はその行の中で行う（ブラウザのダイアログは使わない）
+      tr.children[0].innerHTML = `<input value="${esc(c.name)}" data-rename-input style="font:inherit;font-size:13px;padding:4px 8px;border:1px solid var(--accent);border-radius:5px;background:var(--surface-2);color:var(--ink)">
+        <button class="act" data-rename-save="${esc(c.id)}" style="padding:3px 10px;font-size:12px">保存</button>
+        <div class="note">商品マスタの「案件」列もこの名前に合わせてください</div>`;
+      return;
+    }
+    const sv = e.target.closest("[data-rename-save]");
+    if (sv) {
+      const name = sv.parentElement.querySelector("[data-rename-input]").value;
+      const d = await casesAction({ action: "rename", caseId: sv.dataset.renameSave, name }, "new-case-msg");
+      if (d) { await refreshHeaderCases(); renderCases(); }
+      return;
+    }
+    if (st) {
+      const d = await casesAction({ action: "status", caseId: st.dataset.caseStatus, status: st.dataset.to }, "new-case-msg");
+      if (d) { await refreshHeaderCases(); renderCases(); }
+    }
+  });
+  $("btn-notify-save").addEventListener("click", async () => {
+    const notify = {};
+    document.querySelectorAll("[data-notify]").forEach((el) => { notify[el.dataset.notify] = el.checked; });
+    const d = await casesAction({ action: "notify", caseId: currentCase, notify }, "notify-msg");
+    if (d) { renderCases(); $("notify-msg").innerHTML = `<span class="tag ok">保存しました</span>`; }
+  });
+  $("btn-copy-settings").addEventListener("click", async () => {
+    const from = $("copy-from").value;
+    if (!from) return;
+    const d = await casesAction({ action: "copySettings", caseId: currentCase, from }, "copy-msg");
+    if (d) { renderCases(); $("copy-msg").innerHTML = `<span class="tag ok">コピーしました</span> ${d.changed}項目を変更`; }
+  });
+
   /* ---------- 接続：Slack の通知先 ---------- */
   async function loadConnSlack() {
     const r = await fetch("/api/connections/slack");
@@ -2417,8 +2587,7 @@
       <label style="display:block;margin-bottom:9px"><span style="display:block;font-size:12.5px;color:var(--ink-2)">Incoming Webhook URL
         ${c.webhook ? `<span class="tag ok" style="margin-left:6px">${esc(c.webhook)}</span>` : `<span class="tag wait" style="margin-left:6px">未登録（全体のチャンネルに送ります）</span>`}</span>
         <input id="sl-webhook" type="password" autocomplete="off" placeholder="${c.webhook ? "変更するときだけ入力（消すときは - を入力）" : "https://hooks.slack.com/services/…"}" style="${inp};font-family:var(--mono)"></label>
-      <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer;margin-bottom:6px">
-        <input type="checkbox" id="sl-daily" ${c.dailySummary ? "checked" : ""}>毎朝7時に日次サマリを送る</label>
+      <p class="note" style="margin-bottom:6px">どの通知を送るか（日次サマリ・在庫アラートなど）は、設定 → 案件 の「通知」で切り替えます。</p>
       <div class="btns">
         <button class="act primary" id="sl-save">保存</button>
         <button class="act" id="sl-test">テスト送信</button>
@@ -2431,7 +2600,7 @@
     const msg = (ok, t) => { $("sl-msg").innerHTML = `<span class="tag ${ok ? "ok" : "ng"}">${ok ? "OK" : "NG"}</span> ${esc(t)}`; };
     $("sl-save").addEventListener("click", async () => {
       const r2 = await fetch("/api/connections/slack", { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ caseId: currentCase, channel: $("sl-channel").value, webhook: $("sl-webhook").value, dailySummary: $("sl-daily").checked }) });
+        body: JSON.stringify({ caseId: currentCase, channel: $("sl-channel").value, webhook: $("sl-webhook").value }) });
       const d2 = await r2.json();
       if (!r2.ok) return msg(false, d2.error || "保存できませんでした");
       await loadConnSlack();
@@ -2448,9 +2617,9 @@
 
   /* ---------- 要対応の状態 ---------- */
   let todoList = [];
-  const ST_JA = { open: "未対応", done: "対応済み", skip: "今はしない" };
+  const ST_JA = { open: "未対応", done: "対応済み", skip: "今はしない", other: "自由記述…" };
   function todoRow(t, i) {
-    const st = t.status || "open";
+    const st = t.pending || t.status || "open";
     // サーバーの時刻は UTC。日本時間に直して「11/06 08:41」の形で出す
     const when = t.statusAt ? (() => {
       const raw = String(t.statusAt);
@@ -2465,23 +2634,29 @@
         ${Object.entries(ST_JA).map(([k, v]) => `<option value="${k}"${k === st ? " selected" : ""}>${v}</option>`).join("")}
       </select></span>
       ${t.basis ? `<span class="b">${esc(t.basis)}</span>` : ""}
-      ${st !== "open" ? `<span class="who">${esc(ST_JA[st])}：${esc(t.statusBy || "")} ${esc(when)}
-        <input data-note="${i}" value="${esc(t.note || "")}" placeholder="${st === "done" ? "やったこと（任意・お客様向けレポートに載ります）" : "今はしない理由（任意）"}"
+      ${t.pending === "other" ? `<span class="who">自由記述（例：お客様に通達済み）
+        <span style="display:flex;gap:6px;margin-top:4px"><input data-other="${i}" placeholder="内容を入れて「保存」" autofocus
+          style="flex:1;font:inherit;font-size:12.5px;padding:4px 8px;border:1px solid var(--accent);border-radius:5px;background:var(--surface-2);color:var(--ink)">
+          <button class="act" data-other-save="${i}" style="padding:3px 12px;font-size:12px">保存</button>
+          <button class="act" data-other-cancel="${i}" style="padding:3px 12px;font-size:12px">やめる</button></span></span>`
+      : st !== "open" ? `<span class="who">${st === "other" ? `<span class="tag warn">${esc(t.note || "その他")}</span> ` : esc(ST_JA[st]) + "："}${esc(t.statusBy || "")} ${esc(when)}
+        <input data-note="${i}" value="${esc(t.note || "")}" placeholder="${st === "done" ? "やったこと（任意・お客様向けレポートに載ります）" : st === "other" ? "内容" : "今はしない理由（任意）"}"
           style="display:block;width:100%;margin-top:4px;font:inherit;font-size:12px;padding:4px 8px;border:1px solid var(--line);border-radius:5px;background:var(--surface-2);color:var(--ink)"></span>` : ""}
     </div>`;
   }
   function renderTodos(list, openSection) {
     todoList = list;
     const idx = list.map((t, i) => [t, i]);
-    const open = idx.filter(([t]) => (t.status || "open") === "open");
-    const done = idx.filter(([t]) => t.status === "done");
-    const skip = idx.filter(([t]) => t.status === "skip");
+    const open = idx.filter(([t]) => (t.status || "open") === "open" || t.pending);
+    const done = idx.filter(([t]) => t.status === "done" && !t.pending);
+    const skip = idx.filter(([t]) => t.status === "skip" && !t.pending);
+    const other = idx.filter(([t]) => t.status === "other" && !t.pending);
     // 状態を変えた直後は、その項目が入った欄を開いておく（続けてメモを書けるように）
     const block = (title, rows, key) => rows.length
       ? `<details class="todo-more"${openSection === key ? " open" : ""}><summary>${title}（${rows.length}件）</summary>${rows.map(([t, i]) => todoRow(t, i)).join("")}</details>` : "";
     $("dash-todo").innerHTML = (open.map(([t, i]) => todoRow(t, i)).join("")
         || `<p class="note">未対応の要対応はありません。</p>`)
-      + block("対応済み", done, "done") + block("今はしない", skip, "skip");
+      + block("対応済み", done, "done") + block("自由記述", other, "other") + block("今はしない", skip, "skip");
   }
   async function saveTodo(t, status, note) {
     return fetch("/api/todo", { method: "POST", headers: { "content-type": "application/json" },
@@ -2500,6 +2675,9 @@
     if (!sel) return;
     const t = todoList[Number(sel.dataset.todo)];
     const status = sel.value;
+    // 自由記述は中身が必要なので、入力欄を出して「保存」を待つ
+    if (status === "other") { t.pending = "other"; renderTodos(todoList); return; }
+    t.pending = null;
     const note = null;
     sel.disabled = true;
     const r = await saveTodo(t, status, note);
@@ -2507,6 +2685,21 @@
     if (!r.ok) { sel.value = t.status || "open"; return; }
     t.status = status; t.note = note; t.statusBy = $("who").textContent || ""; t.statusAt = new Date().toISOString();
     renderTodos(todoList, status);
+    loadDone();
+  });
+
+  $("dash-todo").addEventListener("click", async (e) => {
+    const sv = e.target.closest("[data-other-save]");
+    const cn = e.target.closest("[data-other-cancel]");
+    if (cn) { todoList[Number(cn.dataset.otherCancel)].pending = null; renderTodos(todoList); return; }
+    if (!sv) return;
+    const t = todoList[Number(sv.dataset.otherSave)];
+    const text = sv.parentElement.querySelector("[data-other]").value.trim();
+    if (!text) { sv.parentElement.querySelector("[data-other]").focus(); return; }
+    const r = await saveTodo(t, "other", text);
+    if (!r.ok) return;
+    t.pending = null; t.status = "other"; t.note = text; t.statusBy = $("who").textContent || ""; t.statusAt = new Date().toISOString();
+    renderTodos(todoList, "other");
     loadDone();
   });
 
@@ -2519,7 +2712,7 @@
     $("done-text").classList.add("hidden");
     $("done-list").innerHTML = doneItems.length ? `<div class="tablewrap"><table style="min-width:560px">
       <thead><tr><th>日付</th><th>分野</th><th>内容</th><th>メモ</th><th>担当</th></tr></thead>
-      <tbody>${doneItems.map((x) => `<tr><td>${esc(x.day)}</td><td>${esc(x.area || "")}</td>
+      <tbody>${doneItems.map((x) => `<tr><td>${esc(x.day)}${x.status === "other" ? ` <span class="tag warn">自由記述</span>` : ""}</td><td>${esc(x.area || "")}</td>
         <td style="white-space:normal">${esc(x.title)}</td><td style="white-space:normal">${esc(x.note || "")}</td><td>${esc(x.by || "")}</td></tr>`).join("")}</tbody>
       </table></div>` : `<p class="note">この月に「対応済み」にしたものはまだありません。</p>`;
   }
@@ -2533,7 +2726,9 @@
     const lines = [`■ ${Number(yy)}年${Number(mm)}月に実施した対応（${caseName()}）`, ""];
     for (const [area, xs] of byArea) {
       lines.push(`【${area}】`);
-      xs.forEach((x) => lines.push(`・${x.day.slice(5).replace("-", "/")}　${x.note || x.title.replace(/。.*$/, "")}`));
+      // 自由記述（お客様に通達済み など）は、何についての話か分かるよう元の項目を添える
+      xs.forEach((x) => lines.push(`・${x.day.slice(5).replace("-", "/")}　${x.status === "other"
+        ? `${x.note}（${x.title.replace(/。.*$/, "")}）` : (x.note || x.title.replace(/。.*$/, ""))}`));
       lines.push("");
     }
     const ta = $("done-text");

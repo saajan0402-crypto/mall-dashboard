@@ -26,6 +26,7 @@ import { buildAdAdvice } from "./adAdvice";
 import { renderCaseMarkdown } from "./caseReport";
 import { postSlack, listCaseSlack, saveCaseSlack } from "./slack";
 import { sendDailySummaries } from "./dailySummary";
+import { listAllCases, createCase, renameCase, setCaseStatus, copySettings, setNotify, notifyEnabled } from "./cases";
 import { setTodoStatus, doneInMonth, skippedTodos, STATUS_JA, type TodoStatus } from "./todos";
 import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./adsApi";
 
@@ -33,7 +34,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.11.0";
+const APP_VERSION = "0.12.0";
 
 export interface Env {
   DB: D1Database;
@@ -103,6 +104,44 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       deployment: env.CF_VERSION_METADATA
         ? { id: env.CF_VERSION_METADATA.id.slice(0, 8), at: env.CF_VERSION_METADATA.timestamp ?? null } : null,
     });
+  }
+
+  /* ───────── 案件の管理 ───────── */
+  if (path === "/api/cases/all") return json({ cases: await listAllCases(env.DB) });
+
+  if (path === "/api/cases/manage" && req.method === "POST") {
+    const email = viewer(req);
+    const b = (await req.json()) as { action?: string; caseId?: string; name?: string; status?: "active" | "archived"; from?: string;
+      notify?: Record<string, boolean> };
+    try {
+      // 通知のオン・オフと設定のコピーは設定の変更なので全員ができる。追加・名前・休止は管理者だけ
+      if (b.action === "notify" && b.caseId) {
+        await setNotify(env.DB, b.caseId, b.notify ?? {}, email);
+        return json({ ok: true, cases: await listAllCases(env.DB) });
+      }
+      if (b.action === "copySettings" && b.caseId && b.from) {
+        const n = await copySettings(env.DB, b.from, b.caseId, email);
+        await recalcAllFeeEst(env.DB);
+        return json({ ok: true, changed: n, cases: await listAllCases(env.DB) });
+      }
+      const { isAdmin } = await ensureAdmin(env.DB, email);
+      if (!isAdmin) return json({ error: "案件の追加・名前の変更・休止は管理者のみです" }, 403);
+      if (b.action === "create" && b.name) {
+        const id = await createCase(env.DB, b.name);
+        return json({ ok: true, id, cases: await listAllCases(env.DB) });
+      }
+      if (b.action === "rename" && b.caseId && b.name) {
+        await renameCase(env.DB, b.caseId, b.name);
+        return json({ ok: true, cases: await listAllCases(env.DB) });
+      }
+      if (b.action === "status" && b.caseId && b.status) {
+        await setCaseStatus(env.DB, b.caseId, b.status);
+        return json({ ok: true, cases: await listAllCases(env.DB) });
+      }
+      return json({ error: "操作が不正です" }, 400);
+    } catch (e) {
+      return json({ error: String(e instanceof Error ? e.message : e) }, 400);
+    }
   }
 
   if (path === "/api/cases") {
@@ -313,8 +352,9 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     };
     const changes = await saveSettings(env.DB, b.scope, b.scopeId ?? "", b.values ?? {}, viewer(req));
     // 誰が・何を・いくつからいくつに変えたかを Slack に残す（制限ではなく見える化で防ぐ）
-    if (changes.length) {
-      const caseId = b.scope === "company" ? null : (b.scopeId ?? "").split(":")[0];
+    const noticeCase = b.scope === "company" ? null : (b.scopeId ?? "").split(":")[0];
+    if (changes.length && (!noticeCase || await notifyEnabled(env.DB, noticeCase, "settings_notice"))) {
+      const caseId = noticeCase;
       const fmt = (v: number | null, unit: string) => (v == null ? "（上の階層に従う）" : `${v}${unit === "percent" ? "%" : "日"}`);
       const where = b.scope === "company" ? "会社共通" : b.scope === "case" ? "案件" : `案件×${(b.scopeId ?? "").endsWith(":rakuten") ? "楽天" : "Amazon"}`;
       await postSlack(env, caseId, [`:gear: *設定が変更されました*（${where}／${viewer(req) ?? "不明なユーザー"}）`,

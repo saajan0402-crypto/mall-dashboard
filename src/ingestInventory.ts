@@ -185,6 +185,7 @@ export async function ingestInventory(env: InventoryEnv, caseId: string): Promis
 /* ───────── アラート ───────── */
 
 import { postSlack, type SlackEnv } from "./slack";
+import { notifyEnabled } from "./cases";
 
 export interface InventoryRow {
   caseId: string;
@@ -308,6 +309,9 @@ export async function notifyInventory(env: InventoryEnv): Promise<{ sent: boolea
   // 案件ごとに、その案件のチャンネルへ（未登録なら全体のチャンネルへ）
   let sent = false;
   for (const caseId of [...new Set(urgent.map((r) => r.caseId))]) {
+    // 在庫の少なさはダッシュボードには出すが、Slack に流すかは案件ごとに選べる
+    const active = await env.DB.prepare("SELECT 1 FROM cases WHERE id = ? AND status = 'active'").bind(caseId).first();
+    if (!active || !(await notifyEnabled(env.DB, caseId, "stock_alert"))) continue;
     const mine = urgent.filter((r) => r.caseId === caseId);
     const lines = mine.map((r) => {
       const head = r.level === "out" ? ":red_circle: 在庫切れ" : ":warning: 欠品間近";

@@ -75,11 +75,15 @@ export async function saveCaseSlack(
   const cur = await env.DB.prepare("SELECT webhook_enc FROM case_slack WHERE case_id = ?").bind(caseId).first<{ webhook_enc: string | null }>();
   const enc = w === "-" ? null : w ? await seal(env.SECRET_KEY, { url: w }) : cur?.webhook_enc ?? null;
   await env.DB.prepare(
-    `INSERT INTO case_slack (case_id, webhook_enc, channel, daily_summary, updated_by, updated_at)
-     VALUES (?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO case_slack (case_id, webhook_enc, channel, updated_by, updated_at)
+     VALUES (?, ?, ?, ?, datetime('now'))
      ON CONFLICT(case_id) DO UPDATE SET webhook_enc = excluded.webhook_enc, channel = excluded.channel,
-       daily_summary = excluded.daily_summary, updated_by = excluded.updated_by, updated_at = excluded.updated_at`
-  ).bind(caseId, enc, v.channel?.trim() || null, v.dailySummary === false ? 0 : 1, by).run();
+       updated_by = excluded.updated_by, updated_at = excluded.updated_at`
+  ).bind(caseId, enc, v.channel?.trim() || null, by).run();
+  // 通知のオン・オフは案件の管理画面で変える。ここでは渡されたときだけ反映する
+  if (typeof v.dailySummary === "boolean") {
+    await env.DB.prepare("UPDATE case_slack SET daily_summary = ? WHERE case_id = ?").bind(v.dailySummary ? 1 : 0, caseId).run();
+  }
 }
 
 /** 毎朝の日次サマリを送る対象の案件 */

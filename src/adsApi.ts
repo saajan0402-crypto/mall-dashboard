@@ -86,7 +86,9 @@ const str = (v: unknown) => (v == null ? "" : String(v));
 /** 広告APIを使える案件（プロフィールIDが入っている案件） */
 async function adsCases(env: AdsApiEnv, caseId?: string): Promise<Array<{ caseId: string; profileId: string; token?: string }>> {
   const { results } = await env.DB.prepare(
-    `SELECT case_id FROM case_malls WHERE mall = 'amazon' AND credentials_enc IS NOT NULL ${caseId ? "AND case_id = ?" : ""}`
+    `SELECT m.case_id FROM case_malls m JOIN cases c ON c.id = m.case_id
+      WHERE m.mall = 'amazon' AND m.credentials_enc IS NOT NULL AND (c.status = 'active' ${caseId ? "OR 1 = 1" : ""})
+        ${caseId ? "AND m.case_id = ?" : ""}`
   ).bind(...(caseId ? [caseId] : [])).all<{ case_id: string }>();
   const out = [];
   for (const r of results) {

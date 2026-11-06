@@ -11,8 +11,9 @@
  * 状態を変えた記録は todo_events にすべて残し、お客様向けレポートの「今月対応したこと」に使う。
  */
 
-export type TodoStatus = "open" | "done" | "skip";
-export const STATUS_JA: Record<TodoStatus, string> = { open: "未対応", done: "対応済み", skip: "今はしない" };
+/** other ＝ 自由記述（例：お客様に通達済み）。中身はメモ欄に入れる */
+export type TodoStatus = "open" | "done" | "skip" | "other";
+export const STATUS_JA: Record<TodoStatus, string> = { open: "未対応", done: "対応済み", skip: "今はしない", other: "その他" };
 
 const jst = (n = 0) => new Date(Date.now() + 9 * 3600 * 1000 - n * 86400000).toISOString().slice(0, 10);
 
@@ -89,7 +90,8 @@ export async function setTodoStatus(
   v: { key: string; status: TodoStatus; text?: string; basis?: string | null; area?: string; priority?: string; note?: string | null },
   by: string | null,
 ): Promise<void> {
-  if (!["open", "done", "skip"].includes(v.status)) throw new Error("状態が不正です");
+  if (!["open", "done", "skip", "other"].includes(v.status)) throw new Error("状態が不正です");
+  if (v.status === "other" && !v.note?.trim()) throw new Error("自由記述の内容を入れてください");
   const today = jst(0);
   await db.batch([
     db.prepare(
@@ -106,10 +108,15 @@ export async function setTodoStatus(
   ]);
 }
 
-export interface DoneItem { key: string; title: string; basis: string | null; area: string | null; day: string; by: string | null; note: string | null }
+export interface DoneItem {
+  key: string; title: string; basis: string | null; area: string | null; day: string; by: string | null; note: string | null;
+  /** done ＝ 対応済み／other ＝ 自由記述（お客様に通達済み など） */
+  status: "done" | "other";
+}
 
 /**
- * ある月に「対応済み」にしたもの。同じ項目を月の中で戻した場合は、月末時点（最後の操作）で判断する
+ * ある月に「対応済み」または自由記述（お客様に通達済み など）にしたもの。
+ * 同じ項目を月の中で戻した場合は、月末時点（最後の操作）で判断する
  */
 export async function doneInMonth(db: D1Database, caseId: string, month: string): Promise<DoneItem[]> {
   const { results } = await db.prepare(
@@ -120,8 +127,9 @@ export async function doneInMonth(db: D1Database, caseId: string, month: string)
                              WHERE x.case_id = e.case_id AND x.key = e.key AND substr(x.day, 1, 7) = ? AND x.changed_by IS NOT 'system')
       ORDER BY e.day, e.changed_at`
   ).bind(caseId, month, month).all<Record<string, string | null>>();
-  return results.filter((r) => r.status === "done").map((r) => ({
+  return results.filter((r) => r.status === "done" || r.status === "other").map((r) => ({
     key: String(r.key), title: String(r.title ?? ""), basis: r.basis, area: r.area, day: String(r.day), by: r.changed_by, note: r.note,
+    status: r.status as "done" | "other",
   }));
 }
 

@@ -7,6 +7,7 @@
  */
 
 import { postSlack, type SlackEnv } from "./slack";
+import { notifyEnabled } from "./cases";
 
 export interface LicenseEnv {
   DB: D1Database;
@@ -62,6 +63,7 @@ export async function notifyLicenseExpiry(env: LicenseEnv): Promise<{ sent: bool
   // 案件ごとに、その案件のチャンネルへ（未登録なら全体のチャンネルへ）
   let sent = false;
   for (const [i, r] of rows.entries()) {
+    if (!(await notifyEnabled(env.DB, r.caseId, "license_alert"))) continue;
     const res = await postSlack(env as SlackEnv, r.caseId, [
       "*楽天ライセンスキーの期限*", lines[i],
       "RMS → 店舗様向け情報・サービス → WEB APIサービス → 利用設定 → アプリ一覧 から更新し、アプリの接続画面で登録し直してください。",
