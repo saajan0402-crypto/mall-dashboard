@@ -198,7 +198,7 @@
 <body>
 <header>
   <div class="bar">
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.14.0</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.14.1</span></div>
     <div class="picks">
       <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
       <div class="range-pick" id="range-pick" title="">
@@ -939,7 +939,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.14.0";
+  const UI_VERSION = "0.14.1";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
@@ -1485,18 +1485,31 @@
     }
 
     const band = plotW / data.length;
-    const bw = Math.max(3, Math.min(24, band - 2));
+    // イベントの色を塗るときは棒を細くして、棒のすき間から背景の色（特に下半分）が見えるようにする
+    const hasEv = data.some((d) => d.ev && d.ev.length);
+    const bw = Math.max(3, Math.min(24, hasEv ? band * 0.6 : band - 2));
     const maxIdx = data.reduce((m, d, i) => (d.value > data[m].value ? i : m), 0);
 
-    // セール・イベントの日は背景に色をつける（楽天とAmazonが重なる日は左右に分ける）
-    data.forEach((d, i) => {
-      if (!d.ev || !d.ev.length) return;
-      const malls = [...new Set(d.ev.map((e) => e.mall))].sort((a, b) => (a === "rakuten" ? -1 : 1));
-      malls.forEach((m, j) => {
-        const r = el("rect", { x: PAD.l + i * band + (band / malls.length) * j, y: PAD.t, width: band / malls.length + 0.5, height: plotH,
-          fill: m === "rakuten" ? "var(--rakuten)" : "var(--amazon)", "fill-opacity": 0.13 });
-        svg.insertBefore(r, svg.firstChild);
+    // セール・イベントの日は背景に色をつける。
+    // 両方のモールのイベントが出てくるグラフでは、上半分＝楽天・下半分＝Amazon に固定して横に帯でつなぐ。
+    // 続いている日はまとめて1本の帯にする（1日ずつ塗ると継ぎ目が縦じまに見えるため）
+    const evMalls = ["rakuten", "amazon"].filter((m) => data.some((d) => (d.ev || []).some((e) => e.mall === m)));
+    evMalls.forEach((m, j) => {
+      const top = evMalls.length === 2 ? PAD.t + (plotH / 2) * j : PAD.t;
+      const hh = evMalls.length === 2 ? plotH / 2 : plotH;
+      let runStart = -1;
+      const flush = (end) => {
+        if (runStart < 0) return;
+        svg.insertBefore(el("rect", { x: PAD.l + runStart * band, y: top, width: (end - runStart) * band, height: hh,
+          fill: m === "rakuten" ? "var(--rakuten)" : "var(--amazon)", "fill-opacity": 0.16 }), svg.firstChild);
+        runStart = -1;
+      };
+      data.forEach((d, i) => {
+        const on = (d.ev || []).some((e) => e.mall === m);
+        if (on && runStart < 0) runStart = i;
+        if (!on) flush(i);
       });
+      flush(data.length);
     });
 
     data.forEach((d, i) => {
@@ -1528,9 +1541,10 @@
       const names = (m) => [...new Set(all.filter((e) => e.mall === m).map((e) => e.name))].join("・");
       const lg = document.createElement("div");
       lg.className = "note"; lg.style.cssText = "display:flex;gap:16px;flex-wrap:wrap;margin-top:6px;font-size:12px";
+      const both = all.some((e) => e.mall === "rakuten") && all.some((e) => e.mall === "amazon");
       lg.innerHTML = ["rakuten", "amazon"].filter((m) => all.some((e) => e.mall === m)).map((m) =>
         `<span><span style="display:inline-block;width:11px;height:11px;border-radius:2px;vertical-align:-1px;margin-right:5px;
-          background:color-mix(in srgb,var(--${m}) 22%,transparent);border:1px solid color-mix(in srgb,var(--${m}) 45%,transparent)"></span>${m === "rakuten" ? "楽天" : "Amazon"}のイベント（${esc(names(m))}）</span>`).join("");
+          background:color-mix(in srgb,var(--${m}) 22%,transparent);border:1px solid color-mix(in srgb,var(--${m}) 45%,transparent)"></span>${m === "rakuten" ? "楽天" : "Amazon"}のイベント${both ? (m === "rakuten" ? "（上半分）" : "（下半分）") : ""}：${esc(names(m))}</span>`).join("");
       host.appendChild(lg);
     }
   }
