@@ -21,7 +21,8 @@ import { ingestRakutenSales, ingestRakutenInventory, pumpRakuten } from "./inges
 import { syncRakutenItems, pumpRakutenItems } from "./rakutenItems";
 import { importAdFile, importAdUpload, adCoverage, adSummary, type ImportResult, type SummaryLevel } from "./ingestAds";
 import { SETTINGS, settingsLog, resolveSettings, saveSettings, feeRate, recalcFeeEst, recalcAllFeeEst, type Scope } from "./settings";
-import { parseChargeCsv, saveCharges, listCharges, type ChargeRow } from "./mallCharges";
+import { parseChargeCsv, saveCharges, listCharges, isBillpay, parseBillpay, saveBillpay, monthStatus, type ChargeRow } from "./mallCharges";
+import { decodeCsv, parseCsv } from "./adImport";
 import { buildCaseSummary, periodSummary, dataRange, resolvePeriod } from "./caseSummary";
 import { buildAdAdvice } from "./adAdvice";
 import { renderCaseMarkdown } from "./caseReport";
@@ -36,7 +37,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.15.4";
+const APP_VERSION = "0.16.0";
 
 export interface Env {
   DB: D1Database;
@@ -330,7 +331,8 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const caseId = u.searchParams.get("case_id");
     const month = u.searchParams.get("month") ?? jstDate(1).slice(0, 7);
     if (!caseId) return json({ charges: [] });
-    return json({ month, charges: await listCharges(env.DB, caseId, month) });
+    return json({ month, charges: await listCharges(env.DB, caseId, month),
+      status: { rakuten: await monthStatus(env.DB, caseId, "rakuten", month), amazon: await monthStatus(env.DB, caseId, "amazon", month) } });
   }
 
   // CSVで入れる。書式が読めなかったときは見出しをそのまま返す
@@ -343,6 +345,21 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     if (!caseId || !(file instanceof File)) return json({ error: "案件とファイルを選んでください" }, 400);
 
     const bytes = await file.arrayBuffer();
+
+    // 楽天の「請求・支払明細」（Shop_Billpay.csv）はそのまま読む。月は行ごとの精算対象期間で決まるので、対象月の指定は使わない
+    const table = parseCsv(decodeCsv(bytes));
+    if (table.length && isBillpay(table)) {
+      if (mall !== "rakuten") return json({ saved: false, message: "楽天の請求・支払明細です。モールを「楽天」にして入れてください" });
+      const b = parseBillpay(table, file.name);
+      if (!b.ok) return json({ saved: false, message: b.message });
+      const r2Key = `raw/rakuten/charges/${caseId}/billpay_${b.statementNo}.csv`;
+      await env.FILES.put(r2Key, bytes, { httpMetadata: { contentType: "text/csv" } });
+      const months = await saveBillpay(env, caseId, mall, b, r2Key);
+      return json({ saved: true, format: "billpay", fileName: file.name, statementNo: b.statementNo, shop: b.shop, issued: b.issued,
+        rows: b.rows.length, taxDiff: b.taxDiff, payments: b.payments, months,
+        message: `${b.shop}／発行 ${b.issued}／${b.rows.length}行を ${b.months.join("・")} に振り分けました` });
+    }
+
     const parsed = parseChargeCsv(bytes, file.name);
     if (!parsed.ok) return json({ ...parsed, saved: false });
 

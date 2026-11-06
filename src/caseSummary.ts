@@ -11,6 +11,7 @@ import { resolveSettings } from "./settings";
 import { listEvents, type SaleEvent } from "./events";
 import { applyTodoStatus, doneInMonth, isoWeek, textKey, type TodoStatus, type DoneItem } from "./todos";
 import { notifyEnabled } from "./cases";
+import { latestCompleteMonth } from "./mallCharges";
 import { buildAdAdvice, type BidAdvice, type NegativeAdvice, type HarvestAdvice } from "./adAdvice";
 
 /** 日本時間で n 日前の日付 */
@@ -525,9 +526,11 @@ export async function buildCaseSummary(
       if (left <= 30) warnings.push(`楽天のライセンスキーの期限まであと ${left} 日です（${lic.d}）`);
     }
     if (rakutenFeeFromDefault) warnings.push("楽天の手数料率が既定値のままです。楽天の粗利は実態とずれている可能性があります");
-    const ch = await db.prepare("SELECT COUNT(*) AS c FROM mall_charges WHERE case_id = ? AND mall = 'rakuten' AND period_start = ?")
-      .bind(caseId, monthStart).first<{ c: number }>();
-    if (!ch?.c) warnings.push("今月の楽天の手数料は料率からの概算です（請求明細は未入力）");
+    // 楽天の請求明細は2〜3か月遅れで届く。どの月までが実額かを出す
+    const done = await latestCompleteMonth(db, caseId, "rakuten");
+    warnings.push(done
+      ? `楽天の手数料は ${done} 分までが請求明細の実額です。それより後は料率からの概算です`
+      : "楽天の手数料は、請求明細がそろった月がまだ無いため、すべて料率からの概算です");
   }
   for (const f of freshness) {
     if (f.latest == null) warnings.push(`${f.label} のデータがまだありません`);

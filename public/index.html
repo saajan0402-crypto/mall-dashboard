@@ -538,8 +538,13 @@
           <button class="act" id="btn-ch-manual">手で入力する</button>
           <span class="note" id="ch-msg"></span>
         </div>
-        <p class="note" style="margin-top:10px">請求明細は月単位なので、ここだけは「対象月」で選びます（ヘッダーの期間とは別）。
-          RMS の請求明細を入れると、<strong>その月の手数料が概算から実額に変わります</strong>。</p>
+        <p class="note" style="margin-top:10px"><strong>楽天は RMS の「請求・支払明細」の CSV（ファイル名が …_Shop_Billpay.csv）をそのまま入れてください。</strong>
+          1つの明細に対象月の違う項目が混ざっているので、行ごとの精算対象期間で月に振り分けます（「対象月」の指定は使いません）。
+          楽天ペイの入金の行は費用ではないので取り込まず、RPP の広告掲載料は広告費として別に数えているので手数料には入れません。
+          請求額は税抜で載っているので、税率をかけて税込にそろえます。</p>
+        <p class="note" style="margin-top:6px">その月の<strong>システム利用料と楽天ペイ利用料の両方がそろうと、手数料が概算から実額に切り替わります</strong>（片方だけだと少なく見えるため）。
+          楽天ペイ利用料は1か月早い明細に載るので、続けて2本入れるとそろいます。同じ明細を何度入れても二重にはなりません。
+          ほかの書式や手入力のときは、ここの「対象月」の月として入ります。</p>
         <p class="note" style="margin-top:6px"><strong>請求明細は店舗単位で、商品ごとの内訳はありません。</strong>
           店舗の合計は実額になりますが、商品別の手数料は<strong>売上で按分した値</strong>になります。
           月全体の粗利は正確に、商品別は目安、という使い分けになります。</p>
@@ -996,7 +1001,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.15.4";
+  const UI_VERSION = "0.16.0";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
@@ -2107,20 +2112,30 @@
   async function loadCharges() {
     const caseId = $("sales-case").value;
     if (!caseId) { $("ch-list").innerHTML = ""; return; }
-    const d = await get(`/api/charges?case_id=${encodeURIComponent(caseId)}&month=${$("sum-month").value}`);
+    const month = $("sum-month").value;
+    const d = await get(`/api/charges?case_id=${encodeURIComponent(caseId)}&month=${month}`);
     const rows = d.charges || [];
     if (!rows.length) {
-      $("ch-list").innerHTML = `<p class="note">この月の請求明細はまだ入っていません。手数料は料率からの概算です。</p>`;
+      $("ch-list").innerHTML = `<p class="note">${esc(month)} 分の請求明細はまだ入っていません。手数料は料率からの概算です。</p>`;
       return;
     }
-    const total = rows.reduce((n, r) => n + r.amount, 0);
-    $("ch-list").innerHTML = `<div class="tablewrap"><table style="min-width:420px">
-      <thead><tr><th>モール</th><th>費目</th><th class="r">金額</th><th>入力</th></tr></thead>
-      <tbody>${rows.map((r) => `<tr>
-        <td>${r.mall === "rakuten" ? "楽天" : "Amazon"}</td><td>${esc(r.name)}</td>
+    const st = (d.status || {}).rakuten;
+    const head = st && rows.some((r) => r.mall === "rakuten")
+      ? (st.complete
+        ? `<p style="margin:0 0 8px"><span class="tag ok">実額</span> ${esc(month)} 分の楽天の手数料は請求明細の実額 <strong>${yen(st.total)}</strong>（税込）で計算しています。</p>`
+        : `<p style="margin:0 0 8px"><span class="tag warn">一部だけ</span> ${esc(month)} 分は <strong>${esc(st.missing.join("・"))}</strong> がまだ届いていないので、手数料は料率からの概算のままです。
+            楽天ペイ利用料は1か月早い明細に、システム利用料などは翌々月20日ごろの明細に載ります。両方入れると実額に切り替わります。</p>`)
+      : "";
+    const counted = rows.filter((r) => !r.excluded).reduce((n, r) => n + r.amount, 0);
+    $("ch-list").innerHTML = head + `<div class="tablewrap"><table style="min-width:520px">
+      <thead><tr><th>モール</th><th>科目</th><th>品目</th><th class="r">金額（税込）</th><th>入力</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr${r.excluded ? ' style="opacity:.6"' : ""}>
+        <td>${r.mall === "rakuten" ? "楽天" : "Amazon"}</td><td>${esc(r.category || "—")}</td>
+        <td>${esc(r.name)}${r.excluded ? `<span class="tag wait" style="margin-left:6px">手数料に数えない（広告費で計上済み）</span>` : ""}</td>
         <td class="r">${yen(r.amount)}</td>
-        <td><span class="tag wait">${r.source === "manual" ? "手入力" : "CSV"}</span></td></tr>`).join("")}
-      <tr><td colspan="2"><strong>合計</strong></td><td class="r"><strong>${yen(total)}</strong></td><td></td></tr>
+        <td><span class="tag wait">${r.source === "manual" ? "手入力" : r.statementNo ? "請求・支払明細" : "CSV"}</span>
+          ${r.note ? `<div class="note" style="font-size:10.5px">${esc(r.note)}</div>` : ""}</td></tr>`).join("")}
+      <tr><td colspan="3"><strong>手数料として数える合計</strong></td><td class="r"><strong>${yen(counted)}</strong></td><td></td></tr>
       </tbody></table></div>`;
   }
 
@@ -2151,7 +2166,15 @@
           : "";
         return;
       }
-      $("ch-msg").innerHTML = `<span class="tag ok">取り込みました</span> ${esc(d.message)}／商品別に按分：${d.allocated}行`;
+      if (d.format === "billpay") {
+        // 1つの明細に対象月の違う項目が混ざっているので、月ごとの状態を出す
+        const ms = d.months.map((m) => `${m.month}：${m.complete ? "実額に切り替え" : `${m.missing.join("・")}待ち（概算のまま）`}`).join("／");
+        $("ch-msg").innerHTML = `<span class="tag ok">取り込みました</span> ${esc(d.message)}<br>${esc(ms)}`
+          + (d.taxDiff ? `<br><span class="tag warn">消費税が明細と ${yen(Math.abs(d.taxDiff))} ずれています</span>` : "");
+        if (d.months.length) { $("sum-month").value = d.months[d.months.length - 1].month; }
+      } else {
+        $("ch-msg").innerHTML = `<span class="tag ok">取り込みました</span> ${esc(d.message)}／商品別に按分：${d.allocated}行`;
+      }
       await loadCharges(); await loadSummary(); await loadSales();
     } finally { btn.disabled = false; }
   });
