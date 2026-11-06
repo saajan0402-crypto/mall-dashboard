@@ -10,6 +10,7 @@ import { inventoryStatus, type InventoryRow } from "./ingestInventory";
 import { resolveSettings } from "./settings";
 import { listEvents, type SaleEvent } from "./events";
 import { applyTodoStatus, doneInMonth, isoWeek, textKey, type TodoStatus, type DoneItem } from "./todos";
+import { notifyEnabled } from "./cases";
 import { buildAdAdvice, type BidAdvice, type NegativeAdvice, type HarvestAdvice } from "./adAdvice";
 
 /** 日本時間で n 日前の日付 */
@@ -207,7 +208,7 @@ export interface CaseSummary {
   events: SaleEvent[];
   /** 今月「対応済み」にしたこと（お客様向けレポート用） */
   doneThisMonth: DoneItem[];
-  settings: { targetMargin: number; adMargin: number; stockAlertDays: number; rakutenFeeRate: number | null; amazonFeeRate: number | null;
+  settings: { targetMargin: number; adMargin: number; stockAlertDays: number; stockAlert: boolean; rakutenFeeRate: number | null; amazonFeeRate: number | null;
     rakutenFeeFromDefault: boolean };
 }
 
@@ -587,6 +588,8 @@ export async function buildCaseSummary(
     settings: {
       targetMargin, adMargin,
       stockAlertDays: val(sAmz.case, "stock_alert_days", 14),
+      // 在庫アラートの通知をオフにした案件は、在庫を在庫タブだけで見る（ダッシュボードの要対応・日次サマリ・週次レポートには出さない）
+      stockAlert: await notifyEnabled(db, caseId, "stock_alert"),
       rakutenFeeRate: malls.includes("rakuten") ? rate(sRak.caseMall) : null,
       amazonFeeRate: malls.includes("amazon") ? rate(sAmz.caseMall) : null,
       rakutenFeeFromDefault,
@@ -594,7 +597,9 @@ export async function buildCaseSummary(
   };
   // 同じ鍵が2つ出ないようにする（在庫の「注意」と「欠品間近」が同じ商品で重なるなど）
   const seen = new Set<string>();
-  const todos = buildTodo(base).filter((t) => (seen.has(t.key) ? false : (seen.add(t.key), true)));
+  const todos = buildTodo(base)
+    .filter((t) => base.settings.stockAlert || t.area !== "在庫")
+    .filter((t) => (seen.has(t.key) ? false : (seen.add(t.key), true)));
   const todo = await applyTodoStatus(db, caseId, todos, { write: opts.trackTodos !== false });
   return { ...base, todo, doneThisMonth: await doneInMonth(db, caseId, today.slice(0, 7)) };
 }

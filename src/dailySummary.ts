@@ -44,7 +44,7 @@ export async function dailySummaryText(env: SlackEnv, caseId: string): Promise<s
 
   const inv = y.inventory;
   const outN = inv.filter((r) => r.level === "out").length, riskN = inv.filter((r) => r.level === "risk").length;
-  if (outN || riskN) L.push(`在庫：在庫切れ ${outN}件・欠品間近 ${riskN}件`);
+  if (y.settings.stockAlert && (outN || riskN)) L.push(`在庫：在庫切れ ${outN}件・欠品間近 ${riskN}件`);
 
   const open = (recent?.todo ?? []).filter((t) => t.priority === "high" && (t.status ?? "open") === "open");
   if (open.length) {

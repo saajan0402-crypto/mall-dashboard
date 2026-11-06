@@ -827,7 +827,7 @@
         <div class="card">
           <div id="notify-box"></div>
           <div class="btns"><button class="act primary" id="btn-notify-save">保存</button><span class="note" id="notify-msg"></span></div>
-          <p class="note" style="margin-top:8px">オフにしても、ダッシュボードの「要対応」や在庫タブには今まで通り出ます。止まるのは Slack への通知だけです。</p>
+          <p class="note" style="margin-top:8px">オフにすると止まるのは Slack への通知だけです。ただし<strong>在庫アラートをオフにした案件は、在庫の話をダッシュボードの「要対応」・日次サマリ・週次レポートにも出さず、在庫タブだけで見る</strong>形になります。</p>
         </div>
       </div>
       <div>
@@ -996,7 +996,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.15.3";
+  const UI_VERSION = "0.15.4";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
@@ -2937,6 +2937,8 @@
     const prodRows = s.products.map((p) => cost
       ? [esc(p.sku), esc(p.name), nf(p.units), yen(p.revenue), p.costManual ? "要手計算" : yen(p.gross), p.costManual ? "—" : pctS(p.grossRate), yen(p.adCost)]
       : [esc(p.sku), esc(p.name), nf(p.units), yen(p.revenue), yen(p.adCost)]);
+    // 在庫アラートの通知をオフにした案件は、レポートにも在庫を出さない（在庫タブだけで見る）
+    const showStock = s.settings.stockAlert !== false;
     const inv = s.inventory.filter((r) => ["out", "risk", "watch"].includes(r.level));
     const okN = s.inventory.length - inv.length;
     const nextTodo = s.todo.filter((t) => t.priority !== "info" && (t.status || "open") === "open");
@@ -2964,17 +2966,17 @@
         ${tbl(["検索語", "種類", "広告費", "クリック"], s.ads.wastedTerms.map((w) =>
           [esc(w.term), esc(ADTYPE_JA[w.adType] || w.adType), yen(w.cost), nf(w.clicks)]), 2)}
       </div>
-      <div class="sec"><h2>5. 在庫</h2>
+      ${showStock ? `<div class="sec"><h2>5. 在庫</h2>
         ${tbl(["状態", "モール", "SKU", "商品名", "販売可能", "残り日数", "理由"], inv.map((r) =>
           [LV_JA[r.level], esc(MALL_JA[r.mall] || r.mall), esc(r.sku), esc(r.name), nf(r.qty), r.daysOfSupply ?? "—", esc(r.reason)]), 4)}
         <p class="note" style="margin-top:4px">ほか ${okN} 件は問題なし・判定不可。在庫は作成時点の状態です。</p>
-      </div>
-      <div class="sec"><h2>6. 期間中に対応したこと</h2>
+      </div>` : ""}
+      <div class="sec"><h2>${showStock ? 6 : 5}. 期間中に対応したこと</h2>
         ${d.actions.length ? `<ul>${d.actions.map((a) => `<li>${esc(a.day.slice(5).replace("-", "/"))}　${esc(a.status === "other"
           ? `${a.note}（${a.title.replace(/。.*$/, "")}）` : (a.note || a.title.replace(/。.*$/, "")))}</li>`).join("")}</ul>`
           : `<p class="note">期間中に「対応済み」にした項目はありません。</p>`}
       </div>
-      <div class="sec"><h2>7. 次にやること</h2>
+      <div class="sec"><h2>${showStock ? 7 : 6}. 次にやること</h2>
         ${nextTodo.length ? `<ul>${nextTodo.map((t) => `<li>${esc(t.text)}${t.basis ? `<span class="note">（${esc(t.basis)}）</span>` : ""}</li>`).join("")}</ul>`
           : `<p class="note">未対応の項目はありません。</p>`}
       </div>
@@ -3120,7 +3122,7 @@
       a.harvest.map((x) => [x.searchTerm, x.kind === "product" ? "商品ターゲティング" : "完全一致キーワード", x.campaign, x.orders, x.cost, x.roas, x.suggestedBid, x.reason]),
       [null, null, null, INT, YEN, RATIO, YEN], [28, 18, 30, 6, 10, 7, 9, 60]);
 
-    sheet("在庫", "在庫（作成時点）", ["状態", "モール", "SKU", "商品名", "販売可能", "納品中", "1日あたり販売", "残り日数", "定期便30日見込み", "理由"],
+    if (s.settings.stockAlert !== false) sheet("在庫", "在庫（作成時点）", ["状態", "モール", "SKU", "商品名", "販売可能", "納品中", "1日あたり販売", "残り日数", "定期便30日見込み", "理由"],
       s.inventory.map((r) => [LV_JA[r.level], MALL_JA[r.mall] || r.mall, r.sku, r.name, r.qty, r.inbound, r.velocity, r.daysOfSupply, r.snsNext30, r.reason]),
       [null, null, null, null, INT, INT, "0.0", INT, INT], [10, 8, 18, 36]);
 
@@ -3137,7 +3139,7 @@
   /* ---------- 案件の管理 ---------- */
   let casesAll = [];
   const NOTIFY_JA = { daily_summary: ["毎朝7時の日次サマリ", "前日の売上・粗利・広告費、今月の累計、未対応の「今週中」"],
-    stock_alert: ["在庫アラート", "在庫切れ・欠品間近。ダッシュボードの表示はオフでも残ります"],
+    stock_alert: ["在庫アラート", "在庫切れ・欠品間近。オフにすると、ダッシュボードの要対応・日次サマリ・週次レポートからも外れ、在庫タブだけで見られます"],
     settings_notice: ["設定の変更通知", "誰が・何を・いくつからいくつに変えたか"],
     license_alert: ["楽天ライセンスキーの期限", "期限の2週間前から毎朝"] };
   const yesNo = (v, y = "接続済み", n = "—") => v ? `<span class="tag ok">${y}</span>` : `<span class="note">${n}</span>`;
