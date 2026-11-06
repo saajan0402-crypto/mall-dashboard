@@ -15,6 +15,7 @@ import { advance, pump, jstDate } from "./ingestSales";
 import { ingestFinances, pumpFinances, reparseFinances } from "./ingestFinances";
 import { monthlyStatement, feeBasis, postedDaily } from "./amazonFin";
 import { pumpTransactions, ingestTransactionsDay } from "./ingestTransactions";
+import { startRakutenBackfill, rakutenBackfillStatus, runRakutenBackfill } from "./rakutenBackfill";
 import { ingestInventory, pumpInventory, inventoryStatus, notifyInventory } from "./ingestInventory";
 import { ingestSns, pumpSns } from "./ingestSns";
 import { startBackfill, runBackfill, backfillStatus } from "./backfill";
@@ -39,7 +40,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.18.1";
+const APP_VERSION = "0.18.2";
 
 export interface Env {
   DB: D1Database;
@@ -324,6 +325,24 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     }
     const r = await runBackfill(env, { caseId: b.caseId, budgetMs: 25000 });
     return json(r);
+  }
+
+  // 楽天の過去の売上（ふだんは直近7日しか取らないので、接続したばかりの案件は一度これを動かす）
+  if (path === "/api/backfill/rakuten" && req.method === "GET") {
+    const caseId = new URL(req.url).searchParams.get("case_id");
+    return json({ progress: caseId ? await rakutenBackfillStatus(env.DB, caseId) : null });
+  }
+  if (path === "/api/backfill/rakuten" && req.method === "POST") {
+    const b = (await req.json().catch(() => ({}))) as { action?: "start" | "run"; caseId?: string; days?: number };
+    if (!b.caseId) return json({ error: "案件を選んでください" }, 400);
+    if (b.action === "start") {
+      const m = await env.DB.prepare("SELECT 1 AS x FROM case_malls WHERE case_id = ? AND mall = 'rakuten' AND credentials_enc IS NOT NULL")
+        .bind(b.caseId).first();
+      if (!m) return json({ error: "この案件は楽天の接続情報が未登録です" }, 400);
+      await startRakutenBackfill(env.DB, b.caseId, Number(b.days ?? 365), viewer(req));
+    }
+    await runRakutenBackfill(env, { caseId: b.caseId, budgetMs: 20000 });
+    return json({ progress: await rakutenBackfillStatus(env.DB, b.caseId) });
   }
 
   /* ───────── 請求明細（実額） ───────── */
@@ -991,6 +1010,8 @@ export default {
           await reparseFinances(env, 40).catch(() => 0);
           // 新しい入金明細（出荷日ベース）。直近14日は毎日取り直し、古い日は少しずつ埋める
           await pumpTransactions(env, { budgetMs: 60000 }).catch(() => 0);
+          // 楽天の過去の売上（始めた案件だけ）
+          await runRakutenBackfill(env, { budgetMs: 40000 }).catch(() => 0);
           // 広告レポートは出来上がるまで数分〜数十分かかるので、ここで少しずつ取りに行く
           const ads = await env.DB
             .prepare("SELECT COUNT(*) AS n FROM ads_report_jobs WHERE status IN ('queued', 'requested')")
