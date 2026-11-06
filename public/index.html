@@ -470,6 +470,15 @@
       </div>
     </div>
     <div>
+      <h2>Amazon 月次確定（明細ベース）<span class="hint">月はすぐ下の「請求明細の取り込み」の対象月で選びます</span></h2>
+      <div class="card">
+        <div id="amz-monthly"></div>
+        <p class="note" style="margin-top:8px">セラーセントラルの「日付範囲レポート」と同じ並び・同じ数え方（計上日）で、Amazon の入金明細をまとめたものです。
+          締まった月はこちらが正（確定値）です。ふだんの売上は注文日で数えているので、月をまたいだ注文の分だけ売上がずれます。
+          入金明細は毎朝自動で取り込まれ、翌月10日ごろまでに前月分がそろいます。</p>
+      </div>
+    </div>
+    <div>
       <h2>過去データの取り込み<span class="hint">案件ごとに一度だけ</span></h2>
       <div class="card">
         <div class="btns" style="margin-top:0">
@@ -1001,7 +1010,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.16.0";
+  const UI_VERSION = "0.17.0";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
@@ -1066,7 +1075,7 @@
     if (p === "p-dash") return loadDashboard();
     if (p === "p-master") return loadProducts();
     if (p === "p-status") return loadStatus();
-    if (p === "p-sales") return loadSales().then(loadSummary).then(loadCharges).then(loadBackfill);
+    if (p === "p-sales") return loadSales().then(loadSummary).then(loadCharges).then(loadBackfill).then(loadAmzMonthly);
     if (p === "p-stock") return loadStock();
     if (p === "p-ads") return loadAds();
     if (p === "p-settings") return loadSettings();
@@ -2054,7 +2063,7 @@
       $("summary").innerHTML = `<p class="note">案件を選ぶと期間のまとめが出ます。</p>`;
       return;
     }
-    $("sum-period").textContent = `${rangeLabel()}／Amazonは実額、楽天は料率からの概算`;
+    $("sum-period").textContent = `${rangeLabel()}／Amazonの費用は入金明細の計上日で集計、楽天は請求明細がそろった月だけ実額`;
     const d = await get(`/api/summary?case_id=${encodeURIComponent(caseId)}&from=${range.from}&to=${range.to}`);
     if (d.error) { $("summary").innerHTML = `<p class="note">${esc(d.error)}</p>`; return; }
 
@@ -2063,6 +2072,7 @@
       ["売上", yen(d.revenue)],
       ["返品", d.returns ? "-" + yen(d.returns) : "—"],
       ["値引き（クーポン等）", d.discounts ? "-" + yen(d.discounts) : "—"],
+      ["Amazonポイントの費用", d.points ? "-" + yen(d.points) : "—"],
       ["原価", "-" + yen(d.cost)],
       ["手数料", "-" + yen(d.fees)
         + (d.feesEst ? `<span class="tag wait" style="margin-left:6px">うち概算 ${yen(d.feesEst)}</span>` : "")
@@ -2105,8 +2115,36 @@
       `<div class="row"><span>${k}</span><span class="v">${v}</span></div>`).join("") + mallTable + mallNote + noCost + shared + warn + bd;
   }
 
-  $("sales-case").addEventListener("change", () => { loadSales(); loadSummary(); loadCharges(); loadBackfill(); });
-  $("sum-month").addEventListener("change", () => { loadSummary(); loadCharges(); });
+  $("sales-case").addEventListener("change", () => { loadSales(); loadSummary(); loadCharges(); loadBackfill(); loadAmzMonthly(); });
+  $("sum-month").addEventListener("change", () => { loadSummary(); loadCharges(); loadAmzMonthly(); });
+
+  /* ---------- Amazon 月次確定（明細ベース） ---------- */
+  async function loadAmzMonthly() {
+    const caseId = $("sales-case").value, month = $("sum-month").value;
+    if (!caseId || !month) { $("amz-monthly").innerHTML = ""; return; }
+    const d = await get(`/api/monthly/amazon?case_id=${encodeURIComponent(caseId)}&month=${month}`);
+    if (d.error) { $("amz-monthly").innerHTML = `<p class="note">${esc(d.error)}</p>`; return; }
+    if (!d.lines.length) { $("amz-monthly").innerHTML = `<p class="note">${esc(month)} の Amazon の入金明細はまだありません。</p>`; return; }
+    const t = d.totals;
+    const signed = (v) => (v < 0 ? "-" : "") + yen(Math.abs(v));
+    const groups = [["商品売上（税込）", t.sales], ["配送料", t.shipping], ["返金", t.refunds], ["プロモーション割引", t.promotions],
+      ["Amazonポイントの費用", t.points], ["注文ごとの手数料（販売手数料・FBA）", t.orderFees], ["月額登録料・保管料など", t.accountFees],
+      ["補填・調整", t.adjustments]].filter(([, v]) => v);
+    const status = d.coveredDays < d.days
+      ? `<span class="tag warn">取り込み途中</span> ${d.coveredDays}/${d.days}日分の入金明細から集計しています`
+      : (d.closed ? `<span class="tag ok">確定</span> ${d.days}日分すべての入金明細から集計しています` : `<span class="tag wait">今月</span>`);
+    const ob = d.orderBasis;
+    const diff = ob ? `<p class="note" style="margin-top:10px">比較：ふだんの数字（注文日ベース）の同じ月は 売上 <strong>${yen(ob.revenue)}</strong>（${ob.units}個）。
+        明細の商品売上との差 ${signed(t.sales - ob.revenue)} は、月をまたいだ注文（月末に注文・翌月に出荷など）の分です。</p>` : "";
+    const detail = d.lines.map((l) => `<tr><td class="note">${esc(l.group)}</td><td>${esc(l.name)}</td><td class="r">${signed(l.amount)}</td></tr>`).join("");
+    $("amz-monthly").innerHTML = `<p style="margin:0 0 8px">${status}</p>
+      <div class="tablewrap"><table style="min-width:420px"><tbody>
+        ${groups.map(([k, v]) => `<tr><td>${k}</td><td class="r">${signed(v)}</td></tr>`).join("")}
+        <tr><td><strong>合計（振込みの元になる額）</strong></td><td class="r"><strong>${signed(t.net)}</strong></td></tr>
+      </tbody></table></div>${diff}
+      <details style="margin-top:8px"><summary class="note" style="cursor:pointer">費目ごとの内訳</summary>
+        <div class="tablewrap" style="margin-top:6px"><table style="min-width:420px"><tbody>${detail}</tbody></table></div></details>`;
+  }
 
   /* ---------- 請求明細 ---------- */
   async function loadCharges() {

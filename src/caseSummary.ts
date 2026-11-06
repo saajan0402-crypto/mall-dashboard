@@ -11,6 +11,7 @@ import { resolveSettings } from "./settings";
 import { listEvents, type SaleEvent } from "./events";
 import { applyTodoStatus, doneInMonth, isoWeek, textKey, type TodoStatus, type DoneItem } from "./todos";
 import { notifyEnabled } from "./cases";
+import { amazonFinance, finCost, COVERED_SQL } from "./amazonFin";
 import { latestCompleteMonth } from "./mallCharges";
 import { buildAdAdvice, type BidAdvice, type NegativeAdvice, type HarvestAdvice } from "./adAdvice";
 
@@ -27,6 +28,8 @@ const round2 = (v: number) => Math.round(v * 100) / 100;
 export interface MallPL {
   mall: string;
   units: number; revenue: number; returns: number; discounts: number;
+  /** Amazonポイントの費用 */
+  points: number;
   cost: number; fees: number; feesEst: number; feesAllocated: number;
   revenueWithoutCost: number; rowsWithoutActual: number; rowsTotal: number;
   /** 広告費を引く前の粗利。原価が分からない行は含めない */
@@ -36,7 +39,7 @@ export interface MallPL {
 export interface PeriodSummary {
   from: string; to: string;
   byMall: MallPL[];
-  units: number; revenue: number; returns: number; discounts: number;
+  units: number; revenue: number; returns: number; discounts: number; points: number;
   cost: number; fees: number; feesEst: number; feesAllocated: number;
   otherFees: number; gross: number;
   grossRate: number | null;
@@ -50,10 +53,12 @@ export interface PeriodSummary {
 /** 期間の損益。モールごとに出してから合計する */
 export async function periodSummary(db: D1Database, caseId: string, from: string, to: string): Promise<PeriodSummary> {
   // 原価が分からない行（要手計算・未登録・マスタに無いSKU）は粗利から外す。
-  // 0円として数えると粗利が実態よりよく見え、損益分岐ROASも甘くなるため
+  // 0円として数えると粗利が実態よりよく見え、損益分岐ROASも甘くなるため。
+  // Amazon で入金明細を取り込めている日（cov）は、日次の行の手数料・返品・値引きを使わず、
+  // 下で入金明細（計上日）の合計を足す（amazonFin.ts の説明を参照）
   const { results: rows } = await db.prepare(
     `WITH r AS (
-       SELECT s.*, COALESCE(s.fee_actual, s.fee_est, 0) AS fee,
+       SELECT s.*, ${COVERED_SQL} AS cov,
          COALESCE(
            (SELECT unit_cost FROM cost_history h
              WHERE h.product_id = s.product_id AND h.effective_from <= s.date
@@ -61,23 +66,51 @@ export async function periodSummary(db: D1Database, caseId: string, from: string
            (SELECT unit_cost FROM cost_history h
              WHERE h.product_id = s.product_id ORDER BY h.effective_from ASC LIMIT 1)) AS uc
          FROM daily_sales s
-        WHERE s.case_id = ? AND s.date BETWEEN ? AND ?)
+        WHERE s.case_id = ? AND s.date BETWEEN ? AND ?),
+     r2 AS (
+       SELECT r.*,
+         CASE WHEN cov THEN 0 ELSE COALESCE(fee_actual, fee_est, 0) END AS fee,
+         CASE WHEN cov THEN 0 ELSE COALESCE(returns, 0) END AS ret,
+         CASE WHEN cov THEN 0 ELSE COALESCE(discounts, 0) END AS disc
+         FROM r)
      SELECT mall,
        COALESCE(SUM(units), 0)     AS units,
        COALESCE(SUM(revenue), 0)   AS revenue,
-       COALESCE(SUM(returns), 0)   AS returns,
-       COALESCE(SUM(discounts), 0) AS discounts,
+       COALESCE(SUM(ret), 0)       AS returns,
+       COALESCE(SUM(disc), 0)      AS discounts,
        COALESCE(SUM(COALESCE(uc, 0) * units), 0) AS cost,
        COALESCE(SUM(fee), 0) AS fees,
-       COALESCE(SUM(CASE WHEN fee_actual IS NULL THEN COALESCE(fee_est, 0) ELSE 0 END), 0) AS fees_est,
+       COALESCE(SUM(CASE WHEN NOT cov AND fee_actual IS NULL THEN COALESCE(fee_est, 0) ELSE 0 END), 0) AS fees_est,
        COALESCE(SUM(CASE WHEN fee_source = 'allocated' THEN COALESCE(fee_actual, 0) ELSE 0 END), 0) AS fees_allocated,
        COALESCE(SUM(CASE WHEN uc IS NULL THEN revenue ELSE 0 END), 0) AS revenue_without_cost,
-       COALESCE(SUM(CASE WHEN uc IS NOT NULL
-         THEN revenue - COALESCE(returns, 0) - COALESCE(discounts, 0) - fee - uc * units ELSE 0 END), 0) AS gross,
-       SUM(CASE WHEN fee_actual IS NULL THEN 1 ELSE 0 END) AS rows_without_actual,
+       COALESCE(SUM(CASE WHEN uc IS NOT NULL THEN revenue - ret - disc - fee - uc * units ELSE 0 END), 0) AS gross,
+       SUM(CASE WHEN NOT cov AND fee_actual IS NULL THEN 1 ELSE 0 END) AS rows_without_actual,
        COUNT(*) AS rows_total
-     FROM r GROUP BY mall`
+     FROM r2 GROUP BY mall`
   ).bind(caseId, from, to).all<Record<string, number | string>>();
+
+  // Amazon の入金明細（計上日）。原価の分からない商品の分は、その売上と同じく粗利から外す
+  const fin = await amazonFinance(db, caseId, from, to);
+  const { results: noCost } = await db.prepare(
+    `SELECT p.id FROM products p WHERE p.case_id = ?
+        AND (SELECT unit_cost FROM cost_history h WHERE h.product_id = p.id ORDER BY h.effective_from DESC LIMIT 1) IS NULL`
+  ).bind(caseId).all<{ id: string }>();
+  const noCostIds = new Set(noCost.map((x) => x.id));
+  let finGross = 0;
+  for (const [pid, a] of fin.byProduct) if (!noCostIds.has(pid)) finGross += finCost(a);
+  if (fin.byProduct.size && !rows.some((r) => r.mall === "amazon")) {
+    rows.push({ mall: "amazon", units: 0, revenue: 0, returns: 0, discounts: 0, cost: 0, fees: 0, fees_est: 0, fees_allocated: 0,
+      revenue_without_cost: 0, gross: 0, rows_without_actual: 0, rows_total: 0 });
+  }
+  for (const r of rows) {
+    if (r.mall !== "amazon") continue;
+    // 購入者から受け取った配送料は、手数料から差し引いて見せる（FBAの配送代行手数料と相殺される性質のため）
+    r.fees = n(r.fees) + fin.total.fees - fin.total.shipping;
+    r.returns = n(r.returns) + fin.total.refunds;
+    r.discounts = n(r.discounts) + fin.total.promotions;
+    r.points = fin.total.points;
+    r.gross = n(r.gross) - finGross;
+  }
 
   const other = await db.prepare(
     `SELECT COALESCE(-SUM(amount), 0) AS amount FROM fee_events
@@ -92,7 +125,7 @@ export async function periodSummary(db: D1Database, caseId: string, from: string
 
   const byMall: MallPL[] = rows.map((r) => ({
     mall: String(r.mall),
-    units: n(r.units), revenue: n(r.revenue), returns: n(r.returns), discounts: n(r.discounts),
+    units: n(r.units), revenue: n(r.revenue), returns: n(r.returns), discounts: n(r.discounts), points: n(r.points),
     cost: n(r.cost), fees: n(r.fees), feesEst: n(r.fees_est), feesAllocated: n(r.fees_allocated),
     revenueWithoutCost: n(r.revenue_without_cost),
     rowsWithoutActual: n(r.rows_without_actual), rowsTotal: n(r.rows_total),
@@ -108,7 +141,7 @@ export async function periodSummary(db: D1Database, caseId: string, from: string
 
   return {
     from, to, byMall,
-    units: sum("units"), revenue, returns: sum("returns"), discounts: sum("discounts"),
+    units: sum("units"), revenue, returns: sum("returns"), discounts: sum("discounts"), points: sum("points"),
     cost: sum("cost"), fees: sum("fees"), feesEst: sum("feesEst"), feesAllocated: sum("feesAllocated"),
     otherFees, gross,
     grossRate: covered > 0 ? round1((gross / covered) * 100) : null,
@@ -443,7 +476,7 @@ export async function buildCaseSummary(
   /* 商品別（期間内） */
   const { results: prod } = await db.prepare(
     `SELECT p.id, p.sku, p.name, SUM(s.units) AS units, SUM(s.revenue) AS revenue,
-            SUM(COALESCE(s.fee_actual, s.fee_est, 0)) AS fees,
+            SUM(CASE WHEN ${COVERED_SQL} THEN 0 ELSE COALESCE(s.fee_actual, s.fee_est, 0) + COALESCE(s.returns, 0) + COALESCE(s.discounts, 0) END) AS fees,
             (SELECT unit_cost FROM cost_history h WHERE h.product_id = p.id
               ORDER BY h.effective_from DESC LIMIT 1) AS unit_cost,
             (SELECT needs_manual FROM cost_history h WHERE h.product_id = p.id
@@ -455,9 +488,11 @@ export async function buildCaseSummary(
       GROUP BY p.id ORDER BY SUM(s.revenue) DESC LIMIT ?`
   ).bind(from, to, caseId, from, to, Math.min(200, opts.productLimit ?? 15)).all<Record<string, string | number | null>>();
 
+  // 商品別も、Amazon の入金明細は計上日の合計で引く（手数料・返品・値引き・ポイント）
+  const finP = await amazonFinance(db, caseId, from, to);
   const products = prod.map((p) => {
     const rev = n(p.revenue);
-    const gross = p.unit_cost == null ? null : rev - n(p.unit_cost) * n(p.units) - n(p.fees);
+    const gross = p.unit_cost == null ? null : rev - n(p.unit_cost) * n(p.units) - n(p.fees) - finCost(finP.byProduct.get(String(p.id)));
     return {
       sku: String(p.sku), name: String(p.name), units: n(p.units), revenue: rev,
       gross, grossRate: gross == null || !rev ? null : round1((gross / rev) * 100),

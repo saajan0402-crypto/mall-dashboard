@@ -30,11 +30,11 @@ function plTable(p: PeriodSummary): string {
   const rows = p.byMall.map((m) => [
     MALL[m.mall] ?? m.mall, num(m.units), yen(m.revenue), yen(m.cost), yen(m.fees),
     m.feesEst > 0 ? "概算を含む" : m.feesAllocated > 0 ? "請求明細から按分" : "実額",
-    yen(m.returns + m.discounts), yen(m.gross),
+    yen(m.returns + m.discounts + (m.points ?? 0)), yen(m.gross),
     m.revenue - m.revenueWithoutCost > 0 ? `${Math.round((m.gross / (m.revenue - m.revenueWithoutCost)) * 1000) / 10}%` : "—",
     yen(m.revenueWithoutCost),
   ]);
-  return table(["モール", "販売数", "売上", "原価", "手数料", "手数料の確度", "返品・値引き", "粗利（広告費前）", "粗利率", "うち原価不明の売上"], rows);
+  return table(["モール", "販売数", "売上", "原価", "手数料", "手数料の確度", "返品・値引き・ポイント", "粗利（広告費前）", "粗利率", "うち原価不明の売上"], rows);
 }
 
 function adTable(list: AdTotal[]): string {

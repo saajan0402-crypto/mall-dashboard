@@ -12,7 +12,8 @@ import { readProducts, saveProduct, deleteProduct, exportSheet } from "./product
 import { ensureAdmin, addAdmin, removeAdmin, setAdminAll, listConnections, saveConnection, testConnection, FIELDS, type Mall } from "./connections";
 import { diagnose } from "./diagnose";
 import { advance, pump, jstDate } from "./ingestSales";
-import { ingestFinances, pumpFinances } from "./ingestFinances";
+import { ingestFinances, pumpFinances, reparseFinances } from "./ingestFinances";
+import { monthlyStatement } from "./amazonFin";
 import { ingestInventory, pumpInventory, inventoryStatus, notifyInventory } from "./ingestInventory";
 import { ingestSns, pumpSns } from "./ingestSns";
 import { startBackfill, runBackfill, backfillStatus } from "./backfill";
@@ -37,7 +38,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.16.0";
+const APP_VERSION = "0.17.0";
 
 export interface Env {
   DB: D1Database;
@@ -435,6 +436,21 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const to = u.searchParams.get("to") ?? `${month}-31`;
     const p = await periodSummary(env.DB, caseId, from, to);
     return json({ month, caseId, ...p });
+  }
+
+  // 月次確定（明細ベース）：セラーセントラルの日付範囲レポートと同じ並びで、その月の入金明細をまとめる。
+  // 横に、日々の数字（注文日ベース）の同じ月を並べて差を見せる
+  if (path === "/api/monthly/amazon") {
+    const u = new URL(req.url);
+    const caseId = u.searchParams.get("case_id");
+    const month = u.searchParams.get("month") ?? jstDate(1).slice(0, 7);
+    if (!caseId || !/^\d{4}-\d{2}$/.test(month)) return json({ error: "案件と月を指定してください" }, 400);
+    const st = await monthlyStatement(env.DB, caseId, month);
+    const last = `${month}-${String(st.days).padStart(2, "0")}`;
+    const daily = await periodSummary(env.DB, caseId, `${month}-01`, last);
+    const amz = daily.byMall.find((m) => m.mall === "amazon") ?? null;
+    return json({ ...st, orderBasis: amz ? { revenue: amz.revenue, units: amz.units, cost: amz.cost, gross: amz.gross } : null,
+      otherFees: daily.otherFees, closed: last < jstDate(1) });
   }
 
   /* ───────── ダッシュボード・AI用レポート ───────── */
@@ -916,6 +932,8 @@ export default {
     if (event.cron === "*/5 * * * *") {
       ctx.waitUntil(
         (async () => {
+          // 入金明細の読み方を変えた日（ポイントの費用を読むようにした等）を、R2 の生データから読み直す
+          await reparseFinances(env, 40).catch(() => 0);
           // 広告レポートは出来上がるまで数分〜数十分かかるので、ここで少しずつ取りに行く
           const ads = await env.DB
             .prepare("SELECT COUNT(*) AS n FROM ads_report_jobs WHERE status IN ('queued', 'requested')")

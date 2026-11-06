@@ -13,7 +13,7 @@ export interface FeeRow {
   orderId: string | null;
   sku: string | null;
   eventType: "shipment" | "refund" | "service_fee" | "adjustment";
-  kind: "charge" | "fee" | "promotion" | "tax_withheld";
+  kind: "charge" | "fee" | "promotion" | "tax_withheld" | "points";
   name: string;
   amount: number;            // 円。費用はマイナス
 }
@@ -44,6 +44,9 @@ interface ItemLike {
   PromotionList?: Array<{ PromotionType?: string; PromotionAmount?: Amount }>;
   PromotionAdjustmentList?: Array<{ PromotionType?: string; PromotionAmount?: Amount }>;
   ItemTaxWithheldList?: Array<{ TaxesWithheld?: Array<{ ChargeType?: string; ChargeAmount?: Amount }> }>;
+  /** Amazonポイントの費用（日本）。以前は読んでおらず、ポイントの費用が粗利から漏れていた */
+  CostOfPointsGranted?: Amount;
+  CostOfPointsReturned?: Amount;
 }
 
 /** 明細1件から、金額の付いている行をすべて拾う */
@@ -70,6 +73,11 @@ function rowsFromItem(
   for (const t of item.ItemTaxWithheldList ?? []) {
     for (const w of t.TaxesWithheld ?? []) push("tax_withheld", w.ChargeType, w.ChargeAmount);
   }
+  // ポイントは符号の向きが資料によって違うので、付与＝費用（マイナス）、返却＝戻り（プラス）にそろえる
+  const granted = Math.abs(yen(item.CostOfPointsGranted));
+  if (granted) out.push({ date, orderId, sku, eventType, kind: "points", name: "PointsGranted", amount: -granted });
+  const returned = Math.abs(yen(item.CostOfPointsReturned));
+  if (returned) out.push({ date, orderId, sku, eventType, kind: "points", name: "PointsReturned", amount: returned });
   return out;
 }
 

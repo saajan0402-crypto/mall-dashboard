@@ -86,6 +86,82 @@ async function skuMap(db: D1Database, caseId: string): Promise<Map<string, strin
   return m;
 }
 
+/** 入金明細を読むプログラムの版。読み方を変えたら上げる（上げると R2 の生データから読み直す） */
+export const FIN_PARSER = 2;
+
+/**
+ * 1日ぶんの明細を fee_events に入れ直す。
+ * daily_sales の手数料実額・返品額も更新するが、粗利の計算は fee_events の計上日の合計で行う（amazonFin.ts）。
+ * こちらは売上タブの日別の表の目安
+ */
+async function writeFinanceDay(db: D1Database, caseId: string, date: string, rows: FeeRow[]): Promise<{ kept: number; unknown: Set<string> }> {
+  const map = await skuMap(db, caseId);
+  const statements: D1PreparedStatement[] = [
+    db.prepare("DELETE FROM fee_events WHERE case_id = ? AND mall = 'amazon' AND date = ?").bind(caseId, date),
+  ];
+  let kept = 0;
+  const unknown = new Set<string>();
+  for (const row of rows) {
+    const productId = row.sku ? map.get(row.sku) ?? null : null;
+    if (row.sku && !productId) unknown.add(row.sku);
+    statements.push(
+      db.prepare(
+        `INSERT INTO fee_events (id, case_id, mall, date, order_id, sku, product_id, event_type, kind, name, amount)
+         VALUES (?, ?, 'amazon', ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        // 取得期間はその日の日本時間 0時〜24時なので、計上日は必ずこの date になる。
+        // 行ごとの PostedDate ではなく date を入れることで、取り直したときに必ず同じ行が消える
+        crypto.randomUUID(), caseId, date, row.orderId, row.sku, productId, row.eventType, row.kind, row.name, row.amount
+      )
+    );
+    kept++;
+  }
+  statements.push(
+    db.prepare(
+      `UPDATE daily_sales SET
+         fee_actual = (SELECT -COALESCE(SUM(f.amount), 0) FROM fee_events f
+                        WHERE f.case_id = daily_sales.case_id AND f.mall = daily_sales.mall
+                          AND f.date = daily_sales.date AND f.product_id IS daily_sales.product_id
+                          AND f.kind IN ('fee', 'promotion', 'tax_withheld', 'points')),
+         returns = (SELECT -COALESCE(SUM(f.amount), 0) FROM fee_events f
+                     WHERE f.case_id = daily_sales.case_id AND f.mall = daily_sales.mall
+                       AND f.date = daily_sales.date AND f.product_id IS daily_sales.product_id
+                       AND f.event_type = 'refund' AND f.kind = 'charge')
+       WHERE case_id = ? AND mall = 'amazon' AND date = ?`
+    ).bind(caseId, date)
+  );
+  await db.batch(statements);
+  return { kept, unknown };
+}
+
+/**
+ * 読み方を変えたときに、R2 に残した生データから読み直す（API は呼ばない）。
+ * 5分ごとの実行で少しずつ進める
+ */
+export async function reparseFinances(env: FinanceEnv, limit = 40): Promise<number> {
+  const { results } = await env.DB.prepare(
+    `SELECT case_id, period_start AS date, MAX(r2_key) AS r2_key FROM ingests
+      WHERE mall = 'amazon' AND kind = 'settlement' AND status = 'ok' AND COALESCE(parser, 1) < ? AND r2_key IS NOT NULL
+      GROUP BY case_id, period_start ORDER BY period_start DESC LIMIT ?`
+  ).bind(FIN_PARSER, limit).all<{ case_id: string; date: string; r2_key: string }>();
+  let done = 0;
+  for (const r of results) {
+    const obj = await env.FILES.get(r.r2_key);
+    if (obj) {
+      const pages = (await obj.json()) as Array<Record<string, unknown>>;
+      const rows: FeeRow[] = [];
+      for (const ev of Array.isArray(pages) ? pages : [pages]) rows.push(...parseFinancialEvents(ev ?? {}, r.date).rows);
+      await writeFinanceDay(env.DB, r.case_id, r.date, rows);
+    }
+    // 生データが無い日も、何度も探しに行かないよう印をつける
+    await env.DB.prepare(
+      `UPDATE ingests SET parser = ? WHERE case_id = ? AND mall = 'amazon' AND kind = 'settlement' AND period_start = ?`
+    ).bind(FIN_PARSER, r.case_id, r.date).run();
+    done++;
+  }
+  return done;
+}
+
 /**
  * 1案件1日ぶんを取り込む。
  * 案件ごとにセラーアカウントが別なので、取れる明細はすべてその案件のもの。
@@ -121,53 +197,7 @@ export async function ingestFinances(
   const r2Key = `raw/amazon/finances/${caseId}/${date}.json`;
   await env.FILES.put(r2Key, JSON.stringify(got.raw), { httpMetadata: { contentType: "application/json" } });
 
-  const map = await skuMap(env.DB, caseId);
-  const statements: D1PreparedStatement[] = [
-    env.DB.prepare("DELETE FROM fee_events WHERE case_id = ? AND mall = 'amazon' AND date = ?").bind(caseId, date),
-  ];
-
-  let kept = 0;
-  const unknown = new Set<string>();
-  for (const row of got.rows) {
-    const productId = row.sku ? map.get(row.sku) ?? null : null;
-    if (row.sku && !productId) unknown.add(row.sku);
-    statements.push(
-      env.DB
-        .prepare(
-          `INSERT INTO fee_events (id, case_id, mall, date, order_id, sku, product_id, event_type, kind, name, amount)
-           VALUES (?, ?, 'amazon', ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .bind(
-          // 取得期間はその日の日本時間 0時〜24時なので、計上日は必ずこの date になる。
-          // 行ごとの PostedDate ではなく date を入れることで、
-          // 取り直したときに必ず同じ行が消えるようにしている（生の日時は R2 に残している）
-          crypto.randomUUID(), caseId, date, row.orderId, row.sku,
-          productId, row.eventType, row.kind, row.name, row.amount
-        )
-    );
-    kept++;
-  }
-
-  // daily_sales の手数料実額と返品額を、入った明細から引き直す。
-  // 符号はここで反転させる（費用はマイナスで持っているため）
-  statements.push(
-    env.DB
-      .prepare(
-        `UPDATE daily_sales SET
-           fee_actual = (SELECT -COALESCE(SUM(f.amount), 0) FROM fee_events f
-                          WHERE f.case_id = daily_sales.case_id AND f.mall = daily_sales.mall
-                            AND f.date = daily_sales.date AND f.product_id IS daily_sales.product_id
-                            AND f.kind IN ('fee', 'promotion', 'tax_withheld')),
-           returns = (SELECT -COALESCE(SUM(f.amount), 0) FROM fee_events f
-                       WHERE f.case_id = daily_sales.case_id AND f.mall = daily_sales.mall
-                         AND f.date = daily_sales.date AND f.product_id IS daily_sales.product_id
-                         AND f.event_type = 'refund' AND f.kind = 'charge')
-         WHERE case_id = ? AND mall = 'amazon' AND date = ?`
-      )
-      .bind(caseId, date)
-  );
-
-  await env.DB.batch(statements);
+  const { kept, unknown } = await writeFinanceDay(env.DB, caseId, date, got.rows);
 
   const fees = got.rows.filter((r) => r.kind === "fee").reduce((n, r) => n + r.amount, 0);
   const notes: string[] = [];
@@ -180,8 +210,8 @@ export async function ingestFinances(
   const note = notes.length ? notes.join(" ／ ") : null;
 
   await env.DB.prepare(
-    `INSERT INTO ingests (id, case_id, mall, kind, period_start, period_end, rows, status, error, r2_key, source)
-     VALUES (?, ?, 'amazon', 'settlement', ?, ?, ?, 'ok', ?, ?, 'api')`
+    `INSERT INTO ingests (id, case_id, mall, kind, period_start, period_end, rows, status, error, r2_key, source, parser)
+     VALUES (?, ?, 'amazon', 'settlement', ?, ?, ?, 'ok', ?, ?, 'api', ${FIN_PARSER})`
   ).bind(crypto.randomUUID(), caseId, date, date, kept, note, r2Key).run();
 
   return {
