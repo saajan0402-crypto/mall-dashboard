@@ -36,7 +36,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.15.2";
+const APP_VERSION = "0.15.3";
 
 export interface Env {
   DB: D1Database;
@@ -842,6 +842,12 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
 /**
  * 楽天RPPのレポートが今朝届いたか。送り込みを使っている案件（直近14日に1度でも届いた案件）だけを見る
  */
+/** D1 の UTC 時刻（"YYYY-MM-DD HH:MM:SS"）を日本時間の「M/D HH:MM」にする */
+function jstStamp(utc: string): string {
+  const d = new Date(Date.parse(utc.replace(" ", "T") + "Z") + 9 * 3600 * 1000);
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+}
+
 async function checkRppPush(env: Env): Promise<void> {
   const { results } = await env.DB.prepare(
     `SELECT c.id, c.name,
@@ -854,7 +860,7 @@ async function checkRppPush(env: Env): Promise<void> {
   const todayStartUtc = new Date(Date.parse(`${todayJst()}T00:00:00+09:00`)).toISOString().slice(0, 19).replace("T", " ");
   for (const c of results) {
     if (c.last && c.last >= todayStartUtc) continue;
-    await postSlack(env, c.id, `:warning: 今朝の楽天RPPレポートがまだ届いていません（最後に届いたのは ${c.last ? c.last.slice(0, 16) + "（UTC）" : "—"}）。` +
+    await postSlack(env, c.id, `:warning: 今日の楽天RPPレポート（前日分）がまだ届いていません（最後に届いたのは ${c.last ? jstStamp(c.last) : "—"}）。` +
       `ダウンロードするプログラムが止まっていないか確認してください`).catch(() => null);
   }
 }
@@ -884,6 +890,12 @@ export default {
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     // 5分ごとの実行は、過去データの取り込みを進めるためだけのもの。
     // レポートの呼び出し制限が1分に1回なので、短い間隔で少しずつ進めるほうが早く終わる
+    // 楽天RPPのレポートは、楽天の仕様で前日分が翌日12時ごろに外のプログラムから届く。
+    // 14時になっても今日の分が届いていなければ知らせる（重い日次バッチは動かさない）
+    if (event.cron === "0 5 * * *") {
+      ctx.waitUntil(checkRppPush(env));
+      return;
+    }
     if (event.cron === "*/5 * * * *") {
       ctx.waitUntil(
         (async () => {
@@ -928,8 +940,6 @@ export default {
         if (event.cron === "0 21 * * *") await notifyLicenseExpiry(env);
         // 日次サマリは7時の実行で送る。6時の実行で依頼したレポート（セッション数など）が揃ってから
         if (event.cron === "0 22 * * *") await sendDailySummaries(env);
-        // 楽天RPPのレポートは毎朝4〜5時に外のプログラムから届く。7時になっても届いていなければ知らせる
-        if (event.cron === "0 22 * * *") await checkRppPush(env);
         // 過去データの取り込みは5分ごとの実行に任せている
         const rows = results.reduce((n, r) => n + (r.rows ?? 0), 0)
           + fin.reduce((n, r) => n + (r.rows ?? 0), 0);

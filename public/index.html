@@ -996,7 +996,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.15.2";
+  const UI_VERSION = "0.15.3";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const yen = (n) => (n == null ? "—" : "¥" + Number(n).toLocaleString("ja-JP"));
@@ -2402,7 +2402,7 @@
     if (!caseId) return;
     const g = await get(`/api/ingests?case_id=${encodeURIComponent(caseId)}`);
     const last = (g.ingests || []).find((x) => x.kind === "ads_push");
-    if (!last) { $("ads-push-status").textContent = "楽天RPPの自動送信：まだ届いたことがありません（毎朝4〜5時に届く設定にしたら、ここに最後に届いた時刻が出ます）"; return; }
+    if (!last) { $("ads-push-status").textContent = "楽天RPPの自動送信：まだ届いたことがありません（前日分が毎日12時ごろ届く設定にしたら、ここに最後に届いた時刻が出ます。14時になっても届かない日は Slack に通知します）"; return; }
     const t = new Date(String(last.created_at).replace(" ", "T") + "Z");
     const jstText = new Date(t.getTime() + 9 * 3600 * 1000).toISOString().slice(0, 16).replace("T", " ");
     $("ads-push-status").innerHTML = `楽天RPPの自動送信：最後に届いたのは <strong>${esc(jstText)}</strong>（${last.rows}行）

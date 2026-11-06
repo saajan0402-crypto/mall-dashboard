@@ -34,8 +34,12 @@ export async function dailySummaryText(env: SlackEnv, caseId: string): Promise<s
     L.push(`売上 *${yen(y.sales.total.revenue)}*（${y.sales.total.units}個）${chg}`);
     L.push(`粗利（広告費前・概算）${yen(y.pl.gross)}${y.pl.grossRate != null ? `（${y.pl.grossRate}%）` : ""}`);
   }
+  // 楽天RPPは前日分が昼ごろに届くので、朝の時点では入っていないことが多い。Amazonだけの数字だと分かるようにする
+  const rppPending = !y.ads.totals.some((a) => a.mall === "rakuten") && (await usesRppPush(env, caseId));
   if (y.ads.totals.length)
-    L.push(`広告費 ${yen(adCost)}／ROAS ${adCost ? Math.round((adSales / adCost) * 100) / 100 : "—"}（損益分岐 ${recent?.pl.breakEvenRoas ?? "—"}）／TACoS ${y.ads.tacos ?? "—"}%`);
+    L.push(`広告費 ${yen(adCost)}／ROAS ${adCost ? Math.round((adSales / adCost) * 100) / 100 : "—"}（損益分岐 ${recent?.pl.breakEvenRoas ?? "—"}）／TACoS ${y.ads.tacos ?? "—"}%` +
+      (rppPending ? "（Amazonのみ）" : ""));
+  if (rppPending) L.push("楽天RPPの前日分は昼ごろ届くため、この時点では入っていません");
   L.push(`今月累計：売上 ${yen(mtd.revenue)}／粗利 ${yen(mtd.gross)}／広告費 ${yen(mtdAds)}`);
 
   const inv = y.inventory;
@@ -55,6 +59,14 @@ export async function dailySummaryText(env: SlackEnv, caseId: string): Promise<s
     L.push(`:warning: データが止まっています：${stale.map((f) => `${f.label}（${f.latest ?? "未取り込み"}）`).join("、")}`);
   }
   return L.join("\n");
+}
+
+/** 直近14日に楽天RPPの自動送信が届いている案件か */
+async function usesRppPush(env: SlackEnv, caseId: string): Promise<boolean> {
+  const r = await env.DB.prepare(
+    `SELECT 1 AS x FROM ingests WHERE case_id = ? AND kind = 'ads_push' AND created_at >= datetime('now', '-14 days') LIMIT 1`
+  ).bind(caseId).first<{ x: number }>();
+  return !!r;
 }
 
 /** 対象の案件すべてに送る */
