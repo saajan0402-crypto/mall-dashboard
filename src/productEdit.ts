@@ -135,9 +135,9 @@ export async function saveProduct(
 
   const id = input.id ?? (await db.prepare("SELECT id FROM products WHERE case_id = ? AND sku = ?").bind(input.caseId, v.sku).first<{ id: string }>())!.id;
 
-  // 出品番号を消した・変えたときは古い紐づけを外す
+  // 出品番号を空欄にしたときは紐づけを外す（番号を変えたときの古い紐づけは importProducts 側で外している）
   for (const [mall, ext] of [["amazon", v.amazonSku], ["rakuten", v.rakutenId]] as const) {
-    await db.prepare("DELETE FROM product_listings WHERE product_id = ? AND mall = ? AND external_id IS NOT ?").bind(id, mall, ext).run();
+    if (!ext) await db.prepare("DELETE FROM product_listings WHERE product_id = ? AND mall = ?").bind(id, mall).run();
   }
   // 空欄にした上書き設定は消す（上の階層を継承に戻す）
   if (v.targetMargin === null) await db.prepare("DELETE FROM settings WHERE scope = 'listing' AND scope_id = ? AND key = 'target_margin'").bind(id).run();

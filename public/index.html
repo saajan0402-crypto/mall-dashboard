@@ -216,7 +216,7 @@
 <header>
   <div class="bar">
     <div id="busy" aria-hidden="true"><div class="bar"><i></i></div><div class="msg" role="status">読み込み中…<div class="track"><i></i></div></div></div>
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.19.2</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.19.3</span></div>
     <div class="picks">
       <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
       <div class="range-pick" id="range-pick" title="">
@@ -1047,7 +1047,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.19.2";
+  const UI_VERSION = "0.19.3";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);

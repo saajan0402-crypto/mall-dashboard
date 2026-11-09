@@ -150,6 +150,11 @@ export function validateProductRow(r: Row, line: number, today: string): ParsedP
   if (Number.isNaN(targetMargin)) msgs.push("目標粗利率が数値ではありません");
   const stockAlertDays = toInt(r.stockAlertDays ?? "");
   if (Number.isNaN(stockAlertDays)) msgs.push("在庫アラート日数が数値ではありません");
+  // Amazon SKU と ASIN が入れ替わっていないか（2026-11 に一度入れ替わって売上が数えられなくなった）
+  const looksAsin = (v: string | undefined) => /^B0[0-9A-Z]{8}$/.test((v ?? "").trim());
+  if (looksAsin(r.amazonSku) && !looksAsin(r.asin)) {
+    msgs.push("Amazon SKU に ASIN（B0〜）が入っているようです。Amazon SKU には出品者SKU、ASIN 列に B0〜 を入れてください");
+  }
   const rslFee = toInt(r.rslFee ?? "");
   if (Number.isNaN(rslFee)) msgs.push("楽天RSL物流費が数値ではありません");
   else if (rslFee != null && rslFee < 0) msgs.push("楽天RSL物流費はマイナスにできません");
@@ -315,6 +320,10 @@ export async function importProducts(
         )
         .bind(crypto.randomUUID(), productId, mall, externalId, asin, fulfillment)
         .run();
+      // 1商品につき各モール1つの出品番号にそろえる（古い番号の紐づけが残らないように）。
+      // 以前は古い番号が残り、画面の編集フォームが古い方を表示 → 保存で正しい方が消える、ということが起きた
+      await db.prepare("DELETE FROM product_listings WHERE product_id = ? AND mall = ? AND external_id <> ?")
+        .bind(productId, mall, externalId).run();
       counts.listings++;
     }
 
