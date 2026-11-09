@@ -216,7 +216,7 @@
 <header>
   <div class="bar">
     <div id="busy" aria-hidden="true"><div class="bar"><i></i></div><div class="msg" role="status">読み込み中…<div class="track"><i></i></div></div></div>
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.20.0</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.20.2</span></div>
     <div class="picks">
       <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
       <div class="range-pick" id="range-pick" title="">
@@ -341,7 +341,11 @@
       </div>
     </div>
     <div>
-      <h2>商品別<span class="hint">期間内・売上の多い順</span></h2>
+      <h2 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">商品別<span class="hint">期間内・売上の多い順</span>
+        <span class="seg theme-seg" id="prod-mall" role="group" aria-label="モール">
+          <button type="button" data-pm="all" aria-pressed="true">全体</button>
+          <button type="button" data-pm="amazon" aria-pressed="false">Amazon</button>
+          <button type="button" data-pm="rakuten" aria-pressed="false">楽天</button></span></h2>
       <div class="tablewrap"><table>
         <thead><tr><th>SKU</th><th>商品名</th><th class="r">販売数</th><th class="r">売上</th>
           <th class="r">粗利（広告費前）</th><th class="r">粗利率</th><th class="r">広告費</th></tr></thead>
@@ -1048,7 +1052,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.20.0";
+  const UI_VERSION = "0.20.2";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -1268,6 +1272,29 @@
       .map((c) => `${c.name} ${c.products}件`).join(" ／ "))
       + (manual ? `　<span class="tag warn">原価の手計算待ち ${manual}件</span>` : "");
   }
+
+  /* ---------- 商品別（全体／Amazon／楽天の切り替え） ---------- */
+  let dashProducts = [];
+  let prodMall = "all";
+  try { prodMall = localStorage.getItem("mall.prodMall") || "all"; } catch (e) { prodMall = "all"; }
+  function renderDashProducts() {
+    document.querySelectorAll("#prod-mall button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.pm === prodMall)));
+    const rows = (prodMall === "all" ? dashProducts.map((p) => ({ ...p }))
+      : dashProducts.filter((p) => p.byMall && p.byMall[prodMall]).map((p) => ({ ...p, ...p.byMall[prodMall] })))
+      .sort((a, b) => b.revenue - a.revenue).slice(0, 20);
+    $("dash-products").innerHTML = rows.map((p) => `<tr><td>${esc(p.sku)}</td><td>${esc(p.name)}</td>
+      <td class="r">${p.units}</td><td class="r">${yen(p.revenue)}</td>
+      <td class="r">${p.costManual ? `<span class="tag warn">要手計算</span>` : yen(p.gross)}</td>
+      <td class="r">${p.costManual ? "—" : pctS(p.grossRate)}</td><td class="r">${yen(p.adCost)}</td></tr>`).join("")
+      || emptyRow(7, prodMall === "all" ? "この期間の売上がありません。" : `この期間の${prodMall === "amazon" ? "Amazon" : "楽天"}の売上がありません。`);
+  }
+  $("prod-mall").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-pm]");
+    if (!b) return;
+    prodMall = b.dataset.pm;
+    try { localStorage.setItem("mall.prodMall", prodMall); } catch (err) { /* 保存できなくても動く */ }
+    renderDashProducts();
+  });
 
   /* ---------- 月次推移（ダッシュボード） ---------- */
   async function loadMonthly() {
@@ -3173,10 +3200,8 @@
     $("dash-winning").innerHTML = s.ads.winningTerms.map((w) => `<tr><td>${esc(w.term)}</td><td>${esc(ADTYPE_JA[w.adType] || w.adType)}</td>
       <td class="r">${w.roas}</td><td class="r">${w.orders}</td></tr>`).join("") || emptyRow(4, "該当なし");
 
-    $("dash-products").innerHTML = s.products.map((p) => `<tr><td>${esc(p.sku)}</td><td>${esc(p.name)}</td>
-      <td class="r">${p.units}</td><td class="r">${yen(p.revenue)}</td>
-      <td class="r">${p.costManual ? `<span class="tag warn">要手計算</span>` : yen(p.gross)}</td>
-      <td class="r">${p.costManual ? "—" : pctS(p.grossRate)}</td><td class="r">${yen(p.adCost)}</td></tr>`).join("") || emptyRow(7, "この期間の売上がありません。");
+    dashProducts = s.products;
+    renderDashProducts();
 
   }
 

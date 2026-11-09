@@ -42,7 +42,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.20.0";
+const APP_VERSION = "0.20.2";
 
 export interface Env {
   DB: D1Database;
@@ -548,7 +548,8 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const u = new URL(req.url);
     const caseId = u.searchParams.get("case_id");
     if (!caseId) return json({ error: "案件を指定してください" }, 400);
-    const s = await buildCaseSummary(env.DB, caseId, periodQuery(u));
+    // 画面はモール別に切り替えて見るので、商品は多めに返す（AI用のコピーは上位15件のまま）
+    const s = await buildCaseSummary(env.DB, caseId, periodQuery(u), { productLimit: 80 });
     if (!s) return json({ error: "案件が見つかりません" }, 404);
     return json(s);
   }

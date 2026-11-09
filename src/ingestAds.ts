@@ -36,7 +36,11 @@ async function listingMap(db: D1Database, caseId: string, mall: string): Promise
     )
     .bind(mall, caseId)
     .all<{ ext: string; product_id: string }>();
-  return new Map(results.map((r) => [r.ext, r.product_id]));
+  // 楽天で1つの商品管理番号に複数の商品（SKU ごとの別商品）があるときは、どれか1つに決められないので
+  // 商品を付けずに残す（商品ごとの広告費は adProducts.ts で売上の比率に按分する）
+  const count = new Map<string, Set<string>>();
+  for (const r of results) count.set(r.ext, (count.get(r.ext) ?? new Set()).add(r.product_id));
+  return new Map(results.filter((r) => count.get(r.ext)!.size === 1).map((r) => [r.ext, r.product_id]));
 }
 
 /** 1ファイルを取り込む。同じ日・同じ種類のものは入れ直すので、二重にならない */

@@ -13,6 +13,7 @@ import { applyTodoStatus, doneInMonth, isoWeek, textKey, type TodoStatus, type D
 import { notifyEnabled } from "./cases";
 import { amazonFinance, finCost, coveredSql, feeBasis } from "./amazonFin";
 import { buildAllocation, type Allocation } from "./adAllocation";
+import { productAdTotals } from "./adProducts";
 import { latestCompleteMonth } from "./mallCharges";
 import { buildAdAdvice, type BidAdvice, type NegativeAdvice, type HarvestAdvice } from "./adAdvice";
 
@@ -236,7 +237,9 @@ export interface CaseSummary {
     topHarvest: HarvestAdvice[];
   };
   products: Array<{ sku: string; name: string; units: number; revenue: number; gross: number | null;
-    grossRate: number | null; adCost: number | null; costManual: boolean }>;
+    grossRate: number | null; adCost: number | null; costManual: boolean;
+    /** モール別の内訳（ダッシュボードの「Amazon／楽天」切り替え用） */
+    byMall: Record<string, { units: number; revenue: number; gross: number | null; grossRate: number | null; adCost: number | null }> }>;
   inventory: InventoryRow[];
   freshness: Array<{ label: string; latest: string | null; daysAgo: number | null }>;
   warnings: string[];
@@ -492,32 +495,40 @@ export async function buildCaseSummary(
 
   /* 商品別（期間内） */
   const prodBasis = await feeBasis(db);
-  const { results: prod } = await db.prepare(
-    `SELECT p.id, p.sku, p.name, SUM(s.units) AS units, SUM(s.revenue) AS revenue,
+  const { results: prodRows } = await db.prepare(
+    `SELECT p.id, p.sku, p.name, s.mall, SUM(s.units) AS units, SUM(s.revenue) AS revenue,
             SUM(CASE WHEN ${coveredSql(prodBasis)} THEN 0 ELSE COALESCE(s.fee_actual, s.fee_est, 0) + COALESCE(s.returns, 0) + COALESCE(s.discounts, 0) END) AS fees,
             (SELECT unit_cost FROM cost_history h WHERE h.product_id = p.id
               ORDER BY h.effective_from DESC LIMIT 1) AS unit_cost,
             (SELECT needs_manual FROM cost_history h WHERE h.product_id = p.id
-              ORDER BY h.effective_from DESC LIMIT 1) AS manual,
-            (SELECT SUM(cost) FROM daily_ads a WHERE a.product_id = p.id AND a.level = 'product'
-              AND a.date BETWEEN ? AND ?) AS ad_cost
+              ORDER BY h.effective_from DESC LIMIT 1) AS manual
        FROM daily_sales s JOIN products p ON p.id = s.product_id
       WHERE s.case_id = ? AND s.date BETWEEN ? AND ?
-      GROUP BY p.id ORDER BY SUM(s.revenue) DESC LIMIT ?`
-  ).bind(from, to, caseId, from, to, Math.min(200, opts.productLimit ?? 15)).all<Record<string, string | number | null>>();
+      GROUP BY p.id, s.mall`
+  ).bind(caseId, from, to).all<Record<string, string | number | null>>();
+  // 商品ごとの広告費。楽天RPPの商品ページに SKU ごとの別商品があるときは、楽天の売上の比率で按分する
+  const prodAds = await productAdTotals(db, caseId, from, to);
 
   // 商品別も、Amazon の入金明細は計上日の合計で引く（手数料・返品・値引き・ポイント）
   const finP = await amazonFinance(db, caseId, from, to, prodBasis);
-  const products = prod.map((p) => {
-    const rev = n(p.revenue);
-    const gross = p.unit_cost == null ? null : rev - n(p.unit_cost) * n(p.units) - n(p.fees) - finCost(finP.byProduct.get(String(p.id)));
-    return {
-      sku: String(p.sku), name: String(p.name), units: n(p.units), revenue: rev,
-      gross, grossRate: gross == null || !rev ? null : round1((gross / rev) * 100),
-      adCost: p.ad_cost == null ? null : n(p.ad_cost),
-      costManual: n(p.manual) === 1,
-    };
-  });
+  type PRow = CaseSummary["products"][number];
+  const byId = new Map<string, PRow>();
+  for (const r of prodRows) {
+    const id = String(r.id), mall = String(r.mall);
+    const rev = n(r.revenue), units = n(r.units);
+    const fin = mall === "amazon" ? finCost(finP.byProduct.get(id)) : 0;
+    const gross = r.unit_cost == null ? null : rev - n(r.unit_cost) * units - n(r.fees) - fin;
+    const ad = prodAds.get(id)?.byMall?.[mall];
+    const p = byId.get(id) ?? { sku: String(r.sku), name: String(r.name), units: 0, revenue: 0, gross: r.unit_cost == null ? null : 0,
+      grossRate: null, adCost: prodAds.has(id) ? prodAds.get(id)!.cost : null, costManual: n(r.manual) === 1, byMall: {} };
+    p.units += units; p.revenue += rev;
+    if (p.gross != null && gross != null) p.gross += gross;
+    p.byMall[mall] = { units, revenue: rev, gross, grossRate: gross == null || !rev ? null : round1((gross / rev) * 100), adCost: ad ? ad.cost : null };
+    byId.set(id, p);
+  }
+  const products = [...byId.values()].map((p) => ({ ...p, grossRate: p.gross == null || !p.revenue ? null : round1((p.gross / p.revenue) * 100) }))
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, Math.min(200, opts.productLimit ?? 15));
 
   /* 在庫（期間に関係なく最新） */
   const inventory = await inventoryStatus(db, caseId);

@@ -15,6 +15,7 @@
  */
 
 import { amazonFinance, finCost, coveredSql, feeBasis } from "./amazonFin";
+import { rakutenPages, rakutenRevenueByProduct, shares } from "./adProducts";
 import { periodSummary } from "./caseSummary";
 
 const n = (v: unknown) => Number(v ?? 0);
@@ -150,9 +151,29 @@ export async function buildAdAdvice(
   const productFor = (mall: string, campaign: string, adGroup: string, direct: string | null) =>
     direct ?? (mall === "amazon" ? groupProduct.get(`${campaign}\u0000${adGroup}`) ?? campaignProduct.get(campaign) ?? null : null);
 
+  // 楽天RPP：1つの商品ページ（商品管理番号）に SKU ごとの別商品があるときは、
+  // 楽天の売上の比率で重みをつけた粗利率で目標を決める（1つの商品の粗利率だけで決めない）
+  const pages = await rakutenPages(db, caseId);
+  const rakRevenue = await rakutenRevenueByProduct(db, caseId, from, to);
+  const pageTarget = (num: string | null): Target | null => {
+    const pids = num ? pages.get(num) : undefined;
+    if (!pids || pids.length < 2) return null;
+    let gm = 0, w = 0, pol: Policy = "profit";
+    for (const [pid, k] of shares(pids, rakRevenue)) {
+      const p = products.get(pid);
+      if (p?.gm != null) { gm += p.gm * k; w += k; if (k >= 0.5) pol = p.policy; }
+    }
+    if (!w) return null;
+    gm /= w;
+    let acos = pol === "share" ? gm : pol === "nurture" ? gm * 1.3 : gm - tm;
+    const squeezed = pol === "profit" && acos < gm * 0.3;
+    if (squeezed) acos = gm * 0.3;
+    return { gm, gmFrom: "商品", policy: pol, acos, roas: round2(1 / acos), squeezed };
+  };
+
   /* ───── 入札の見直し（キーワード・ターゲット別） ───── */
   const { results: kwRows } = await db.prepare(
-    `SELECT mall, ad_type, campaign, ad_group, keyword, match_type, MAX(product_id) AS product_id,
+    `SELECT mall, ad_type, campaign, ad_group, keyword, match_type, MAX(product_id) AS product_id, MAX(external_id) AS external_id,
             SUM(clicks) AS clicks, SUM(cost) AS cost, SUM(orders) AS orders, SUM(sales) AS sales,
             (SELECT bid FROM daily_ads b WHERE b.case_id = a.case_id AND b.mall = a.mall AND b.level = 'keyword'
                AND b.campaign = a.campaign AND b.ad_group = a.ad_group AND b.keyword = a.keyword
@@ -174,9 +195,10 @@ export async function buildAdAdvice(
     if (/exact/i.test(matchType)) exactKeywords.add(`${mall}\u0000${norm(keyword)}`);
     const clicks = n(r.clicks), cost = n(r.cost), orders = n(r.orders), sales = n(r.sales);
     if (cost <= 0) continue;
-    const pid = productFor(mall, campaign, adGroup, r.product_id == null ? null : String(r.product_id));
+    const shared = mall === "rakuten" ? pageTarget(r.external_id == null ? null : String(r.external_id)) : null;
+    const pid = shared ? null : productFor(mall, campaign, adGroup, r.product_id == null ? null : String(r.product_id));
     const prod = pid ? products.get(pid) : undefined;
-    const target = targetOf(mall, pid);
+    const target = shared ?? targetOf(mall, pid);
     const cpc = cost / clicks;
     const currentBid = r.bid == null ? null : n(r.bid);
     const base = currentBid ?? cpc;
