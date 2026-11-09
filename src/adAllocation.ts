@@ -140,13 +140,16 @@ export interface MonthRow {
 export async function monthlyTrend(db: D1Database, caseId: string, months = 12): Promise<MonthRow[]> {
   const now = new Date(Date.now() + 9 * 3600000);
   const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
-  const out: MonthRow[] = [];
+  const spans: Array<{ month: string; from: string; to: string; last: string }> = [];
   for (let i = months - 1; i >= 0; i--) {
     const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
     const month = d.toISOString().slice(0, 7);
     const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
     const from = `${month}-01`, to = last < yesterday ? last : yesterday;
-    if (from > to) continue;
+    if (from <= to) spans.push({ month, from, to, last });
+  }
+  // 月ごとの計算は互いに関係ないので並べて走らせる（待ち時間を重ねる）
+  const rows = await Promise.all(spans.map(async ({ month, from, to, last }) => {
     const [pl, ads] = await Promise.all([periodSummary(db, caseId, from, to), adTotals(db, caseId, from, to)]);
     const byMall: MonthRow["byMall"] = {};
     for (const m of pl.byMall) byMall[m.mall] = { revenue: m.revenue, gross: m.gross, adCost: 0, adSales: 0 };
@@ -155,9 +158,9 @@ export async function monthlyTrend(db: D1Database, caseId: string, months = 12):
       byMall[a.mall].adCost = a.cost; byMall[a.mall].adSales = a.sales;
     }
     const adCost = ads.reduce((n, a) => n + a.cost, 0), adSales = ads.reduce((n, a) => n + a.sales, 0);
-    if (!pl.revenue && !adCost) continue;      // データの無い月は出さない
-    out.push({ month, partial: to !== last, revenue: pl.revenue, gross: pl.gross, adCost, adSales,
-      profitAfterAds: pl.gross - adCost, byMall });
-  }
-  return out;
+    if (!pl.revenue && !adCost) return null;      // データの無い月は出さない
+    return { month, partial: to !== last, revenue: pl.revenue, gross: pl.gross, adCost, adSales,
+      profitAfterAds: pl.gross - adCost, byMall } as MonthRow;
+  }));
+  return rows.filter((r): r is MonthRow => r !== null);
 }
