@@ -12,7 +12,7 @@ import { recalcFeeEst } from "./settings";
 export const SHEET_COLUMNS: Array<[string, keyof Row | string]> = [
   ["案件", "caseName"], ["自社SKU", "sku"], ["商品名", "name"], ["JANコード", "jan"],
   ["Amazon SKU", "amazonSku"], ["ASIN", "asin"], ["Amazon発送方法", "amazonFulfillment"],
-  ["楽天商品管理番号", "rakutenId"], ["楽天発送方法", "rakutenFulfillment"],
+  ["楽天商品管理番号", "rakutenId"], ["楽天SKU管理番号", "rakutenSku"], ["楽天発送方法", "rakutenFulfillment"],
   ["仕入原価", "unitCost"], ["原価の適用開始日", "effectiveFrom"], ["自社発送の送料", "shippingCost"], ["梱包資材費", "packagingCost"],
   ["目標粗利率", "targetMargin"], ["広告方針", "adPolicy"], ["在庫アラート日数", "stockAlertDays"],
   ["楽天RSL物流費（暫定）", "rslFee"], ["状態", "status"],
@@ -26,7 +26,7 @@ const jst = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 
 interface ProductRecord {
   id: string; caseId: string; caseName: string; sku: string; name: string; jan: string | null; adPolicy: string; status: string;
   amazonSku: string | null; asin: string | null; amazonFulfillment: string | null;
-  rakutenId: string | null; rakutenFulfillment: string | null;
+  rakutenId: string | null; rakutenSku: string | null; rakutenFulfillment: string | null;
   cost: { effectiveFrom: string; unitCost: number | null; shippingCost: number; packagingCost: number; manual: boolean } | null;
   costHistory: Array<{ effectiveFrom: string; unitCost: number | null; shippingCost: number; packagingCost: number; manual: boolean }>;
   targetMargin: number | null; stockAlertDays: number | null; rslFee: number | null;
@@ -63,7 +63,7 @@ export async function readProducts(db: D1Database, opts: { caseId?: string | nul
       id, caseId: String(p.case_id), caseName: String(p.case_name), sku: String(p.sku), name: String(p.name),
       jan: p.jan, adPolicy: String(p.ad_policy ?? "profit"), status: String(p.status),
       amazonSku: a?.external_id ?? null, asin: a?.asin ?? null, amazonFulfillment: a?.fulfillment ?? null,
-      rakutenId: r?.external_id ?? null, rakutenFulfillment: r?.fulfillment ?? null,
+      rakutenId: r?.external_id ?? null, rakutenSku: r?.sku_id || null, rakutenFulfillment: r?.fulfillment ?? null,
       cost: hist[0] ?? null, costHistory: hist, targetMargin: o("target_margin"), stockAlertDays: o("stock_alert_days"), rslFee: o("rsl_fee"),
     };
   });
@@ -78,7 +78,7 @@ export async function exportSheet(db: D1Database, caseId: string | null): Promis
     const v: Record<string, unknown> = {
       caseName: p.caseName, sku: p.sku, name: p.name, jan: p.jan,
       amazonSku: p.amazonSku, asin: p.asin, amazonFulfillment: p.amazonFulfillment ? FUL_JA[p.amazonFulfillment] : "",
-      rakutenId: p.rakutenId, rakutenFulfillment: p.rakutenFulfillment ? FUL_JA[p.rakutenFulfillment] : "",
+      rakutenId: p.rakutenId, rakutenSku: p.rakutenSku ?? "", rakutenFulfillment: p.rakutenFulfillment ? FUL_JA[p.rakutenFulfillment] : "",
       // 要手計算は取り込みと同じ「?」で書き出す（0 にすると粗利の計算に入ってしまう）
       unitCost: p.cost ? (p.cost.manual ? "?" : p.cost.unitCost) : "",
       effectiveFrom: p.cost?.effectiveFrom ?? "", shippingCost: p.cost?.shippingCost || "", packagingCost: p.cost?.packagingCost || "",
@@ -110,13 +110,14 @@ export async function saveProduct(
   const dup = await db.prepare("SELECT id FROM products WHERE case_id = ? AND sku = ?").bind(input.caseId, v.sku).first<{ id: string }>();
   if (dup && dup.id !== input.id) return { id: "", errors: [`自社SKU「${v.sku}」はこの案件にすでにあります`] };
   // 出品番号が他の商品に使われていないか（取り込みのほうは付け替えるが、画面からは気づけるよう止める）
-  for (const [mall, ext] of [["amazon", v.amazonSku], ["rakuten", v.rakutenId]] as const) {
+  // 楽天は「商品管理番号＋SKU管理番号」の組で見る（同じ商品ページの別SKUは別の商品にできる）
+  for (const [mall, ext, sku] of [["amazon", v.amazonSku, ""], ["rakuten", v.rakutenId, v.rakutenSku ?? ""]] as const) {
     if (!ext) continue;
     const used = await db.prepare(
       `SELECT p.sku, c.name AS case_name FROM product_listings l JOIN products p ON p.id = l.product_id JOIN cases c ON c.id = p.case_id
-        WHERE l.mall = ? AND l.external_id = ? AND l.product_id <> ?`
-    ).bind(mall, ext, input.id ?? "").first<{ sku: string; case_name: string }>();
-    if (used) return { id: "", errors: [`${mall === "amazon" ? "Amazon SKU" : "楽天商品管理番号"}「${ext}」は ${used.case_name} の ${used.sku} で使われています`] };
+        WHERE l.mall = ? AND l.external_id = ? AND l.sku_id = ? AND l.product_id <> ?`
+    ).bind(mall, ext, sku, input.id ?? "").first<{ sku: string; case_name: string }>();
+    if (used) return { id: "", errors: [`${mall === "amazon" ? "Amazon SKU" : "楽天商品管理番号"}「${ext}${sku ? ` / ${sku}` : ""}」は ${used.case_name} の ${used.sku} で使われています`] };
   }
 
   let before: ProductRecord | undefined;

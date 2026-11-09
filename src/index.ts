@@ -42,7 +42,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.19.3";
+const APP_VERSION = "0.20.0";
 
 export interface Env {
   DB: D1Database;
@@ -172,6 +172,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
              MAX(CASE WHEN l.mall = 'amazon' THEN l.asin END)        AS asin,
              MAX(CASE WHEN l.mall = 'amazon' THEN l.fulfillment END) AS amazon_fulfillment,
              MAX(CASE WHEN l.mall = 'rakuten' THEN l.external_id END) AS rakuten_id,
+             MAX(CASE WHEN l.mall = 'rakuten' THEN NULLIF(l.sku_id, '') END) AS rakuten_sku,
              MAX(CASE WHEN l.mall = 'rakuten' THEN l.fulfillment END) AS rakuten_fulfillment,
              MAX(CASE WHEN l.mall = 'rakuten' THEN l.price END)        AS rakuten_price,
              MAX(CASE WHEN l.mall = 'rakuten' THEN l.check_status END) AS rakuten_check,

@@ -33,18 +33,45 @@ async function credsOf(env: RakutenEnv, caseId: string): Promise<RmsCreds | null
   return { service_secret: c.service_secret, license_key: c.license_key };
 }
 
-/** 商品管理番号 → 商品ID。案件ごとに店舗が別なので、その案件の分だけ読む */
-async function manageNumberMap(db: D1Database, caseId: string): Promise<Map<string, string>> {
+/**
+ * 楽天の出品 → 商品ID の引き当て。案件ごとに店舗が別なので、その案件の分だけ読む。
+ * 1つの商品管理番号（商品ページ）に複数の SKU があり、SKU ごとに別の商品になっていることがあるので
+ *   1. 商品管理番号＋SKU管理番号 が一致する商品
+ *   2. 商品管理番号だけで登録された商品（SKU管理番号が空＝商品ページ単位）
+ *   3. SKU管理番号だけが一致する商品（商品管理番号の書き間違いの救済）
+ * の順に探す
+ */
+interface RakutenResolver {
+  find(num: string, sku: string | null): string | null;
+  /** SKU単位で登録されている商品管理番号か（在庫を SKU ごとに分けるかどうか） */
+  skuLevel(num: string): boolean;
+}
+export async function rakutenResolver(db: D1Database, caseId: string): Promise<RakutenResolver> {
   const { results } = await db
     .prepare(
-      `SELECT l.external_id AS num, l.product_id FROM product_listings l
+      `SELECT l.external_id AS num, l.sku_id AS sku, l.product_id FROM product_listings l
          JOIN products p ON p.id = l.product_id
         WHERE l.mall = 'rakuten' AND p.case_id = ?`
     )
     .bind(caseId)
-    .all<{ num: string; product_id: string }>();
-  return new Map(results.map((r) => [r.num, r.product_id]));
+    .all<{ num: string; sku: string; product_id: string }>();
+  const both = new Map<string, string>(), page = new Map<string, string>(), bySku = new Map<string, string>();
+  const skuNums = new Set<string>();
+  for (const r of results) {
+    if (r.sku) { both.set(`${r.num}\u0000${r.sku}`, r.product_id); bySku.set(r.sku, r.product_id); skuNums.add(r.num); }
+    else page.set(r.num, r.product_id);
+  }
+  return {
+    find: (num, sku) => (sku ? both.get(`${num}\u0000${sku}`) : undefined) ?? page.get(num) ?? (sku ? bySku.get(sku) : undefined) ?? null,
+    skuLevel: (num) => skuNums.has(num),
+  };
 }
+
+/** 注文明細の SKU管理番号（v7 の SkuModelList）。無ければ null */
+export const skuOf = (it: RItem): string | null => {
+  const m = (it.SkuModelList ?? [])[0];
+  return (m?.variantId ?? m?.merchantDefinedSkuId ?? "").trim() || null;
+};
 
 /* ───────── 売上 ───────── */
 
@@ -54,6 +81,8 @@ interface RItem {
   itemName?: string;
   units?: number;
   price?: number;
+  /** SKU の情報（version 7）。variantId が RMS の「SKU管理番号」 */
+  SkuModelList?: Array<{ variantId?: string; merchantDefinedSkuId?: string; skuInfo?: string }>;
 }
 interface RPackage { ItemModelList?: RItem[] }
 interface RCoupon { couponTotalPrice?: number }
@@ -111,7 +140,7 @@ export async function ingestRakutenSales(
   await env.FILES.put(r2Key, JSON.stringify(orders), { httpMetadata: { contentType: "application/json" } });
 
   // 3. 日 × 商品にまとめる
-  const map = await manageNumberMap(env.DB, caseId);
+  const resolver = await rakutenResolver(env.DB, caseId);
   const agg = new Map<string, { date: string; productId: string; units: number; revenue: number; discounts: number }>();
   const unknown = new Set<string>();
   const dates = new Set<string>();
@@ -126,10 +155,11 @@ export async function ingestRakutenSales(
     for (const p of o.PackageModelList ?? []) {
       for (const it of p.ItemModelList ?? []) {
         const num = (it.manageNumber ?? it.itemNumber ?? "").trim();
+        const sku = skuOf(it);
         const units = Math.round(Number(it.units ?? 0));
         const revenue = Math.round(Number(it.price ?? 0)) * units;
-        const productId = num ? map.get(num) ?? null : null;
-        if (num && !productId) unknown.add(num);
+        const productId = num ? resolver.find(num, sku) : null;
+        if (num && !productId) unknown.add(sku ? `${num}（SKU ${sku}）` : num);
         items.push({ productId, units, revenue });
       }
     }
@@ -200,13 +230,14 @@ export async function ingestRakutenInventory(env: RakutenEnv, caseId: string): P
   }
   const list = ((r.body as { inventories?: RInventory[] }).inventories ?? []);
 
-  const map = await manageNumberMap(env.DB, caseId);
+  const resolver = await rakutenResolver(env.DB, caseId);
   const byProduct = new Map<string, number>();
   const unknown = new Set<string>();
   for (const inv of list) {
     const num = (inv.manageNumber ?? "").trim();
     if (!num) continue;
-    const productId = map.get(num);
+    // SKU単位で登録された商品はその SKU の在庫だけ、商品ページ単位の商品は全 SKU の合計
+    const productId = resolver.find(num, resolver.skuLevel(num) ? (inv.variantId ?? "").trim() || null : null);
     if (!productId) {
       if ((inv.quantity ?? 0) > 0) unknown.add(num);
       continue;

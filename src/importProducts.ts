@@ -31,6 +31,8 @@ export interface ParsedProduct {
   asin: string | null;
   amazonFulfillment: string | null;
   rakutenId: string | null;
+  /** 楽天の SKU管理番号。1つの商品ページに複数の SKU（別の商品）があるときに入れる。空＝商品ページ単位 */
+  rakutenSku: string | null;
   rakutenFulfillment: string | null;
   unitCost: number | null;
   /** 買い方によって原価が変わるので、担当者が手で計算して入れる */
@@ -65,6 +67,8 @@ const HEADER_MAP: Record<string, string> = {
   asin: "asin",
   "amazon発送方法": "amazonFulfillment",
   楽天商品管理番号: "rakutenId",
+  楽天sku管理番号: "rakutenSku",
+  sku管理番号: "rakutenSku",
   "楽天発送方法": "rakutenFulfillment",
   仕入原価: "unitCost",
   原価の適用開始日: "effectiveFrom",
@@ -155,6 +159,7 @@ export function validateProductRow(r: Row, line: number, today: string): ParsedP
   if (looksAsin(r.amazonSku) && !looksAsin(r.asin)) {
     msgs.push("Amazon SKU に ASIN（B0〜）が入っているようです。Amazon SKU には出品者SKU、ASIN 列に B0〜 を入れてください");
   }
+  if (r.rakutenSku && !r.rakutenId) msgs.push("楽天SKU管理番号を入れるときは、楽天商品管理番号も入れてください");
   const rslFee = toInt(r.rslFee ?? "");
   if (Number.isNaN(rslFee)) msgs.push("楽天RSL物流費が数値ではありません");
   else if (rslFee != null && rslFee < 0) msgs.push("楽天RSL物流費はマイナスにできません");
@@ -189,6 +194,7 @@ export function validateProductRow(r: Row, line: number, today: string): ParsedP
     asin: r.asin || null,
     amazonFulfillment,
     rakutenId: r.rakutenId || null,
+    rakutenSku: (r.rakutenSku ?? "").trim() || null,
     rakutenFulfillment,
     unitCost,
     costManual,
@@ -305,25 +311,26 @@ export async function importProducts(
       counts.products++;
     }
 
-    const listings: Array<[string, string | null, string | null, string | null]> = [
-      ["amazon", r.amazonSku, r.asin, r.amazonFulfillment],
-      ["rakuten", r.rakutenId, null, r.rakutenFulfillment],
+    // 楽天は「商品管理番号＋SKU管理番号」の組で1つの出品。SKU管理番号が空なら商品ページ単位
+    const listings: Array<[string, string | null, string, string | null, string | null]> = [
+      ["amazon", r.amazonSku, "", r.asin, r.amazonFulfillment],
+      ["rakuten", r.rakutenId, r.rakutenSku ?? "", null, r.rakutenFulfillment],
     ];
-    for (const [mall, externalId, asin, fulfillment] of listings) {
+    for (const [mall, externalId, skuId, asin, fulfillment] of listings) {
       if (!externalId) continue;
       await db
         .prepare(
-          `INSERT INTO product_listings (id, product_id, mall, external_id, asin, fulfillment)
-           VALUES (?,?,?,?,?,?)
-           ON CONFLICT(mall, external_id)
+          `INSERT INTO product_listings (id, product_id, mall, external_id, sku_id, asin, fulfillment)
+           VALUES (?,?,?,?,?,?,?)
+           ON CONFLICT(mall, external_id, sku_id)
            DO UPDATE SET product_id = excluded.product_id, asin = excluded.asin, fulfillment = excluded.fulfillment`
         )
-        .bind(crypto.randomUUID(), productId, mall, externalId, asin, fulfillment)
+        .bind(crypto.randomUUID(), productId, mall, externalId, skuId, asin, fulfillment)
         .run();
-      // 1商品につき各モール1つの出品番号にそろえる（古い番号の紐づけが残らないように）。
+      // 1商品につき各モール1つの出品にそろえる（古い番号の紐づけが残らないように）。
       // 以前は古い番号が残り、画面の編集フォームが古い方を表示 → 保存で正しい方が消える、ということが起きた
-      await db.prepare("DELETE FROM product_listings WHERE product_id = ? AND mall = ? AND external_id <> ?")
-        .bind(productId, mall, externalId).run();
+      await db.prepare("DELETE FROM product_listings WHERE product_id = ? AND mall = ? AND NOT (external_id = ? AND sku_id = ?)")
+        .bind(productId, mall, externalId, skuId).run();
       counts.listings++;
     }
 
