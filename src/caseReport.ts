@@ -76,8 +76,18 @@ export function renderCaseMarkdown(s: CaseSummary, opts: { url?: string } = {}):
   const adCost = s.ads.totals.reduce((t, a) => t + a.cost, 0);
   L.push(`- 売上：${yen(sl.total.revenue)}（${num(sl.total.units)}個・1日平均 ${yen(sl.perDay)}）／直前の期間 ${yen(sl.prev.revenue)}／前期間比 ${pct(sl.changeRate)}`);
   L.push(`- 粗利（広告費前）：${yen(s.pl.gross)}／粗利率 ${pct(s.pl.grossRate)}`);
-  L.push(`- 広告費：${yen(adCost)}／広告費を引いた利益 ${yen(s.ads.profitAfterAds)}／TACoS（広告費 ÷ 総売上）${pct(s.ads.tacos)}`);
   const adSales = s.ads.totals.reduce((t, a) => t + a.sales, 0);
+  const ext = s.ads.external?.total ?? 0;
+  L.push(`- モールの広告費：${yen(adCost)}／ROAS ${adCost ? Math.round((adSales / adCost) * 100) / 100 : "—"}／TACoS（広告費 ÷ 総売上）${pct(s.ads.tacos)}`);
+  L.push(`- 外部広告費（SNS等・税別・月額を日割り）：${yen(ext)}（ROAS・TACoS には含めていない）`);
+  L.push(`- 広告費を引いた利益（粗利 − モールの広告費 − 外部広告費）：${yen(s.ads.profitAfterAds)}`);
+  const rp = s.repeat;
+  if (rp?.rakuten || rp?.amazon) {
+    L.push(`- リピート率（直近13か月に買った人のうち、別の日に2回以上買った人の割合）：${[
+      rp.rakuten ? `楽天 ${pct(rp.rakuten.rate)}（${rp.rakuten.from}〜${rp.rakuten.to}・${num(rp.rakuten.customers)}人中 ${num(rp.rakuten.repeaters)}人${rp.rakuten.short ? `。注文の履歴が ${rp.rakuten.historyFrom} からしか無いので低めに出ている` : ""}）` : "",
+      rp.amazon ? `Amazon ${pct(rp.amazon.rate)}（AMC・${rp.amazon.from}〜${rp.amazon.to}・${num(rp.amazon.customers)}人中 ${num(rp.amazon.repeaters)}人）` : "",
+    ].filter(Boolean).join("／")}`);
+  }
   L.push(`- 広告経由の売上：${yen(adSales)}（総売上の ${sl.total.revenue ? Math.round((adSales / sl.total.revenue) * 1000) / 10 : "—"}%。帰属期間がモールで違うので目安）`);
   L.push("");
 

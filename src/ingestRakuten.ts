@@ -8,6 +8,7 @@
  * なので楽天の手数料は、案件ごとの料率設定からの概算になる。
  */
 
+import { writeRakutenCustomers } from "./repeat";
 import { readCreds, type ConnEnv } from "./connections";
 import { rms, searchOrders, errorMessage, type RmsCreds } from "./rakuten";
 
@@ -213,11 +214,17 @@ export async function ingestRakutenSales(
   if (unknown.size) notes.push(`商品マスタに無い商品管理番号が ${unknown.size} 件：${[...unknown].slice(0, 10).join(", ")}`);
   // クーポンの内訳を残す（店舗負担だけを値引きに数えていることを、連携ステータスで確かめられるように）
   if (couponShop || couponOther) notes.push(`クーポン：店舗負担 ${couponShop.toLocaleString("ja-JP")}円（値引きに計上）／楽天・メーカー負担 ${couponOther.toLocaleString("ja-JP")}円（計上しない）`);
+  // リピート率のための購入者の印（個人情報は保存しない。repeat.ts）
+  // 失敗したとき（D1 の更新前など）は parser を 1 のままにして、あとで R2 の生データから作り直す
+  let custParser = 2;
+  const cust = await writeRakutenCustomers(env, caseId, from, to, orders)
+    .catch((e) => { custParser = 1; return { note: `リピート判定は後で行います（${String(e).slice(0, 60)}）` }; });
+  if (cust.note) notes.push(cust.note);
   const note = notes.length ? notes.join(" ／ ") : null;
   await env.DB.prepare(
-    `INSERT INTO ingests (id, case_id, mall, kind, period_start, period_end, rows, status, error, r2_key, source)
-     VALUES (?, ?, 'rakuten', 'orders', ?, ?, ?, 'ok', ?, ?, 'api')`
-  ).bind(crypto.randomUUID(), caseId, from, to, agg.size, note, r2Key).run();
+    `INSERT INTO ingests (id, case_id, mall, kind, period_start, period_end, rows, status, error, r2_key, source, parser)
+     VALUES (?, ?, 'rakuten', 'orders', ?, ?, ?, 'ok', ?, ?, 'api', ?)`
+  ).bind(crypto.randomUUID(), caseId, from, to, agg.size, note, r2Key, custParser).run();
 
   return {
     caseId, kind: "sales", status: "done", rows: agg.size, unknown: [...unknown],

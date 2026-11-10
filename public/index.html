@@ -238,6 +238,10 @@
   .kpi .k{font-size:12px;color:var(--muted)}
   .kpi .v{font-size:22px;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
   .kpi .s{font-size:12px;color:var(--ink-2);margin-top:2px}
+  .kpi .k .kpi-btn{float:right;font:inherit;font-size:11.5px;padding:1px 9px;border-radius:999px;cursor:pointer;
+    border:1px solid var(--line-strong);background:var(--surface-2);color:var(--accent)}
+  .kpi .k .kpi-btn:hover{border-color:var(--accent)}
+  .ext-in{width:150px;font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface);color:var(--ink);text-align:right;font-variant-numeric:tabular-nums}
   .up{color:var(--ok)} .down{color:var(--risk)}
   .todo{display:grid;gap:0}
   .todo .t{display:grid;grid-template-columns:auto auto 1fr auto;gap:10px;align-items:baseline;
@@ -1146,13 +1150,28 @@
     </div>
   </div>
 </div>
+<div id="ext-dlg" class="guide hidden" role="dialog" aria-modal="true" aria-labelledby="ext-title">
+  <div class="guide-box">
+    <div class="guide-kicker" id="ext-case"></div>
+    <h3 id="ext-title">外部広告費（税別・月ごと）</h3>
+    <p class="guide-lead">SNS広告・インフルエンサーなど、モールの外の広告費の<strong>月の合計を税別で</strong>入れてください。
+      期間の集計では日割りにします（例：30日の月に30万円 → 1日1万円。今月は昨日までの日数ぶん）。空欄にして保存するとその月は消えます。</p>
+    <p class="note" style="margin-bottom:8px">「広告費を引いた利益」から引きます。ROAS・ACoS・TACoS には入れません。</p>
+    <div class="tablewrap" style="max-height:46vh;overflow:auto"><table><thead><tr><th>月</th><th>金額（税別・円）</th><th>最終更新</th></tr></thead><tbody id="ext-rows"></tbody></table></div>
+    <div class="guide-foot">
+      <span class="note" id="ext-msg" style="margin-right:auto"></span>
+      <button class="act" id="ext-cancel">やめる</button>
+      <button class="act primary" id="ext-save">保存</button>
+    </div>
+  </div>
+</div>
 <button type="button" id="help-fab" class="help-fab">？ この画面の使い方</button>
 
 <script>
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.21.1";
+  const UI_VERSION = "0.22.2";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -1422,14 +1441,16 @@
           <div><span class="k">売上</span><span class="v">${yen(r.revenue)}</span></div>${ms.tip || ""}
           <div><span class="k">粗利（広告費前）</span><span class="v">${yen(r.gross)}</span></div>
           <div><span class="k">広告費</span><span class="v">${yen(r.adCost)}</span></div>
+          ${r.externalAd ? `<div><span class="k">外部広告費</span><span class="v">${yen(r.externalAd)}</span></div>` : ""}
           <div><span class="k">広告費後の利益</span><span class="v">${yen(r.profitAfterAds)}</span></div>` };
     }), yen);
     const pctS2 = (a, b) => (b ? `${Math.round(a / b * 1000) / 10}%` : "—");
     const malls = ["amazon", "rakuten"].filter((m) => rows.some((r) => r.byMall[m]));
+    const ext = rows.some((r) => r.externalAd);
     $("dash-monthly-table").innerHTML = `<div class="tablewrap"><table style="min-width:860px">
       <thead><tr><th>月</th><th class="r">売上</th>${two ? malls.map((m) => `<th class="r">うち${ja(m)}</th>`).join("") : ""}
         <th class="r">粗利（広告費前）</th><th class="r">粗利率</th><th class="r">広告費</th>${two ? malls.map((m) => `<th class="r">うち${ja(m)}</th>`).join("") : ""}
-        <th class="r">広告経由の売上</th><th class="r">広告経由の比率</th><th class="r">ROAS</th><th class="r">TACoS</th><th class="r">広告費後の利益</th></tr></thead>
+        <th class="r">広告経由の売上</th><th class="r">広告経由の比率</th><th class="r">ROAS</th><th class="r">TACoS</th>${ext ? `<th class="r">外部広告費</th>` : ""}<th class="r">広告費後の利益</th></tr></thead>
       <tbody>${rows.slice().reverse().map((r) => `<tr${r.partial ? ' style="color:var(--muted)"' : ""}>
         <td>${esc(r.month)}${r.partial ? "（途中）" : ""}</td><td class="r">${yen(r.revenue)}</td>
         ${two ? malls.map((m) => `<td class="r">${yen((r.byMall[m] || {}).revenue || 0)}</td>`).join("") : ""}
@@ -1437,8 +1458,9 @@
         ${two ? malls.map((m) => `<td class="r">${yen((r.byMall[m] || {}).adCost || 0)}</td>`).join("") : ""}
         <td class="r">${yen(r.adSales)}</td><td class="r">${pctS2(r.adSales, r.revenue)}</td>
         <td class="r">${r.adCost ? Math.round(r.adSales / r.adCost * 100) / 100 : "—"}</td><td class="r">${pctS2(r.adCost, r.revenue)}</td>
+        ${ext ? `<td class="r">${r.externalAd ? yen(r.externalAd) : "—"}</td>` : ""}
         <td class="r" style="${r.profitAfterAds < 0 ? "color:var(--risk)" : ""}">${yen(r.profitAfterAds)}</td></tr>`).join("")}</tbody></table></div>
-      <p class="note" style="margin-top:6px">粗利率は原価の分かる商品の売上も含めた総売上で割った目安です。広告経由の売上は帰属期間がモールで違うので（楽天RPP 30日／Amazon 7〜14日）、合計は目安として見てください。</p>`;
+      <p class="note" style="margin-top:6px">広告費後の利益 ＝ 粗利 − 広告費 − 外部広告費（税別・月額を日割り）。ROAS・TACoS には外部広告費を含めていません。粗利率は原価の分かる商品の売上も含めた総売上で割った目安です。広告経由の売上は帰属期間がモールで違うので（楽天RPP 30日／Amazon 7〜14日）、合計は目安として見てください。</p>`;
   }
 
   /* ---------- モール間の広告費の配分 ---------- */
@@ -3215,6 +3237,80 @@
   const kpi = (k, v, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub || "&nbsp;"}</div></div>`;
   const emptyRow = (cols, msg) => `<tr><td colspan="${cols}" style="color:var(--muted)">${msg}</td></tr>`;
 
+  /* ---------- リピート率（ダッシュボード） ---------- */
+  function repeatKpi(rp) {
+    rp = rp || {};
+    const r = rp.rakuten, a = rp.amazon, st = rp.amazonStatus;
+    const n = (v) => Number(v || 0).toLocaleString("ja-JP");
+    const stNote = st ? ({ pending: "Amazon：AMC で集計中", error: "Amazon：AMC の集計に失敗（明日また試します）", small: "Amazon：人数が少なく AMC が出さない" }[st.status] || "") : "";
+    let v = "—";
+    const subs = [];
+    if (r && a) {
+      v = `楽天 ${r.rate ?? "—"}%／Amazon ${a.rate ?? "—"}%`;
+      subs.push(`楽天 ${n(r.customers)}人中 ${n(r.repeaters)}人・Amazon ${n(a.customers)}人中 ${n(a.repeaters)}人`);
+    } else if (r) {
+      v = `${r.rate ?? "—"}%`;
+      subs.push(`楽天・${n(r.customers)}人中 ${n(r.repeaters)}人`);
+    } else if (a) {
+      v = `${a.rate ?? "—"}%`;
+      subs.push(`Amazon（AMC）・${n(a.customers)}人中 ${n(a.repeaters)}人`);
+    }
+    subs.push("直近13か月で2回以上");
+    if (r && r.short) subs.push(`楽天は履歴が ${r.historyFrom} からのため低め`);
+    if (stNote) subs.push(stNote);
+    else if (!a && !st) subs.push("Amazon：AMC 未設定");
+    const title = "直近13か月（期間の最終日まで）に買った人のうち、別の日に2回以上買った人の割合。" +
+      (r ? `楽天：${r.from}〜${r.to}（注文データ・取り込み済みの履歴は ${r.historyFrom} から）。` : "") +
+      (a ? `Amazon：${a.from}〜${a.to}（Amazon Marketing Cloud・${String(a.at).slice(0, 10)} 集計）。` : "Amazon は案件の接続に AMC のIDを入れると週1回集計します。");
+    return `<div class="kpi" title="${esc(title)}"><div class="k">リピート率</div><div class="v"${r && a ? ' style="font-size:18px"' : ""}>${esc(v)}</div><div class="s">${esc(subs.join("／"))}</div></div>`;
+  }
+
+  /* ---------- 外部広告費の入力 ---------- */
+  let extRows = [];
+  async function openExtAds() {
+    if (!currentCase) return;
+    const d = await get(`/api/external-ads?case_id=${encodeURIComponent(currentCase)}`);
+    if (d.error) { alertMsg(d.error); return; }
+    extRows = d.months || [];
+    const name = ($("g-case").selectedOptions[0] || {}).textContent || "";
+    $("ext-case").textContent = name;
+    $("ext-rows").innerHTML = extRows.map((r) => `<tr><td style="white-space:nowrap">${esc(r.month)}</td>
+      <td><input type="text" inputmode="numeric" class="ext-in" data-month="${esc(r.month)}" value="${r.amount == null ? "" : r.amount}" placeholder="未入力" aria-label="${esc(r.month)} の外部広告費（税別）"></td>
+      <td class="note">${r.updatedAt ? esc(r.updatedAt.slice(0, 16)) + (r.updatedBy ? "・" + esc(r.updatedBy) : "") : ""}</td></tr>`).join("");
+    $("ext-msg").textContent = "";
+    $("ext-dlg").classList.remove("hidden");
+    setTimeout(() => { const f = document.querySelector(".ext-in"); if (f) f.focus(); }, 0);
+  }
+  const closeExt = () => $("ext-dlg").classList.add("hidden");
+  function alertMsg(m) { $("dash-asof").textContent = m; }
+  document.addEventListener("click", (e) => { if (e.target.closest && e.target.closest("#btn-ext-open")) openExtAds(); });
+  $("ext-cancel").addEventListener("click", closeExt);
+  $("ext-dlg").addEventListener("click", (e) => { if (e.target === $("ext-dlg")) closeExt(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("ext-dlg").classList.contains("hidden")) closeExt(); });
+  $("ext-save").addEventListener("click", async () => {
+    const rows = [];
+    let bad = "";
+    document.querySelectorAll(".ext-in").forEach((el) => {
+      const raw = el.value.normalize("NFKC").replace(/[,¥円\s]/g, "");
+      const before = (extRows.find((r) => r.month === el.dataset.month) || {}).amount;
+      if (raw === "") { if (before != null) rows.push({ month: el.dataset.month, amount: null }); return; }
+      if (!/^\d+$/.test(raw)) { bad = el.dataset.month; return; }
+      if (Number(raw) !== before) rows.push({ month: el.dataset.month, amount: Number(raw) });
+    });
+    if (bad) { $("ext-msg").innerHTML = `<span class="tag ng">数字だけで入れてください</span> ${esc(bad)}`; return; }
+    if (!rows.length) { closeExt(); return; }
+    $("ext-save").disabled = true;
+    try {
+      const r = await fetch("/api/external-ads", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ caseId: currentCase, rows }) });
+      const d = await r.json();
+      if (!r.ok) { $("ext-msg").innerHTML = `<span class="tag ng">保存できません</span> ${esc(d.error || "")}`; return; }
+      closeExt();
+      await loadDashboard();
+      showGuide("external-saved");
+    } finally { $("ext-save").disabled = false; }
+  });
+
   async function loadDashboard() {
     if (!currentCase) {
       $("dash-kpis").innerHTML = `<p class="note">案件がまだありません。商品マスタを取り込むと案件が作られます。</p>`;
@@ -3231,16 +3327,25 @@
     const adSales = s.ads.totals.reduce((t, a) => t + a.sales, 0);
     const chg = sl.changeRate == null ? "前期間比 —"
       : `前期間比 <span class="${sl.changeRate >= 0 ? "up" : "down"}">${sl.changeRate >= 0 ? "+" : ""}${sl.changeRate}%</span>`;
+    const mallCost = (m) => (s.ads.totals.find((a) => a.mall === m) || {}).cost || 0;
+    const ext = (s.ads.external || {}).total || 0;
+    const extMonths = (s.ads.external || {}).months || [];
     $("dash-kpis").innerHTML = [
       kpi("期間の売上", yen(sl.total.revenue), chg),
       kpi("1日あたりの売上", yen(sl.perDay), `${sl.total.units.toLocaleString("ja-JP")}個`),
       kpi("期間の粗利", yen(pl.gross), `広告費前・粗利率 ${pctS(pl.grossRate)}`),
       kpi("期間の広告費", s.ads.totals.length ? yen(adCost) : "—",
-        s.ads.totals.length ? `ROAS ${adCost ? Math.round(adSales / adCost * 100) / 100 : "—"}／損益分岐 ${pl.breakEvenRoas ?? "—"}` : "広告データなし"),
-      kpi("TACoS", pctS(s.ads.tacos), "広告費 ÷ 総売上"),
-      kpi("広告費を引いた利益", yen(s.ads.profitAfterAds), "粗利 − 広告費"),
+        s.ads.totals.length ? (s.ads.totals.length > 1 ? `Amazon ${yen(mallCost("amazon"))}／楽天 ${yen(mallCost("rakuten"))}` : "モールの広告") : "広告データなし"),
+      kpi("ROAS", s.ads.totals.length && adCost ? String(Math.round(adSales / adCost * 100) / 100) : "—",
+        `損益分岐 ${pl.breakEvenRoas ?? "—"}／外部広告費は含めない`),
+      kpi("TACoS", pctS(s.ads.tacos), "広告費 ÷ 総売上（外部広告費は含めない）"),
+      `<div class="kpi kpi-edit"><div class="k">外部広告費<button type="button" class="kpi-btn" id="btn-ext-open">入力</button></div>
+        <div class="v">${extMonths.length ? yen(ext) : "—"}</div>
+        <div class="s">${extMonths.length ? `税別・${extMonths.map((m) => `${Number(m.month.slice(5))}月 ${m.days}/${m.daysInMonth}日`).join("・")}で日割り` : "未入力（SNS広告など。税別の月額）"}</div></div>`,
+      kpi("広告費を引いた利益", yen(s.ads.profitAfterAds), ext ? "粗利 − 広告費 − 外部広告費" : "粗利 − 広告費（外部広告費は未入力）"),
       kpi("広告経由の売上", s.ads.totals.length ? yen(adSales) : "—",
         s.ads.totals.length && sl.total.revenue ? `総売上の ${Math.round(adSales / sl.total.revenue * 1000) / 10}%（帰属期間はモールで違う）` : "広告データなし"),
+      repeatKpi(s.repeat),
     ].join("");
 
     renderTodos(s.todo || []);
@@ -3432,7 +3537,7 @@
       cost ? kpi("粗利（広告費前）", yen(s.pl.gross), `粗利率 ${pctS(s.pl.grossRate)}`) : "",
       kpi("広告費", s.ads.totals.length ? yen(adCost) : "—", s.ads.totals.length ? `ROAS ${adCost ? Math.round(adSales / adCost * 100) / 100 : "—"}` : ""),
       kpi("TACoS", pctS(s.ads.tacos), "広告費 ÷ 総売上"),
-      cost ? kpi("広告費を引いた利益", yen(s.ads.profitAfterAds), "粗利 − 広告費") : "",
+      (cost || (s.ads.external || {}).total) ? kpi("広告費を引いた利益", yen(s.ads.profitAfterAds), (s.ads.external || {}).total ? `粗利 − 広告費 − 外部広告費 ${yen(s.ads.external.total)}` : "粗利 − 広告費") : "",
     ].join("");
     const plHead = cost ? ["モール", "売上", "販売数", "原価", "手数料", "粗利", "粗利率"] : ["モール", "売上", "販売数"];
     const plRows = s.pl.byMall.map((m) => {
@@ -4334,6 +4439,13 @@
       wait: "すぐ",
       steps: [S("要対応・広告の提案は、次に開いたときから新しい基準で出ます"), S("変更は「設定の変更履歴」と案件の Slack に残ります")],
     }) },
+    "external-saved": { name: "外部広告費を保存したあと", build: () => ({
+      kicker: "外部広告費", title: "外部広告費を保存しました",
+      lead: "ダッシュボードの「広告費を引いた利益」と月次推移に、すぐ反映されます。月の金額はその月の日数で日割りにして、見ている期間の日数ぶんだけ引きます。",
+      wait: "すぐ",
+      steps: [S("月が終わって金額が確定したら、同じ月を上書きしてください（請求書の税別の金額）"), S("ROAS・TACoS には入りません（モールの広告の効率を見る数字なので）")],
+      manual: "m-daily",
+    }) },
     "basis-switched": { name: "Amazon の費用の数え方を切り替えたあと", build: () => ({
       kicker: "管理者", title: "Amazon の費用の数え方を切り替えました",
       lead: "ダッシュボード・粗利・広告の判定・月次推移が、すべて新しい数え方で計算されます（全員の画面に効きます）。",
@@ -4423,6 +4535,8 @@
   ];
   const REFLECT = [
     ["商品マスタ：原価・目標粗利率・RSL暫定を変える", "すぐ", "自動"],
+    ["外部広告費（ダッシュボードで月ごとに入力・税別）", "すぐ（月額を日割りして期間の日数ぶん）", "<strong>要操作</strong>：毎月入力"],
+    ["リピート率（直近13か月で2回以上）", "楽天：注文の取り込みと同時（過去分は保存済みの注文から自動で作成）／Amazon：AMC で週1回集計（1回15分〜数時間）", "自動（Amazon は接続に AMC のIDが必要）"],
     ["商品マスタ：Amazon SKU を変える／商品を追加する", "広告・入金明細はすぐ／日次売上は数分〜1時間", "自動（照合し直し）"],
     ["商品マスタ：楽天の商品管理番号・SKU管理番号を変える", "直近60日は翌朝6時／それより前は取り込み直してから30分〜2時間", "<strong>要操作</strong>：楽天の過去の売上を取り込む"],
     ["設定：料率・目標を変える", "すぐ（過去の概算も計算し直し）", "自動"],
@@ -4442,6 +4556,7 @@
       S("ダッシュボードの<strong>データの鮮度</strong>で、前日分が入っているか確認（楽天RPPは昼過ぎ）", "t-dash#dash-fresh"),
       S("<strong>要対応</strong>を上から見て、ステータスを付ける（対応済み・今はしない・自由記述）", "t-dash#dash-todo"),
       S("広告の<strong>改善提案</strong>は週に一度、広告タブで", "t-ads#adv-tabs"),
+      S("月に一度、ダッシュボードの<strong>外部広告費</strong>の「入力」から、SNS広告などの月の合計（税別）を入れる。確定したら上書き", "t-dash#dash-kpis"),
       S("同じ内容が毎朝7時に Slack の日次サマリでも届きます"),
     ] },
     { id: "m-new", title: "新しい案件を始める", when: "案件を追加したとき（一度だけ）", steps: [

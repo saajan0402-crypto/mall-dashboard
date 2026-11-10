@@ -123,7 +123,7 @@ export async function adsapi(
   env: LwaEnv,
   token: string,
   path: string,
-  init: { method?: string; body?: unknown; profileId?: string; accept?: string; contentType?: string } = {}
+  init: { method?: string; body?: unknown; profileId?: string; accept?: string; contentType?: string; headers?: Record<string, string> } = {}
 ): Promise<ApiResult> {
   const res = await fetch(ADS_BASE + path, {
     method: init.method ?? "GET",
@@ -133,6 +133,7 @@ export async function adsapi(
       ...(init.profileId ? { "Amazon-Advertising-API-Scope": init.profileId } : {}),
       accept: init.accept ?? "application/json",
       ...(init.body ? { "content-type": init.contentType ?? "application/json" } : {}),
+      ...(init.headers ?? {}),
     },
     body: init.body ? JSON.stringify(init.body) : undefined,
   });

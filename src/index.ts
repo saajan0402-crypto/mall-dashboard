@@ -15,6 +15,8 @@ import { advance, pump, jstDate } from "./ingestSales";
 import { ingestFinances, pumpFinances, reparseFinances } from "./ingestFinances";
 import { monthlyStatement, feeBasis, postedDaily } from "./amazonFin";
 import { pumpTransactions, ingestTransactionsDay, reparseTransactions } from "./ingestTransactions";
+import { listExternalAds, saveExternalAds } from "./externalAds";
+import { pumpRepeatAmazon, reparseRakutenCustomers } from "./repeat";
 import { startRakutenBackfill, rakutenBackfillStatus, runRakutenBackfill } from "./rakutenBackfill";
 import { startRematch, rematchStatus, runRematch } from "./rematch";
 import { monthlyTrend } from "./adAllocation";
@@ -42,7 +44,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.21.1";
+const APP_VERSION = "0.22.2";
 
 export interface Env {
   DB: D1Database;
@@ -588,6 +590,34 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     return json(s);
   }
 
+  // 外部広告費（案件×月・税別の手入力）
+  if (path === "/api/external-ads" && req.method === "GET") {
+    const caseId = new URL(req.url).searchParams.get("case_id");
+    if (!caseId) return json({ error: "案件を指定してください" }, 400);
+    return json({ months: await listExternalAds(env.DB, caseId) });
+  }
+  if (path === "/api/external-ads" && req.method === "POST") {
+    const b = (await req.json()) as { caseId?: string; rows?: Array<{ month: string; amount: number | null }> };
+    if (!b.caseId || !Array.isArray(b.rows)) return json({ error: "案件と金額を指定してください" }, 400);
+    try {
+      await saveExternalAds(env.DB, b.caseId, b.rows, viewer(req));
+    } catch (e) {
+      return json({ error: String(e instanceof Error ? e.message : e) }, 400);
+    }
+    const changed = b.rows.map((r) => `${r.month} ${r.amount == null ? "削除" : `¥${Number(r.amount).toLocaleString("ja-JP")}`}`).join("、");
+    await env.DB.prepare(`INSERT INTO ingests (id, case_id, kind, rows, status, source, error) VALUES (?, ?, 'external_ads', ?, 'ok', 'manual', ?)`)
+      .bind(crypto.randomUUID(), b.caseId, b.rows.length, `外部広告費（税別）：${changed}（${viewer(req) ?? "不明"}）`.slice(0, 500)).run();
+    return json({ ok: true, months: await listExternalAds(env.DB, b.caseId) });
+  }
+  // リピート率（Amazon のブランド分析レポート）を今すぐ依頼・取り込み
+  if (path === "/api/repeat/refresh" && req.method === "POST") {
+    const b = (await req.json()) as { caseId?: string };
+    if (!b.caseId) return json({ error: "案件を指定してください" }, 400);
+    await pumpRepeatAmazon(env, { caseId: b.caseId, force: true, budgetMs: 20000 });
+    await reparseRakutenCustomers(env, 20);
+    return json({ ok: true });
+  }
+
   // 月次推移（直近12か月）：売上・粗利・広告費・広告経由売上をモール別に
   if (path === "/api/monthly-trend") {
     const u = new URL(req.url);
@@ -1071,6 +1101,9 @@ export default {
           await reparseFinances(env, 40).catch(() => 0);
           // 新APIの取引の読み方を変えた日（留保解除の写しを数えないようにした等）も同じく読み直す
           await reparseTransactions(env, 80).catch(() => 0);
+          // リピート率：楽天は取り込み済みの注文（R2）から購入者の印を作る／Amazon はブランド分析レポート（月単位）
+          await reparseRakutenCustomers(env, 6).catch(() => 0);
+          await pumpRepeatAmazon(env, { budgetMs: 20000 }).catch(() => 0);
           // 新しい入金明細（出荷日ベース）。直近14日は毎日取り直し、古い日は少しずつ埋める
           await pumpTransactions(env, { budgetMs: 60000 }).catch(() => 0);
           // 楽天の過去の売上（始めた案件だけ）

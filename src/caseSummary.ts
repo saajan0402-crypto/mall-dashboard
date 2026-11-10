@@ -13,6 +13,8 @@ import { applyTodoStatus, doneInMonth, isoWeek, textKey, type TodoStatus, type D
 import { notifyEnabled } from "./cases";
 import { amazonFinance, finCost, coveredSql, feeBasis } from "./amazonFin";
 import { buildAllocation, type Allocation } from "./adAllocation";
+import { externalAdCost, type ExternalAdCost } from "./externalAds";
+import { repeatSummary, type RepeatSummary } from "./repeat";
 import { productAdTotals } from "./adProducts";
 import { latestCompleteMonth } from "./mallCharges";
 import { buildAdAdvice, type BidAdvice, type NegativeAdvice, type HarvestAdvice } from "./adAdvice";
@@ -219,7 +221,10 @@ export interface CaseSummary {
   ads: {
     totals: AdTotal[];
     tacos: number | null;
+    /** 粗利 − モールの広告費 − 外部広告費 */
     profitAfterAds: number | null;
+    /** 外部広告費（税別・月の金額を日ごとに按分）。ROAS・ACoS・TACoS には入れない */
+    external: ExternalAdCost;
     campaigns: Array<{ mall: string; adType: string | null; name: string; cost: number; sales: number;
       roas: number | null; attribution: number | null; belowBreakEven: boolean; budgetCoverage: number | null }>;
     wastedTerms: Array<{ mall: string; adType: string; term: string; cost: number; clicks: number; impShare: number | null }>;
@@ -229,6 +234,8 @@ export interface CaseSummary {
   /** 広告の改善提案（件数と上位だけ。全部は広告タブで） */
   /** Amazon と楽天の間の広告費の配分（提案があれば proposal に入る） */
   allocation: Allocation;
+  /** リピート率（楽天は注文データから、Amazon はブランド分析レポートから） */
+  repeat: RepeatSummary;
   advice: {
     counts: { up: number; down: number; pause: number; negatives: number; harvest: number; budgets: number };
     impact: { wastedCost: number; bidDownCost: number };
@@ -605,8 +612,9 @@ export async function buildCaseSummary(
 
   const events = await listEvents(db, caseId, from, to);
   const allocation = await buildAllocation(db, caseId, from, to);
+  const [external, repeat] = await Promise.all([externalAdCost(db, caseId, from, to), repeatSummary(db, caseId, from, to)]);
   const base: Omit<CaseSummary, "todo" | "doneThisMonth"> = {
-    allocation,
+    allocation, repeat,
     caseId, caseName: c.name,
     period: { from, to, days, preset: per.preset },
     prev: { from: prevFrom, to: prevTo },
@@ -625,7 +633,8 @@ export async function buildCaseSummary(
     ads: {
       totals,
       tacos: revenue ? round1((adCost / revenue) * 100) : null,
-      profitAfterAds: pl.revenue ? pl.gross - adCost : null,
+      profitAfterAds: pl.revenue ? pl.gross - adCost - external.total : null,
+      external,
       campaigns: camp.map((r) => {
         const cost = n(r.cost), sales = n(r.sales);
         const roas = cost > 0 ? round2(sales / cost) : null;

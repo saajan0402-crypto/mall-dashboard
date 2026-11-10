@@ -14,6 +14,7 @@
  */
 
 import { periodSummary, adTotals } from "./caseSummary";
+import { externalAdCost } from "./externalAds";
 
 export interface MallAdEfficiency {
   mall: string;
@@ -132,7 +133,11 @@ function propose(malls: MallAdEfficiency[], days: number): Allocation["proposal"
 export interface MonthRow {
   month: string;
   partial: boolean;     // 今月（途中）
-  revenue: number; gross: number; adCost: number; adSales: number; profitAfterAds: number;
+  revenue: number; gross: number; adCost: number; adSales: number;
+  /** 外部広告費（税別・按分） */
+  externalAd: number;
+  /** 粗利 − 広告費 − 外部広告費 */
+  profitAfterAds: number;
   byMall: Record<string, { revenue: number; gross: number; adCost: number; adSales: number }>;
 }
 
@@ -150,7 +155,7 @@ export async function monthlyTrend(db: D1Database, caseId: string, months = 12):
   }
   // 月ごとの計算は互いに関係ないので並べて走らせる（待ち時間を重ねる）
   const rows = await Promise.all(spans.map(async ({ month, from, to, last }) => {
-    const [pl, ads] = await Promise.all([periodSummary(db, caseId, from, to), adTotals(db, caseId, from, to)]);
+    const [pl, ads, ext] = await Promise.all([periodSummary(db, caseId, from, to), adTotals(db, caseId, from, to), externalAdCost(db, caseId, from, to)]);
     const byMall: MonthRow["byMall"] = {};
     for (const m of pl.byMall) byMall[m.mall] = { revenue: m.revenue, gross: m.gross, adCost: 0, adSales: 0 };
     for (const a of ads) {
@@ -158,9 +163,9 @@ export async function monthlyTrend(db: D1Database, caseId: string, months = 12):
       byMall[a.mall].adCost = a.cost; byMall[a.mall].adSales = a.sales;
     }
     const adCost = ads.reduce((n, a) => n + a.cost, 0), adSales = ads.reduce((n, a) => n + a.sales, 0);
-    if (!pl.revenue && !adCost) return null;      // データの無い月は出さない
-    return { month, partial: to !== last, revenue: pl.revenue, gross: pl.gross, adCost, adSales,
-      profitAfterAds: pl.gross - adCost, byMall } as MonthRow;
+    if (!pl.revenue && !adCost && !ext.total) return null;      // データの無い月は出さない
+    return { month, partial: to !== last, revenue: pl.revenue, gross: pl.gross, adCost, adSales, externalAd: ext.total,
+      profitAfterAds: pl.gross - adCost - ext.total, byMall } as MonthRow;
   }));
   return rows.filter((r): r is MonthRow => r !== null);
 }
