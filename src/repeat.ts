@@ -245,14 +245,20 @@ export async function pumpRepeatAmazon(env: ConnEnv & LwaEnv, opts: { budgetMs?:
 
     // 新しく実行する（AMC のデータは数日遅れて揃うので、3日前までを数える）
     const to = jstDay(3), from = window13(to);
-    const r = await amcCall(env, token, accountId, base, {
-      sqlQuery: AMC_SQL,
+    // 保存しておく型（workflowId）を使わず、その場の SQL を workflow に入れて実行する（ad-hoc）。
+    // 2026-11 本番で、SQL を一番外に置くと「Exactly one of workflowId or workflow must be specified」で断られた
+    const timing = {
       timeWindowType: "EXPLICIT",
       timeWindowStart: `${from}T00:00:00`,
       timeWindowEnd: `${dayAdd(to, 1)}T00:00:00`,
       timeWindowTimeZone: "Asia/Tokyo",
       workflowExecutionTimeoutSeconds: 86400,
-    });
+    };
+    let r = await amcCall(env, token, accountId, base, { workflow: { sqlQuery: AMC_SQL }, ...timing });
+    // workflow の中にも名前（workflowId）を求められた場合は付けて送り直す
+    if (r.status === 400 && /workflowId/i.test(errorMessage(r.body))) {
+      r = await amcCall(env, token, accountId, base, { workflow: { workflowId: `mall-repeat-13m-${Date.now()}`, sqlQuery: AMC_SQL }, ...timing });
+    }
     const id = ((r.body ?? {}) as { workflowExecutionId?: string }).workflowExecutionId;
     if (r.ok && id) await writeAmc(env.DB, c.id, { status: "pending", executionId: id, from, to, at: now, result: st?.result });
     else await writeAmc(env.DB, c.id, { status: "error", at: now, message: `AMC に実行を依頼できませんでした：${errorMessage(r.body)}`, result: st?.result });
