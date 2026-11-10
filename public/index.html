@@ -1171,7 +1171,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.22.2";
+  const UI_VERSION = "0.22.3";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -3257,13 +3257,40 @@
     }
     subs.push("直近13か月で2回以上");
     if (r && r.short) subs.push(`楽天は履歴が ${r.historyFrom} からのため低め`);
+    const detail = st && st.status !== "ok" ? `<button type="button" class="kpi-btn" id="btn-amc-detail">詳細</button>` : "";
     if (stNote) subs.push(stNote);
     else if (!a && !st) subs.push("Amazon：AMC 未設定");
     const title = "直近13か月（期間の最終日まで）に買った人のうち、別の日に2回以上買った人の割合。" +
       (r ? `楽天：${r.from}〜${r.to}（注文データ・取り込み済みの履歴は ${r.historyFrom} から）。` : "") +
       (a ? `Amazon：${a.from}〜${a.to}（Amazon Marketing Cloud・${String(a.at).slice(0, 10)} 集計）。` : "Amazon は案件の接続に AMC のIDを入れると週1回集計します。");
-    return `<div class="kpi" title="${esc(title)}"><div class="k">リピート率</div><div class="v"${r && a ? ' style="font-size:18px"' : ""}>${esc(v)}</div><div class="s">${esc(subs.join("／"))}</div></div>`;
+    return `<div class="kpi" title="${esc(title + (st && st.message ? "\n" + st.message : ""))}"><div class="k">リピート率${detail}</div><div class="v"${r && a ? ' style="font-size:18px"' : ""}>${esc(v)}</div><div class="s">${esc(subs.join("／"))}</div></div>`;
   }
+
+  // AMC の集計の詳細（失敗したときのメッセージ）と、もう一度試すボタン
+  async function showAmcDetail() {
+    const d = await get(`/api/repeat/status?case_id=${encodeURIComponent(currentCase)}`);
+    const a = d.amc || {};
+    const label = { pending: "AMC で集計中です", error: "AMC の集計に失敗しました", small: "人数が少なく AMC が結果を出しませんでした", ok: "集計できています" }[a.status] || "まだ集計していません";
+    renderGuide({
+      kicker: "リピート率（Amazon・AMC）", title: label,
+      lead: `<div style="font-family:var(--mono);font-size:12px;white-space:pre-wrap;word-break:break-all;background:var(--surface-2);padding:10px 12px;border-radius:6px">${esc(a.message || "（メッセージなし）")}</div>
+        <p class="note" style="margin-top:8px">最終更新：${esc(a.at || "—")}${a.executionId ? `／実行ID ${esc(a.executionId)}` : ""}</p>
+        <div class="btns"><button class="act primary" id="btn-amc-retry">もう一度試す</button><span class="note" id="amc-retry-msg"></span></div>`,
+      note: "このメッセージを管理者（開発）に伝えてください。失敗した案件は1日おきに自動で試し直します。",
+    }, "amc-detail", true);
+  }
+  document.addEventListener("click", async (e) => {
+    if (e.target.closest && e.target.closest("#btn-amc-detail")) { showAmcDetail(); return; }
+    if (e.target.closest && e.target.closest("#btn-amc-retry")) {
+      const b = $("btn-amc-retry"); b.disabled = true; $("amc-retry-msg").textContent = "AMC に依頼しています…";
+      try {
+        const r = await fetch("/api/repeat/refresh", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ caseId: currentCase }) });
+        const d = await r.json();
+        const a = d.amc || {};
+        $("amc-retry-msg").textContent = a.status === "pending" ? "依頼できました。15分〜数時間で集計されます" : `結果：${a.status || "—"} ${a.message || ""}`;
+      } finally { b.disabled = false; }
+    }
+  });
 
   /* ---------- 外部広告費の入力 ---------- */
   let extRows = [];

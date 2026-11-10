@@ -16,7 +16,7 @@ import { ingestFinances, pumpFinances, reparseFinances } from "./ingestFinances"
 import { monthlyStatement, feeBasis, postedDaily } from "./amazonFin";
 import { pumpTransactions, ingestTransactionsDay, reparseTransactions } from "./ingestTransactions";
 import { listExternalAds, saveExternalAds } from "./externalAds";
-import { pumpRepeatAmazon, reparseRakutenCustomers } from "./repeat";
+import { pumpRepeatAmazon, reparseRakutenCustomers, readAmc } from "./repeat";
 import { startRakutenBackfill, rakutenBackfillStatus, runRakutenBackfill } from "./rakutenBackfill";
 import { startRematch, rematchStatus, runRematch } from "./rematch";
 import { monthlyTrend } from "./adAllocation";
@@ -44,7 +44,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.22.2";
+const APP_VERSION = "0.22.3";
 
 export interface Env {
   DB: D1Database;
@@ -615,7 +615,13 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     if (!b.caseId) return json({ error: "案件を指定してください" }, 400);
     await pumpRepeatAmazon(env, { caseId: b.caseId, force: true, budgetMs: 20000 });
     await reparseRakutenCustomers(env, 20);
-    return json({ ok: true });
+    return json({ ok: true, amc: await readAmc(env.DB, b.caseId) });
+  }
+  // AMC の集計の状態（失敗したときのメッセージを見る）
+  if (path === "/api/repeat/status") {
+    const caseId = new URL(req.url).searchParams.get("case_id");
+    if (!caseId) return json({ error: "案件を指定してください" }, 400);
+    return json({ amc: await readAmc(env.DB, caseId) });
   }
 
   // 月次推移（直近12か月）：売上・粗利・広告費・広告経由売上をモール別に

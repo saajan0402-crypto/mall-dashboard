@@ -143,7 +143,7 @@ interface AmcState {
   result?: { from: string; to: string; customers: number; repeaters: number; rate: number | null; at: string };
 }
 const amcKey = (caseId: string) => `amc_repeat:${caseId}`;
-async function readAmc(db: D1Database, caseId: string): Promise<AmcState | null> {
+export async function readAmc(db: D1Database, caseId: string): Promise<AmcState | null> {
   const r = await db.prepare("SELECT value FROM app_flags WHERE key = ?").bind(amcKey(caseId)).first<{ value: string }>();
   try { return r ? (JSON.parse(r.value) as AmcState) : null; } catch { return null; }
 }
