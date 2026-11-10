@@ -173,11 +173,16 @@ function parseCsv(text: string): Array<Record<string, string>> {
   return lines.slice(1).map((l) => { const v = split(l); const o: Record<string, string> = {}; head.forEach((h, i) => { o[h] = v[i] ?? ""; }); return o; });
 }
 
+/**
+ * AMC API を呼ぶ。AMC は種類ごとの専用の Content-Type / Accept（application/vnd.amc….v1+json）を求めることがあるので、
+ * まず専用の型で送り、415/406 が返ったら普通の JSON で送り直す
+ */
 async function amcCall(env: LwaEnv, token: string, accountId: string, path: string, body?: unknown) {
-  return adsapi(env, token, path, {
-    method: body ? "POST" : "GET", body,
-    headers: { "Amazon-Advertising-API-AdvertiserId": accountId, "Amazon-Advertising-API-MarketplaceId": JP_MARKETPLACE },
-  });
+  const headers = { "Amazon-Advertising-API-AdvertiserId": accountId, "Amazon-Advertising-API-MarketplaceId": JP_MARKETPLACE };
+  const vnd = "application/vnd.amcworkflowexecutions.v1+json";
+  const r = await adsapi(env, token, path, { method: body ? "POST" : "GET", body, headers, accept: vnd, contentType: vnd });
+  if (r.status !== 415 && r.status !== 406) return r;
+  return adsapi(env, token, path, { method: body ? "POST" : "GET", body, headers });
 }
 
 /**

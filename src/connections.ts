@@ -29,8 +29,8 @@ export const FIELDS: Record<Mall, Array<{ key: string; label: string; hint: stri
     { key: "ads_refresh_token", label: "広告APIのリフレッシュトークン（この案件だけ別のとき）",
       hint: "通常は空欄。全案件共通のトークンは Cloudflare の AMAZON_ADS_REFRESH_TOKEN に入れる" },
     { key: "seller_id", label: "セラーID", hint: "任意。レポートの照合に使う" },
-    { key: "amc_instance_id", label: "AMC インスタンスID", hint: "任意。リピート率（Amazon）に使う。広告コンソールの Amazon Marketing Cloud → インスタンスの詳細" },
-    { key: "amc_account_id", label: "AMC アカウントID", hint: "任意。AMC インスタンスの持ち主のアカウント（ENTITY… または A… で始まる）" },
+    { key: "amc_instance_id", label: "AMC インスタンスID", hint: "任意。リピート率（Amazon）に使う。amc で始まる英数字（AMC のインスタンスの画面の上部か、その画面のURLに出る）" },
+    { key: "amc_account_id", label: "AMC アカウントID", hint: "任意。ENTITY で始まる英数字（AMC の画面のURLの entityId=… の部分）" },
   ],
   rakuten: [
     { key: "service_secret", label: "serviceSecret", hint: "SP で始まる文字列" },
