@@ -42,7 +42,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.20.3";
+const APP_VERSION = "0.20.4";
 
 export interface Env {
   DB: D1Database;
@@ -493,6 +493,40 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     return json({ ...st, active, other: active === "posted" ? release : posted,
       orderBasis: amz ? { revenue: amz.revenue, units: amz.units, cost: amz.cost, gross: amz.gross } : null,
       otherFees: daily.otherFees, closed: last < jstDate(1) });
+  }
+
+  // 調べもの用：新しい入金明細（出荷日ベース）で、同じ注文が2つの日に入っていないかを見る（読み取りだけ）
+  if (path === "/api/debug/tx-dupes") {
+    const u = new URL(req.url);
+    const key = u.searchParams.get("case") ?? u.searchParams.get("case_id") ?? "";
+    const month = u.searchParams.get("month") ?? jstDate(1).slice(0, 7);
+    const cs = await env.DB.prepare("SELECT id FROM cases WHERE id = ? OR name = ?").bind(key, key).first<{ id: string }>();
+    if (!cs) return json({ error: "case に案件名か ID を指定してください" }, 400);
+    const caseId = cs.id;
+    const from = `${month}-01`, to = `${month}-31`;
+    const { results: dup } = await env.DB.prepare(
+      `SELECT order_id, GROUP_CONCAT(DISTINCT date) AS dates, COUNT(DISTINCT date) AS days, SUM(amount) AS principal, MAX(deferred) AS anyDeferred
+         FROM fee_events WHERE case_id = ? AND mall = 'amazon' AND basis = 'posted' AND event_type = 'shipment'
+          AND kind = 'charge' AND name = 'Principal' AND order_id IS NOT NULL AND date BETWEEN date(?, '-15 days') AND date(?, '+15 days')
+        GROUP BY order_id HAVING COUNT(*) > 1 ORDER BY order_id LIMIT 20`
+    ).bind(caseId, from, to).all();
+    const { results: kinds } = await env.DB.prepare(
+      `SELECT event_type, kind, name, deferred, COUNT(*) AS n, SUM(amount) AS amount FROM fee_events
+        WHERE case_id = ? AND mall = 'amazon' AND basis = 'posted' AND date BETWEEN ? AND ?
+        GROUP BY event_type, kind, name, deferred ORDER BY n DESC LIMIT 40`
+    ).bind(caseId, from, to).all();
+    // 重なっている注文が入っている日の生データから、その注文の取引だけを抜き出す
+    const samples: unknown[] = [];
+    const first = dup[0] as { order_id?: string; dates?: string } | undefined;
+    if (first?.order_id) {
+      for (const d of String(first.dates ?? "").split(",").slice(0, 3)) {
+        const obj = await env.FILES.get(`raw/amazon/transactions/${caseId}/${d}.json`);
+        if (!obj) continue;
+        const list = (await obj.json()) as Array<{ relatedIdentifiers?: Array<{ relatedIdentifierValue?: string }> }>;
+        samples.push({ date: d, transactions: list.filter((t) => (t.relatedIdentifiers ?? []).some((r) => r.relatedIdentifierValue === first.order_id)) });
+      }
+    }
+    return json({ month, duplicatedOrders: dup, rowsByKind: kinds, samples });
   }
 
   // 入金明細をどちらの日付で数えるか（管理者のみ）
