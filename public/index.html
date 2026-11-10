@@ -4,6 +4,25 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>モール横断ダッシュボード</title>
+<meta name="description" content="Amazon・楽天の売上、利益、広告、在庫をひとつの画面で。毎朝、自動で取り込みます。">
+<!-- アイコン（ブラウザのタブ・ホーム画面） -->
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<meta name="theme-color" content="#0F2B2C">
+<!-- リンクを貼ったときのプレビュー（OGP）。画像は絶対URLでないと読まれない -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="モール横断ダッシュボード">
+<meta property="og:title" content="モール横断ダッシュボード">
+<meta property="og:description" content="Amazon・楽天の売上、利益、広告、在庫をひとつの画面で。毎朝、自動で取り込みます。">
+<meta property="og:url" content="https://mall-dashboard.saajan0402.workers.dev/">
+<meta property="og:image" content="https://mall-dashboard.saajan0402.workers.dev/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:locale" content="ja_JP">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="robots" content="noindex, nofollow">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Noto+Sans+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -1133,7 +1152,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.21.0";
+  const UI_VERSION = "0.21.1";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
