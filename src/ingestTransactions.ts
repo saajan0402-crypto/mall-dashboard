@@ -10,6 +10,9 @@
  * - 留保中→支払い済みに状態が変わるので、直近14日は毎日取り直す
  * - 金額は breakdowns（入れ子）の末端を1行ずつにする。末端の合計が取引の合計と合わない取引は数えて記録する
  * - どちらの日付で粗利を数えるかは app_flags.amazon_fee_basis で切り替える（amazonFin.ts）
+ * - 留保（DEFERRED）が解けると、Amazon は「元の取引（出荷日・状態が DEFERRED_RELEASED に変わる）」に加えて
+ *   「同じ中身の新しい取引（解けた日・RELEASED・DEFERRED_TRANSACTION_ID に元の取引ID）」を返す。
+ *   両方数えると注文の金額が2倍になる（2026-11 Anomasala 10月で確認）ので、後者は数えない
  */
 
 import { readCreds, type ConnEnv } from "./connections";
@@ -80,18 +83,20 @@ function nameOf(path: string[]): string {
   return leaf;
 }
 
-export function parseTransactions(list: Tx[], date: string): { rows: TxRow[]; mismatch: number; deferred: number; types: Record<string, number> } {
+export function parseTransactions(list: Tx[], date: string): { rows: TxRow[]; mismatch: number; deferred: number; releaseCopies: number; types: Record<string, number> } {
   const rows: TxRow[] = [];
-  let mismatch = 0, deferred = 0;
+  let mismatch = 0, deferred = 0, releaseCopies = 0;
   const types: Record<string, number> = {};
   for (const tx of list) {
     const txType = tx.transactionType ?? "不明";
     types[txType] = (types[txType] ?? 0) + 1;
     const eventType = eventTypeOf(txType);
     if (!eventType) continue;
+    // 留保が解けたときの写し（元の取引は出荷日で数えている）
+    if (tx.relatedIdentifiers?.some((r) => /^DEFERRED_TRANSACTION_ID$/i.test(r.relatedIdentifierName ?? ""))) { releaseCopies++; continue; }
     const isDeferred = /^deferred$/i.test(tx.transactionStatus ?? "");
     if (isDeferred) deferred++;
-    const orderId = tx.relatedIdentifiers?.find((r) => /order/i.test(r.relatedIdentifierName ?? ""))?.relatedIdentifierValue ?? null;
+    const orderId = tx.relatedIdentifiers?.find((r) => /^order_?id$/i.test(r.relatedIdentifierName ?? ""))?.relatedIdentifierValue ?? null;
     const txCtx = (tx.contexts ?? []).find((c) => c.sku);
     const before = rows.length;
 
@@ -122,7 +127,7 @@ export function parseTransactions(list: Tx[], date: string): { rows: TxRow[]; mi
     const sum = rows.slice(before).reduce((n, r) => n + r.amount, 0);
     if (tx.totalAmount && Math.abs(sum - yen(tx.totalAmount)) > 1) mismatch++;
   }
-  return { rows, mismatch, deferred, types };
+  return { rows, mismatch, deferred, releaseCopies, types };
 }
 
 /** 日本時間の 00:00 を UTC の ISO 文字列にする */
@@ -180,34 +185,71 @@ export async function ingestTransactionsDay(env: TxEnv, caseId: string, date: st
 
   const r2Key = `raw/amazon/transactions/${caseId}/${date}.json`;
   await env.FILES.put(r2Key, JSON.stringify(got.list), { httpMetadata: { contentType: "application/json" } });
+  const w = await writeTxDay(env.DB, caseId, date, got.list);
+  await env.DB.prepare(
+    `INSERT INTO ingests (id, case_id, mall, kind, period_start, period_end, rows, status, error, r2_key, source, parser)
+     VALUES (?, ?, 'amazon', 'transactions', ?, ?, ?, 'ok', ?, ?, 'api', ${TX_PARSER})`
+  ).bind(crypto.randomUUID(), caseId, date, date, w.rows, w.note, r2Key).run();
+  return { status: "ok", rows: w.rows, message: `${got.list.length}件の取引・${w.rows}行${w.note ? `（${w.note}）` : ""}` };
+}
 
-  const parsed = parseTransactions(got.list, date);
-  const map = await skuMap(env.DB, caseId);
+/** 新APIの取引を読むプログラムの版。読み方を変えたら上げる（上げると R2 の生データから読み直す） */
+export const TX_PARSER = 2;
+
+/** 1日ぶんの取引を fee_events（basis='posted'）に入れ直す */
+async function writeTxDay(db: D1Database, caseId: string, date: string, list: Tx[]): Promise<{ rows: number; note: string | null }> {
+  const parsed = parseTransactions(list, date);
+  const map = await skuMap(db, caseId);
   const unknown = new Set<string>();
   const statements: D1PreparedStatement[] = [
-    env.DB.prepare("DELETE FROM fee_events WHERE case_id = ? AND mall = 'amazon' AND basis = 'posted' AND date = ?").bind(caseId, date),
+    db.prepare("DELETE FROM fee_events WHERE case_id = ? AND mall = 'amazon' AND basis = 'posted' AND date = ?").bind(caseId, date),
   ];
   for (const row of parsed.rows) {
     const productId = row.sku ? map.get(row.sku) ?? null : null;
     if (row.sku && !productId) unknown.add(row.sku);
-    statements.push(env.DB.prepare(
+    statements.push(db.prepare(
       `INSERT INTO fee_events (id, case_id, mall, date, order_id, sku, product_id, event_type, kind, name, amount, basis, quantity, deferred)
        VALUES (?, ?, 'amazon', ?, ?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?)`
     ).bind(crypto.randomUUID(), caseId, date, row.orderId, row.sku, productId, row.eventType, row.kind, row.name, row.amount,
       row.quantity, row.deferred ? 1 : 0));
   }
-  await env.DB.batch(statements);
+  await db.batch(statements);
 
   const notes: string[] = [];
   if (parsed.deferred) notes.push(`留保中 ${parsed.deferred}件`);
+  if (parsed.releaseCopies) notes.push(`留保解除の写し ${parsed.releaseCopies}件（出荷日で数え済み）`);
   if (parsed.mismatch) notes.push(`内訳の合計が合わない取引 ${parsed.mismatch}件`);
   if (unknown.size) notes.push(`商品マスタに無いSKU：${[...unknown].slice(0, 5).join(", ")}`);
-  const note = notes.join(" ／ ") || null;
-  await env.DB.prepare(
-    `INSERT INTO ingests (id, case_id, mall, kind, period_start, period_end, rows, status, error, r2_key, source)
-     VALUES (?, ?, 'amazon', 'transactions', ?, ?, ?, 'ok', ?, ?, 'api')`
-  ).bind(crypto.randomUUID(), caseId, date, date, parsed.rows.length, note, r2Key).run();
-  return { status: "ok", rows: parsed.rows.length, message: `${got.list.length}件の取引・${parsed.rows.length}行${note ? `（${note}）` : ""}` };
+  return { rows: parsed.rows.length, note: notes.join(" ／ ") || null };
+}
+
+/**
+ * 読み方を変えたときに、R2 に残した生データから読み直す（API は呼ばない）。
+ * 5分ごとの実行で少しずつ進める
+ */
+export async function reparseTransactions(env: TxEnv, limit = 60): Promise<number> {
+  const { results } = await env.DB.prepare(
+    `SELECT case_id, period_start AS date, MAX(r2_key) AS r2_key FROM ingests
+      WHERE mall = 'amazon' AND kind = 'transactions' AND status = 'ok' AND COALESCE(parser, 1) < ? AND r2_key IS NOT NULL
+      GROUP BY case_id, period_start ORDER BY period_start DESC LIMIT ?`
+  ).bind(TX_PARSER, limit).all<{ case_id: string; date: string; r2_key: string }>();
+  let done = 0;
+  for (const r of results) {
+    const obj = await env.FILES.get(r.r2_key);
+    let note: string | null = null, rows: number | null = null;
+    if (obj) {
+      const list = (await obj.json()) as Tx[];
+      const w = await writeTxDay(env.DB, r.case_id, r.date, Array.isArray(list) ? list : []);
+      note = w.note; rows = w.rows;
+    }
+    // 生データが無い日も、何度も探しに行かないよう印をつける
+    await env.DB.prepare(
+      `UPDATE ingests SET parser = ?, rows = COALESCE(?, rows), error = CASE WHEN ? IS NULL THEN error ELSE ? END
+        WHERE case_id = ? AND mall = 'amazon' AND kind = 'transactions' AND period_start = ? AND status = 'ok'`
+    ).bind(TX_PARSER, rows, obj ? 1 : null, note, r.case_id, r.date).run();
+    done++;
+  }
+  return done;
 }
 
 const jstDay = (offset: number) => new Date(Date.now() + 9 * 3600000 - offset * 86400000).toISOString().slice(0, 10);

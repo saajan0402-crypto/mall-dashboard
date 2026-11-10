@@ -14,7 +14,7 @@ import { diagnose } from "./diagnose";
 import { advance, pump, jstDate } from "./ingestSales";
 import { ingestFinances, pumpFinances, reparseFinances } from "./ingestFinances";
 import { monthlyStatement, feeBasis, postedDaily } from "./amazonFin";
-import { pumpTransactions, ingestTransactionsDay } from "./ingestTransactions";
+import { pumpTransactions, ingestTransactionsDay, reparseTransactions } from "./ingestTransactions";
 import { startRakutenBackfill, rakutenBackfillStatus, runRakutenBackfill } from "./rakutenBackfill";
 import { startRematch, rematchStatus, runRematch } from "./rematch";
 import { monthlyTrend } from "./adAllocation";
@@ -42,7 +42,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.20.4";
+const APP_VERSION = "0.20.5";
 
 export interface Env {
   DB: D1Database;
@@ -1069,6 +1069,8 @@ export default {
         (async () => {
           // 入金明細の読み方を変えた日（ポイントの費用を読むようにした等）を、R2 の生データから読み直す
           await reparseFinances(env, 40).catch(() => 0);
+          // 新APIの取引の読み方を変えた日（留保解除の写しを数えないようにした等）も同じく読み直す
+          await reparseTransactions(env, 80).catch(() => 0);
           // 新しい入金明細（出荷日ベース）。直近14日は毎日取り直し、古い日は少しずつ埋める
           await pumpTransactions(env, { budgetMs: 60000 }).catch(() => 0);
           // 楽天の過去の売上（始めた案件だけ）
