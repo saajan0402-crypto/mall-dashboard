@@ -42,7 +42,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.20.5";
+const APP_VERSION = "0.21.0";
 
 export interface Env {
   DB: D1Database;
@@ -203,7 +203,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     if (r.errors) return json({ error: r.errors.join(" / "), errors: r.errors }, 400);
     await env.DB.prepare(`INSERT INTO ingests (id, case_id, kind, rows, status, source, error) VALUES (?, ?, 'products', 1, 'ok', 'manual', ?)`)
       .bind(crypto.randomUUID(), b.caseId ?? null, `${b.id ? "編集" : "追加"}：${b.sku}（${viewer(req) ?? "不明"}）`).run();
-    return json({ ok: true, id: r.id });
+    return json({ ok: true, id: r.id, changes: r.changes });
   }
   if (path === "/api/products/delete" && req.method === "POST") {
     const b = (await req.json()) as { id?: string; caseId?: string; sku?: string };

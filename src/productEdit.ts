@@ -96,7 +96,7 @@ export async function exportSheet(db: D1Database, caseId: string | null): Promis
  */
 export async function saveProduct(
   db: D1Database, input: Record<string, string> & { id?: string; caseId?: string }, actor: string | null,
-): Promise<{ id: string; errors?: string[] }> {
+): Promise<{ id: string; errors?: string[]; changes?: ProductChanges }> {
   if (!input.caseId) return { id: "", errors: ["案件を選んでください"] };
   const c = await db.prepare("SELECT name FROM cases WHERE id = ?").bind(input.caseId).first<{ name: string }>();
   if (!c) return { id: "", errors: ["案件が見つかりません"] };
@@ -147,8 +147,18 @@ export async function saveProduct(
     await db.prepare("DELETE FROM settings WHERE scope = 'listing' AND scope_id = ? AND key = 'rsl_fee'").bind(id).run();
     await recalcFeeEst(db, input.caseId, "rakuten");
   }
-  return { id };
+  // 画面の案内（何がいつ反映されるか）に使う。追加のときは入っている項目を「変わった」とみなす
+  const changes: ProductChanges = {
+    created: !before,
+    amazon: (before?.amazonSku ?? "") !== (v.amazonSku ?? ""),
+    rakuten: (before?.rakutenId ?? "") !== (v.rakutenId ?? "") || (before?.rakutenSku ?? "") !== (v.rakutenSku ?? ""),
+    cost: Boolean(costChanged && before),
+    rsl: (before?.rslFee ?? null) !== (v.rslFee ?? null),
+  };
+  return { id, changes };
 }
+
+export interface ProductChanges { created: boolean; amazon: boolean; rakuten: boolean; cost: boolean; rsl: boolean }
 
 /**
  * 削除。売上・広告・在庫のデータがある商品は消さずに断る（過去の数字が説明できなくなるため）。
