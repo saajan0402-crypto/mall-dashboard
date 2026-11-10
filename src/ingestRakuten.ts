@@ -85,7 +85,12 @@ interface RItem {
   SkuModelList?: Array<{ variantId?: string; merchantDefinedSkuId?: string; skuInfo?: string }>;
 }
 interface RPackage { ItemModelList?: RItem[] }
-interface RCoupon { couponTotalPrice?: number }
+/**
+ * クーポン。couponCapital はクーポンの原資（0＝店舗、1＝メーカー、2＝楽天）。
+ * 店舗の値引きとして売上から引くのは、店舗が負担した分だけ。
+ * 楽天・メーカー負担の分は、あとで楽天から「販促クーポン代金」として店舗に支払われるので、店舗の売上は減らない
+ */
+interface RCoupon { couponTotalPrice?: number; couponCapital?: number | string; couponName?: string }
 interface ROrder {
   orderNumber?: string;
   orderDatetime?: string;          // 2026-10-30 12:34:56（日本時間）
@@ -145,6 +150,7 @@ export async function ingestRakutenSales(
   const unknown = new Set<string>();
   const dates = new Set<string>();
 
+  let couponShop = 0, couponOther = 0;
   for (const o of orders) {
     if (o.orderProgress === 900) continue;                 // キャンセル確定は数えない
     const date = (o.orderDatetime ?? "").slice(0, 10);
@@ -165,7 +171,13 @@ export async function ingestRakutenSales(
     }
 
     // クーポンは注文単位で返るので、商品の売上に応じて割り振る
-    const coupon = (o.CouponModelList ?? []).reduce((n, c) => n + Math.round(Number(c.couponTotalPrice ?? 0)), 0);
+    // 原資が分からない（項目が無い）クーポンは、少なく見積もらないよう店舗負担として数える
+    let coupon = 0;
+    for (const c of o.CouponModelList ?? []) {
+      const amt = Math.round(Number(c.couponTotalPrice ?? 0));
+      const cap = c.couponCapital == null || c.couponCapital === "" ? 0 : Number(c.couponCapital);
+      if (cap === 0) { coupon += amt; couponShop += amt; } else couponOther += amt;
+    }
     const total = items.reduce((n, i) => n + i.revenue, 0);
 
     for (const it of items) {
@@ -197,9 +209,11 @@ export async function ingestRakutenSales(
   }
   await env.DB.batch(statements);
 
-  const note = unknown.size
-    ? `商品マスタに無い商品管理番号が ${unknown.size} 件：${[...unknown].slice(0, 10).join(", ")}`
-    : null;
+  const notes: string[] = [];
+  if (unknown.size) notes.push(`商品マスタに無い商品管理番号が ${unknown.size} 件：${[...unknown].slice(0, 10).join(", ")}`);
+  // クーポンの内訳を残す（店舗負担だけを値引きに数えていることを、連携ステータスで確かめられるように）
+  if (couponShop || couponOther) notes.push(`クーポン：店舗負担 ${couponShop.toLocaleString("ja-JP")}円（値引きに計上）／楽天・メーカー負担 ${couponOther.toLocaleString("ja-JP")}円（計上しない）`);
+  const note = notes.length ? notes.join(" ／ ") : null;
   await env.DB.prepare(
     `INSERT INTO ingests (id, case_id, mall, kind, period_start, period_end, rows, status, error, r2_key, source)
      VALUES (?, ?, 'rakuten', 'orders', ?, ?, ?, 'ok', ?, ?, 'api')`

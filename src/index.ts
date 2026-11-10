@@ -42,7 +42,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.20.2";
+const APP_VERSION = "0.20.3";
 
 export interface Env {
   DB: D1Database;
@@ -1066,8 +1066,9 @@ export default {
         // 在庫は毎日とり直す。定期便を先に取り込むのは、判定に使うため
         await pumpSns(env);
         await pumpInventory(env);
-        // 楽天。売上と在庫をまとめて取り込む
-        await pumpRakuten(env, { days: 7 });
+        // 楽天。売上と在庫をまとめて取り込む。
+        // 後からのキャンセル・数量の変更を拾うため、売上は直近60日を毎日取り直す（注文番号の検索＋明細100件ずつなので軽い）
+        await pumpRakuten(env, { days: 60 });
         // Amazon広告：直近14日ぶんの依頼を積む（6時の回だけ）。取りに行くのは5分ごとの実行
         if (event.cron === "0 21 * * *") {
           await queueDailyAds(env);

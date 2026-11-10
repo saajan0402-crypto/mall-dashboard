@@ -216,7 +216,7 @@
 <header>
   <div class="bar">
     <div id="busy" aria-hidden="true"><div class="bar"><i></i></div><div class="msg" role="status">読み込み中…<div class="track"><i></i></div></div></div>
-    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.20.2</span></div>
+    <div class="brand">モール横断ダッシュボード<span id="ver">ver 0.20.3</span></div>
     <div class="picks">
       <div class="case-pick"><label for="g-case">案件</label><select id="g-case" aria-label="案件"></select></div>
       <div class="range-pick" id="range-pick" title="">
@@ -536,7 +536,7 @@
           <button class="act primary" id="btn-rbf-start">楽天の過去の売上を取り込む（上の期間）</button>
           <span class="note" id="rbf-msg"></span>
         </div>
-        <p class="note" style="margin-top:6px">楽天は、ふだんは直近7日しか取り込んでいません。接続したばかりの案件は、一度これで過去の月を埋めてください。
+        <p class="note" style="margin-top:6px">楽天は、ふだんは直近60日を毎日取り直しています。接続したばかりの案件は、一度これで過去の月を埋めてください。
           30日ずつさかのぼり、5分ごとのバッチが裏で進めます（画面を閉じても大丈夫です）。同じ期間を何度取り込んでも二重にはなりません。</p>
         <p class="note" style="margin-top:10px">ヘッダーで選んだ案件が対象です。
           <strong>画面を閉じても構いません。</strong>5分ごとのバッチが裏で進め続けます。
@@ -1052,7 +1052,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.20.2";
+  const UI_VERSION = "0.20.3";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
