@@ -1307,7 +1307,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.28.1";
+  const UI_VERSION = "0.28.2";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -1601,7 +1601,29 @@
   }
 
   /* ---------- モール間の広告費の配分 ---------- */
-  function renderAlloc(al) {
+  // 配分の提案も「対応済み」「今はしない」にできる。要対応の「広告費の配分」と同じ鍵（alloc:週）なので、どちらで押しても同じ状態になり、対応済みはレポートに載る
+  let allocTodo = null;
+  function allocStatusHtml() {
+    const t = allocTodo;
+    if (!t) return "";
+    if (!t.status || t.status === "open") return `<div class="btns" style="margin-top:8px">
+        <button class="act primary" style="padding:4px 12px;font-size:12.5px" data-alloc-st="done">対応済み</button>
+        <button class="act" style="padding:4px 12px;font-size:12.5px" data-alloc-st="skip">今はしない</button>
+        <span class="note">反映したら「対応済み」に。ダッシュボードの「対応の記録」とレポートに載ります（毎週出し直す提案です）</span></div>`;
+    return `<div class="btns" style="margin-top:8px"><span class="tag ${t.status === "done" ? "ok" : "wait"}">${t.status === "done" ? "対応済み" : t.status === "skip" ? "今はしない" : "その他"}</span>
+      <span class="note">${esc(t.statusBy || "")}${t.statusAt ? "・" + esc(String(t.statusAt).slice(0, 16)) : ""}</span>
+      <button class="act" style="padding:2px 10px;font-size:12px" data-alloc-st="open">元に戻す</button></div>`;
+  }
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest && e.target.closest("[data-alloc-st]");
+    if (!b || !allocTodo) return;
+    b.disabled = true;
+    const r = await saveTodo(allocTodo, b.dataset.allocSt, null);
+    if (r && r.ok === false) { b.disabled = false; return; }
+    await loadDashboard();
+  });
+  function renderAlloc(al, todo) {
+    allocTodo = todo || null;
     const host = $("dash-alloc");
     if (!al || !al.malls || !al.malls.length) { host.innerHTML = `<p class="note">この期間の広告データがありません。</p>`; return; }
     const ja = (m) => (m === "amazon" ? "Amazon" : m === "rakuten" ? "楽天" : m);
@@ -1616,7 +1638,7 @@
         <strong>${p.action === "shift" ? `提案：${ja(p.fromMall)} → ${ja(p.toMall)} へ 30日あたり ${yen(p.amount30d)}` : `提案：${ja(p.fromMall)} の広告費を 30日あたり ${yen(p.amount30d)} 減らす`}</strong>
         <span class="note">（利益の増え方の目安 30日あたり ${yen(p.expectedProfit30d)}）</span>
         <p style="margin:6px 0 0">${esc(p.reason)}</p>
-        <ul class="note" style="margin:6px 0 0;padding-left:18px">${p.cautions.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>`
+        <ul class="note" style="margin:6px 0 0;padding-left:18px">${p.cautions.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>${allocStatusHtml()}</div>`
       : `<p class="note" style="margin-top:10px">配分を動かす提案はありません（どちらも黒字で、効率の差が小さいか、片方のモールにしか広告がありません）。</p>`;
     host.innerHTML = `<div class="tablewrap"><table style="min-width:760px">
       <thead><tr><th>モール</th><th class="r">広告費</th><th class="r">広告経由の売上</th><th class="r">ROAS</th><th class="r">粗利率（広告費前）</th>
@@ -3524,7 +3546,7 @@
 
     renderTodos(s.todo || []);
     loadDone();
-    renderAlloc(s.allocation);
+    renderAlloc(s.allocation, (s.todo || []).find((t) => String(t.key).startsWith("alloc:")));
     loadMonthly();
 
     // 期間の枠を作り、データの無い日は空けておく（0円とは区別する）。長い期間は週・月にまとめる
