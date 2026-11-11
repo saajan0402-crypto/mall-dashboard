@@ -4,7 +4,10 @@
  * - キーワード発見の候補を「一括に入れる」にすると kw_plan に入り、広告タブの一括ファイルに追加の行として載る
  *   （アプリからモールへは書き込まない。アップロードは担当者が手で行う）
  * - Amazon：関連商品が入っている広告グループ（広告費の多い順）を並べて返し、画面側で一括操作ファイルの中から
- *   「手動ターゲティング・キーワードの広告グループ」を選ぶ。入札は Amazon の推奨（中央）、無ければ検索語のクリック単価
+ *   「手動ターゲティング・キーワードの広告グループ」を選ぶ。入札は：
+ *     検索語で売れた語 → 売れたときのクリック単価（その単価で注文が取れているため）
+ *     それ以外（Amazon の推奨だけの語など）→ 関連商品の広告グループの既存キーワードの入札の中央値 × 70%（育成中にする）
+ *   Amazon の推奨入札は強気なので入札には使わず、参考として出すだけ（2026-11-11 ユーザー判断）
  * - 楽天RPP：関連商品の商品ページ（商品管理番号）ごとに n 行。最初の入札は低めにする：
  *     その商品ページの既存キーワードの入札の中央値 × 70%（下限40円）。既存キーワードが無ければ 40円か商品CPC の高いほう
  *   書き出して対応済みにしたら kw_grow（育成中）に入れ、14日ごとにクリックが少なければ +20% を提案する（adAdvice.ts）
@@ -15,7 +18,7 @@ import { rakutenPages } from "./adProducts";
 const n = (v: unknown) => Number(v ?? 0);
 const jstDay = (d: number) => new Date(Date.now() + 9 * 3600000 - d * 86400000).toISOString().slice(0, 10);
 export const RPP_MIN_CPC = 40, RPP_MAX_CPC = 10000;
-/** 楽天の最初の入札＝既存キーワードの中央値 × この比率 */
+/** 最初の入札＝既存キーワードの中央値 × この比率（楽天・Amazon の推奨だけの語） */
 export const RPP_START_RATIO = 0.7;
 
 export const normKw = (keyword: string) => keyword.normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " ");
@@ -63,6 +66,10 @@ export interface ResolvedPlan {
   /** Amazon：入れる先の候補（広告費の多い順）。画面で一括操作ファイルの中の手動・キーワードの広告グループを選ぶ */
   groups?: Array<{ campaign: string; adGroup: string }>;
   bid?: number | null; bidBasis?: string;
+  /** 低めに入れて育てる（14日ごとにクリックが少なければ +20%） */
+  grow?: boolean;
+  /** Amazon の推奨入札（参考）。今の入札の10倍を超えるなど異常な値は recoNote で注意を出す */
+  recoBid?: number | null; recoNote?: string | null;
   /** 楽天：商品ページごとの行 */
   rows?: Array<{ externalId: string; cpc: number; basis: string }>;
   /** 入れられない理由（楽天の商品ページが分からない など） */
@@ -118,6 +125,36 @@ export async function resolvePlans(db: D1Database, caseId: string): Promise<Reso
     return v;
   };
 
+  // Amazon：広告グループの既存キーワードの入札（キーワードごとに最新）の中央値
+  const latestMedian = (rows: Array<{ k: string; bid: number }>) => {
+    const latest = new Map<string, number>();
+    for (const r of rows) if (!latest.has(r.k)) latest.set(r.k, n(r.bid));
+    const m = median([...latest.values()]);
+    return m == null ? null : { value: m, n: latest.size };
+  };
+  const amazonGroupMedian = async (groups: Array<{ campaign: string; adGroup: string }>) => {
+    if (!groups.length) return null;
+    const { results } = await db.prepare(
+      `SELECT campaign || char(9) || ad_group || char(9) || LOWER(keyword) || char(9) || match_type AS k, bid FROM daily_ads
+        WHERE case_id = ? AND mall = 'amazon' AND level = 'keyword' AND keyword <> '' AND bid IS NOT NULL AND date >= ?
+          AND (${groups.map(() => "(campaign = ? AND ad_group = ?)").join(" OR ")})
+        ORDER BY date DESC`
+    ).bind(caseId, since, ...groups.flatMap((g) => [g.campaign, g.adGroup])).all<{ k: string; bid: number }>();
+    const m = latestMedian(results);
+    return m ? { ...m, scope: "関連商品の広告グループ" } : null;
+  };
+  let caseMedianCache: { value: number; n: number; scope: string } | null | undefined;
+  const amazonCaseMedian = async () => {
+    if (caseMedianCache !== undefined) return caseMedianCache;
+    const { results } = await db.prepare(
+      `SELECT campaign || char(9) || ad_group || char(9) || LOWER(keyword) || char(9) || match_type AS k, bid FROM daily_ads
+        WHERE case_id = ? AND mall = 'amazon' AND level = 'keyword' AND keyword <> '' AND bid IS NOT NULL AND date >= ? ORDER BY date DESC`
+    ).bind(caseId, jstDay(30)).all<{ k: string; bid: number }>();
+    const m = latestMedian(results);
+    caseMedianCache = m ? { ...m, scope: "この案件の" } : null;
+    return caseMedianCache;
+  };
+
   const out: ResolvedPlan[] = [];
   for (const p of plans) {
     const base: ResolvedPlan = { key: kwKey(p.mall, p.keyword), mall: p.mall === "rakuten" ? "rakuten" : "amazon", keyword: p.keyword, source: p.source,
@@ -145,16 +182,24 @@ export async function resolvePlans(db: D1Database, caseId: string): Promise<Reso
       const reco = await db.prepare("SELECT MAX(bid_median) AS b FROM kw_reco WHERE case_id = ? AND LOWER(keyword) = ?")
         .bind(caseId, normKw(p.keyword)).first<{ b: number | null }>().catch(() => null);
       const clicks = st.reduce((t, r) => t + n(r.clicks), 0), cost = st.reduce((t, r) => t + n(r.cost), 0);
-      if (reco?.b != null && n(reco.b) > 0) { base.bid = Math.max(2, Math.round(n(reco.b))); base.bidBasis = "Amazon の推奨入札（中央）"; }
-      else if (clicks > 0 && cost > 0) { base.bid = Math.max(2, Math.round(cost / clicks)); base.bidBasis = `検索語のクリック単価（直近60日・${clicks}クリック）`; }
-      else {
-        const { results: bs } = await db.prepare(
-          "SELECT bid FROM daily_ads WHERE case_id = ? AND mall = 'amazon' AND level = 'keyword' AND bid IS NOT NULL AND date >= ?"
-        ).bind(caseId, jstDay(14)).all<{ bid: number }>();
-        const m = median(bs.map((b) => n(b.bid)));
-        base.bid = m != null ? Math.max(2, Math.round(m)) : null;
-        base.bidBasis = m != null ? "推奨も実績も無いため、今のキーワードの入札の中央値" : "入札を決められません";
+      const orders = st.reduce((t, r) => t + n(r.orders), 0);
+      // 関連商品の広告グループにある既存キーワードの入札（キーワードごとに最新）の中央値。無ければ案件全体
+      const med = (await amazonGroupMedian(groups.slice(0, 15))) ?? (await amazonCaseMedian());
+      if (orders > 0 && clicks > 0 && cost > 0) {
+        base.bid = Math.max(2, Math.round(cost / clicks));
+        base.bidBasis = `検索語で売れたときのクリック単価（直近60日・${clicks}クリック・${orders}注文）`;
+        base.grow = false;
+      } else if (med != null) {
+        base.bid = Math.max(2, Math.round(med.value * RPP_START_RATIO));
+        base.bidBasis = `${med.scope}の既存キーワード ${med.n}件の入札の中央値 ¥${Math.round(med.value).toLocaleString("ja-JP")} × ${Math.round(RPP_START_RATIO * 100)}%（育成中）`;
+        base.grow = true;
+      } else {
+        base.bid = null; base.bidBasis = "入札を決められません（既存のキーワードの入札がありません）";
       }
+      // 推奨入札は参考だけ。今の入札の10倍以上・1万円以上は単位のずれを疑う
+      base.recoBid = reco?.b != null && n(reco.b) > 0 ? Math.round(n(reco.b)) : null;
+      base.recoNote = base.recoBid != null && (base.recoBid >= 10000 || (med != null && base.recoBid > med.value * 10))
+        ? "今の入札より桁違いに高いため、単位がずれている可能性があります（「Amazon の推奨を取り直す」で取り直してください）" : null;
       if (!groups.length) base.problem = "関連商品の広告グループが見つかりません（入れる先を手で決めてください）";
     } else {
       const nums = [...new Set(p.productIds.flatMap((id) => numsOf.get(id) ?? []))];
@@ -174,28 +219,37 @@ export async function resolvePlans(db: D1Database, caseId: string): Promise<Reso
   return out;
 }
 
-/** 書き出して対応済みにした：計画から外し、楽天は育成中に入れる */
+/**
+ * 書き出して対応済みにした：計画から外し、育成中に入れる
+ *   楽天：rows ＝ 商品ページ（商品管理番号）ごとの行／Amazon：rows ＝ 入れた広告グループ（ID・キャンペーン名・広告グループ名）。育成しない語は rows なし
+ */
 export async function finishPlan(db: D1Database, caseId: string, mall: string, keyword: string,
-  rows: Array<{ externalId: string; cpc: number }> | undefined, by: string | null) {
+  rows: Array<{ externalId: string; cpc: number; campaign?: string; adGroup?: string }> | undefined, by: string | null) {
   await removePlan(db, caseId, mall, keyword);
-  if (mall !== "rakuten" || !rows?.length) return;
+  if (!["rakuten", "amazon"].includes(mall) || !rows?.length) return;
   const today = jstDay(0), kw = keyword.normalize("NFKC").trim().replace(/\s+/g, " ");
   await db.batch(rows.slice(0, 20).map((r) => db.prepare(
-    `INSERT INTO kw_grow (case_id, mall, external_id, keyword, start_bid, bid, changed_on, added_on, added_by)
-     VALUES (?, 'rakuten', ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO kw_grow (case_id, mall, external_id, keyword, start_bid, bid, changed_on, added_on, added_by, campaign, ad_group)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(case_id, mall, external_id, keyword) DO UPDATE SET start_bid = excluded.start_bid, bid = excluded.bid,
-       changed_on = excluded.changed_on, added_on = excluded.added_on, added_by = excluded.added_by`
-  ).bind(caseId, String(r.externalId), kw, Math.round(n(r.cpc)), Math.round(n(r.cpc)), today, today, by)));
+       changed_on = excluded.changed_on, added_on = excluded.added_on, added_by = excluded.added_by,
+       campaign = excluded.campaign, ad_group = excluded.ad_group`
+  ).bind(caseId, mall, String(r.externalId), kw, Math.round(n(r.cpc)), Math.round(n(r.cpc)), today, today, by,
+    r.campaign ?? null, r.adGroup ?? null)));
 }
 
 /** 育成中のキーワードの入札を上げた（一括ファイルを対応済みにしたとき） */
-export async function growBidChanged(db: D1Database, caseId: string, externalId: string, keyword: string, bid: number) {
-  await db.prepare("UPDATE kw_grow SET bid = ?, changed_on = ? WHERE case_id = ? AND mall = 'rakuten' AND external_id = ? AND keyword = ?")
-    .bind(Math.round(bid), jstDay(0), caseId, externalId, keyword).run().catch(() => undefined);
+export async function growBidChanged(db: D1Database, caseId: string, mall: string, externalId: string, keyword: string, bid: number) {
+  await db.prepare("UPDATE kw_grow SET bid = ?, changed_on = ? WHERE case_id = ? AND mall = ? AND external_id = ? AND keyword = ?")
+    .bind(Math.round(bid), jstDay(0), caseId, mall, externalId, keyword).run().catch(() => undefined);
 }
 
 export interface GrowRow {
-  externalId: string; keyword: string; startBid: number; bid: number; changedOn: string; addedOn: string; addedBy: string | null;
+  mall: "amazon" | "rakuten";
+  /** 楽天：商品管理番号／Amazon：広告グループID */
+  externalId: string; keyword: string;
+  /** Amazon：入れた先（名前。広告レポートと突き合わせる） */
+  campaign: string | null; adGroup: string | null; startBid: number; bid: number; changedOn: string; addedOn: string; addedBy: string | null;
   /** 入札を最後に入れてからのクリック・注文（RPP のキーワード別レポート） */
   clicksSince: number; ordersSince: number; costSince: number;
   /** レポートに出ている今の入札（手で変えた場合はこちら） */
@@ -208,17 +262,17 @@ const daysBetween = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00
 export async function growRows(db: D1Database, caseId: string): Promise<GrowRow[]> {
   let rows: Array<Record<string, string | number | null>>;
   try {
+    // 楽天は商品管理番号、Amazon はキャンペーン名・広告グループ名・完全一致で広告レポートと突き合わせる
+    const match = `a.case_id = g.case_id AND a.mall = g.mall AND a.level = 'keyword' AND LOWER(a.keyword) = LOWER(g.keyword)
+      AND ((g.mall = 'rakuten' AND a.external_id = g.external_id)
+        OR (g.mall = 'amazon' AND a.campaign = g.campaign AND a.ad_group = g.ad_group AND LOWER(a.match_type) LIKE '%exact%'))`;
     ({ results: rows } = await db.prepare(
-      `SELECT g.external_id, g.keyword, g.start_bid, g.bid, g.changed_on, g.added_on, g.added_by,
-              (SELECT COALESCE(SUM(a.clicks), 0) FROM daily_ads a WHERE a.case_id = g.case_id AND a.mall = 'rakuten' AND a.level = 'keyword'
-                 AND a.external_id = g.external_id AND LOWER(a.keyword) = LOWER(g.keyword) AND a.date >= g.changed_on) AS clicks,
-              (SELECT COALESCE(SUM(a.orders), 0) FROM daily_ads a WHERE a.case_id = g.case_id AND a.mall = 'rakuten' AND a.level = 'keyword'
-                 AND a.external_id = g.external_id AND LOWER(a.keyword) = LOWER(g.keyword) AND a.date >= g.changed_on) AS orders,
-              (SELECT COALESCE(SUM(a.cost), 0) FROM daily_ads a WHERE a.case_id = g.case_id AND a.mall = 'rakuten' AND a.level = 'keyword'
-                 AND a.external_id = g.external_id AND LOWER(a.keyword) = LOWER(g.keyword) AND a.date >= g.changed_on) AS cost,
-              (SELECT a.bid || '|' || a.date FROM daily_ads a WHERE a.case_id = g.case_id AND a.mall = 'rakuten' AND a.level = 'keyword'
-                 AND a.external_id = g.external_id AND LOWER(a.keyword) = LOWER(g.keyword) AND a.bid IS NOT NULL ORDER BY a.date DESC LIMIT 1) AS rb
-         FROM kw_grow g WHERE g.case_id = ? AND g.mall = 'rakuten' ORDER BY g.added_on DESC`
+      `SELECT g.mall, g.external_id, g.keyword, g.campaign, g.ad_group, g.start_bid, g.bid, g.changed_on, g.added_on, g.added_by,
+              (SELECT COALESCE(SUM(a.clicks), 0) FROM daily_ads a WHERE ${match} AND a.date >= g.changed_on) AS clicks,
+              (SELECT COALESCE(SUM(a.orders), 0) FROM daily_ads a WHERE ${match} AND a.date >= g.changed_on) AS orders,
+              (SELECT COALESCE(SUM(a.cost), 0) FROM daily_ads a WHERE ${match} AND a.date >= g.changed_on) AS cost,
+              (SELECT a.bid || '|' || a.date FROM daily_ads a WHERE ${match} AND a.bid IS NOT NULL ORDER BY a.date DESC LIMIT 1) AS rb
+         FROM kw_grow g WHERE g.case_id = ? ORDER BY g.added_on DESC`
     ).bind(caseId).all<Record<string, string | number | null>>());
   } catch {
     return [];
@@ -227,7 +281,9 @@ export async function growRows(db: D1Database, caseId: string): Promise<GrowRow[
   return rows.map((r) => {
     const [rb, rd] = r.rb == null ? [null, null] : String(r.rb).split("|");
     return {
-      externalId: String(r.external_id), keyword: String(r.keyword), startBid: n(r.start_bid), bid: n(r.bid),
+      mall: r.mall === "amazon" ? "amazon" : "rakuten",
+      externalId: String(r.external_id), keyword: String(r.keyword), campaign: r.campaign == null ? null : String(r.campaign), adGroup: r.ad_group == null ? null : String(r.ad_group),
+      startBid: n(r.start_bid), bid: n(r.bid),
       changedOn: String(r.changed_on), addedOn: String(r.added_on), addedBy: r.added_by == null ? null : String(r.added_by),
       clicksSince: n(r.clicks), ordersSince: n(r.orders), costSince: n(r.cost),
       reportBid: rb == null ? null : n(rb), reportDate: rd ?? null, daysSince: daysBetween(String(r.changed_on), today),
