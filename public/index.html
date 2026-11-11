@@ -1291,7 +1291,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.27.2";
+  const UI_VERSION = "0.27.4";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -4190,14 +4190,14 @@
 
   /* ---------- 長い一覧をコピーできるセル ---------- */
   // 楽天の1つの商品ページに紐づく商品が多いと横に長くなるので、2件まで出して「ほか◯件」とし、全部はコピーで渡す
-  function productCell(p) {
-    if (!p) return "—";
+  function productCell(p, label) {
+    if (!p) return label ? "" : "—";
     const skus = String(p.sku || "").split(" / ").filter(Boolean);
     if (skus.length <= 2) return `<div class="prod-cell">${skus.map(esc).join("<br>")}</div>`;
     const names = String(p.name || "").split(" / ");
     const full = skus.map((x, i) => `${x}\t${names[i] ?? ""}`).join("\n");
     return `<div class="prod-cell">${skus.slice(0, 2).map(esc).join("<br>")}
-      <div class="note" style="margin-top:2px">ほか ${skus.length - 2}件（全 ${skus.length}件）
+      <div class="note" style="margin-top:2px">${label ? esc(label) + "：" : ""}ほか ${skus.length - 2}件（全 ${skus.length}件）
         <button type="button" class="act copy-btn" data-copy="${esc(full)}" title="${esc(skus.join("\n"))}">コピー</button></div></div>`;
   }
   async function copyText(text) {
@@ -4232,7 +4232,9 @@
         `${b.roas ?? "—"} ／ ${b.target.roas}<div class="note">${esc(POLICY_JA[b.target.policy])}</div>`,
         b.clicks, yen(b.cost), b.orders,
         `${mallTag(b.mall)} ${esc(b.campaign)}<div class="note">${esc(b.adGroup)}</div>`,
-        productCell(b.product),
+        b.mall === "rakuten" && b.externalId
+          ? `<div class="prod-cell"><span class="note">商品ページ</span> <strong>${esc(b.externalId)}</strong></div>${productCell(b.product, "この商品ページの SKU")}`
+          : productCell(b.product),
         esc(b.reason)],
       csv: ["操作", "モール", "広告の種類", "キャンペーン", "広告グループ", "キーワード・ターゲット", "マッチタイプ", "商品SKU", "クリック", "広告費", "注文", "売上", "ROAS", "目標ROAS", "今の入札", "基準", "提案入札", "理由"],
       csvRow: (b) => [ACT[b.action][1], MALL_JA[b.mall] || b.mall, b.adType || "", b.campaign, b.adGroup, b.keyword, b.matchType,
@@ -4390,6 +4392,15 @@
     });
   }
   const RPP_MIN_CPC = 40, RPP_MAX_CPC = 10000;
+  function loadSheetJS() {
+    if (window.XLSX) return Promise.resolve(window.XLSX);
+    return new Promise((ok, ng) => {
+      const sc = document.createElement("script");
+      sc.src = "/vendor/xlsx-0.18.5.mini.min.js";
+      sc.onload = () => ok(window.XLSX); sc.onerror = () => ng(new Error("Excel の読み込み部品を読み込めませんでした"));
+      document.head.appendChild(sc);
+    });
+  }
   $("btn-bulk-rak").addEventListener("click", async () => {
     if (!advData) return;
     const items = openAdvice("rakuten");
@@ -4440,12 +4451,18 @@
     const btn = $("btn-bulk-amz"); btn.disabled = true;
     $("bulk-msg").textContent = "読み込んでいます…";
     try {
-      const ExcelJS = await loadExcelJS();
-      const wb = new ExcelJS.Workbook();
-      await wb.xlsx.load(await bulkFile.arrayBuffer());
-      const ws = wb.worksheets.find((w) => /sponsored\s*products/i.test(w.name)) || wb.worksheets.find((w) => /スポンサー\s*プロダクト/.test(w.name));
-      if (!ws) { $("bulk-msg").innerHTML = `<span class="tag ng">読めません</span> スポンサープロダクトのシートが見つかりません（シート名：${esc(wb.worksheets.map((w) => w.name).join("、"))}）`; return; }
-      const header = ws.getRow(1).values.slice(1).map((v) => (v && v.richText ? v.richText.map((t) => t.text).join("") : v));
+      // 一括操作のファイルは検索語のデータなどで大きくなるので、スポンサープロダクトのシートだけを読む（SheetJS）
+      const XLSX = await loadSheetJS();
+      const buf = new Uint8Array(await bulkFile.arrayBuffer());
+      const names = XLSX.read(buf, { type: "array", bookSheets: true }).SheetNames || [];
+      const sheetName = names.find((n) => /^sponsored\s*products\s*campaigns?$/i.test(n)) || names.find((n) => /sponsored\s*products/i.test(n) && !/search\s*term|portfolio/i.test(n))
+        || names.find((n) => /スポンサー\s*プロダクト/.test(n));
+      if (!sheetName) { $("bulk-msg").innerHTML = `<span class="tag ng">読めません</span> スポンサープロダクトのシートが見つかりません（シート名：${esc(names.join("、"))}）`; return; }
+      $("bulk-msg").textContent = `「${sheetName}」を読み込んでいます…`;
+      const wbIn = XLSX.read(buf, { type: "array", sheets: [sheetName], dense: true, cellDates: false, cellStyles: false, cellHTML: false, cellFormula: false });
+      const ws = { name: sheetName };
+      const aoa = XLSX.utils.sheet_to_json(wbIn.Sheets[sheetName], { header: 1, raw: true, defval: null, blankrows: false });
+      const header = (aoa[0] || []).map((v) => (v == null ? "" : String(v)));
       // 列の位置：「(Informational only)」の付いた名前の列も、同じ名前の列が無ければ使う
       const idx = {};
       for (const [k, names] of Object.entries(COLS)) {
@@ -4466,8 +4483,7 @@
       }
       const cell = (row, k) => { const i = idx[k] >= 0 ? idx[k] : idx[k + "Info"]; if (i < 0) return ""; const v = row[i]; return v == null ? "" : String(v.text ?? v.result ?? v).trim(); };
       const nameOf = (row, k) => cell(row, k) || (idx[k + "Info"] >= 0 ? String(row[idx[k + "Info"]] ?? "").trim() : "");
-      const rows = [];
-      ws.eachRow((r, i) => { if (i > 1) rows.push(r.values.slice(1)); });
+      const rows = aoa.slice(1);
       const lc = (v) => String(v ?? "").trim().toLowerCase().replace(/\s+/g, " ");
       const campaigns = new Map(), groups = new Map(), kws = new Map(), targets = new Map();
       for (const r of rows) {
@@ -4521,12 +4537,13 @@
         $("bulk-msg").innerHTML = `<span class="tag warn">反映できる行がありません</span>${skipped.length ? `<br>${skipped.slice(0, 8).map(esc).join("<br>")}` : ""}`;
         return;
       }
-      const nb = new ExcelJS.Workbook();
-      const sh = nb.addWorksheet(ws.name);
-      sh.addRow(header);
-      out.forEach((r) => sh.addRow(r));
-      const buf = await nb.xlsx.writeBuffer();
-      download(`Amazon一括_${caseName()}_${jstDay(0)}.xlsx`, new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+      // ID は数字の桁落ちを避けるため文字として書く
+      const idCols = ["campaignId", "adGroupId", "keywordId", "targetId"].map((k) => idx[k]).filter((i) => i >= 0);
+      const outAoa = [header, ...out.map((r) => r.map((v, i) => (v != null && idCols.includes(i) ? String(v) : v)))];
+      const nb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(nb, XLSX.utils.aoa_to_sheet(outAoa), ws.name);
+      const outBuf = XLSX.write(nb, { type: "array", bookType: "xlsx" });
+      download(`Amazon一括_${caseName()}_${jstDay(0)}.xlsx`, new Blob([outBuf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
       $("bulk-msg").innerHTML = `<span class="tag ok">作りました</span> ${out.length}行（入札・除外・追加・予算）。広告コンソールの「一括操作」でアップロードしてください。アップロード後の結果（エラーの行）も確認してください。`
         + (skipped.length ? `<details style="margin-top:4px"><summary style="cursor:pointer">ファイルに入れられなかった提案（${skipped.length}件・手で反映）</summary>${skipped.map(esc).join("<br>")}</details>` : "");
       showBulkDone(done);
