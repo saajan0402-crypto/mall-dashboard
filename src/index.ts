@@ -35,6 +35,7 @@ import { buildAdAdvice } from "./adAdvice";
 import { renderCaseMarkdown } from "./caseReport";
 import { renderAdsMarkdown, adsPrompt } from "./adsReport";
 import { listWatch, addWatch, removeWatch, keywordOverview, keywordDetail, snapshotKeyword, refreshAmazonReco, pumpKeywords, kwKey } from "./kwDiscovery";
+import { addPlan, removePlan, resolvePlans, finishPlan, growBidChanged } from "./kwPlan";
 import { queueAiReport, listAiReports, aiMode, pumpAi } from "./aiAnalysis";
 import { postSlack, listCaseSlack, saveCaseSlack } from "./slack";
 import { sendDailySummaries } from "./dailySummary";
@@ -47,7 +48,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.28.4";
+const APP_VERSION = "0.29.0";
 
 export interface Env {
   DB: D1Database;
@@ -592,7 +593,9 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       "SELECT key, status, updated_by, updated_at FROM todo_status WHERE case_id = ? AND key LIKE 'adv:%' AND status <> 'open'"
     ).bind(caseId).all<{ key: string; status: string; updated_by: string | null; updated_at: string | null }>();
     const statuses = Object.fromEntries(advSt.map((r) => [r.key, { status: r.status, by: r.updated_by, at: r.updated_at }]));
-    return json({ ...(await buildAdAdvice(env.DB, caseId, am)), adMargin: am, statuses });
+    // キーワード発見で「一括に入れる」にしたもの（一括ファイルに追加の行として入る）
+    const kwPlans = await resolvePlans(env.DB, caseId).catch(() => []);
+    return json({ ...(await buildAdAdvice(env.DB, caseId, am)), adMargin: am, statuses, kwPlans });
   }
 
   if (path === "/api/dashboard") {
@@ -677,14 +680,29 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
   }
   // 候補を「追加した」「見送る」「元に戻す」。追加したものは要対応の状態と同じ記録に残し、対応の記録・レポートに出す
   if (path === "/api/keywords/status" && req.method === "POST") {
-    const b = (await req.json()) as { caseId?: string; mall?: string; keyword?: string; status?: "done" | "skip" | "open"; source?: string };
+    const b = (await req.json()) as { caseId?: string; mall?: string; keyword?: string; status?: "done" | "skip" | "open"; source?: string;
+      /** 一括ファイルで書き出したとき：楽天の行（育成中に入れる） */
+      rows?: Array<{ externalId: string; cpc: number }>; bid?: number | null; via?: "bulk" };
     if (!b.caseId || !b.keyword || !b.mall || !["done", "skip", "open"].includes(b.status ?? "")) return json({ error: "案件・モール・キーワード・状態を指定してください" }, 400);
     const mallJa = b.mall === "rakuten" ? "楽天RPP" : "Amazon広告";
     const kw = b.keyword.normalize("NFKC").trim();
-    const text = b.status === "skip" ? `${mallJa}のキーワード候補「${kw}」を見送り` : `${mallJa}に新しいキーワード「${kw}」を追加`;
+    const bidTxt = b.via === "bulk" ? (b.rows?.length ? `（入札 ${[...new Set(b.rows.map((r) => `¥${Math.round(Number(r.cpc)).toLocaleString("ja-JP")}`))].join("・")}${b.rows.length > 1 ? `・${b.rows.length}商品` : ""}）`
+      : b.bid ? `（入札 ¥${Math.round(b.bid).toLocaleString("ja-JP")}）` : "") : "";
+    const text = b.status === "skip" ? `${mallJa}のキーワード候補「${kw}」を見送り` : `${mallJa}に新しいキーワード「${kw}」を追加${bidTxt}`;
     await setTodoStatus(env.DB, b.caseId, { key: kwKey(b.mall, kw), status: b.status!, text, basis: b.source ? `候補の出どころ：${b.source}` : null,
       area: "広告", priority: "mid" }, viewer(req));
+    // 一括待ちから外す。一括ファイルで書き出した楽天のキーワードは「育成中」に入れる
+    if (b.status === "done") await finishPlan(env.DB, b.caseId, b.mall, kw, b.via === "bulk" ? b.rows : undefined, viewer(req));
+    else await removePlan(env.DB, b.caseId, b.mall, kw);
     return json({ ok: true });
+  }
+  // 候補を「一括に入れる」／外す（広告タブの一括ファイルに追加の行として入る）
+  if (path === "/api/keywords/plan" && req.method === "POST") {
+    const b = (await req.json()) as { caseId?: string; mall?: string; keyword?: string; source?: string; pids?: string[]; action?: "add" | "remove" };
+    if (!b.caseId || !b.keyword || !["amazon", "rakuten"].includes(b.mall ?? "")) return json({ error: "案件・モール・キーワードを指定してください" }, 400);
+    if (b.action === "remove") await removePlan(env.DB, b.caseId, b.mall!, b.keyword);
+    else await addPlan(env.DB, b.caseId, { mall: b.mall!, keyword: b.keyword, source: b.source ?? null, productIds: Array.isArray(b.pids) ? b.pids.map(String) : [] }, viewer(req));
+    return json({ ok: true, plans: await resolvePlans(env.DB, b.caseId) });
   }
   if (path === "/api/keywords/reco" && req.method === "POST") {
     const b = (await req.json()) as { caseId?: string };
@@ -995,11 +1013,14 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
 
   if (path === "/api/todo" && req.method === "POST") {
     const b = (await req.json()) as { caseId?: string; key?: string; status?: TodoStatus; text?: string; basis?: string;
-      area?: string; priority?: string; note?: string };
+      area?: string; priority?: string; note?: string;
+      /** 楽天の育成中のキーワードの入札を上げたとき（一括ファイルを対応済みにした） */
+      grow?: { externalId: string; keyword: string; bid: number } };
     if (!b.caseId || !b.key || !b.status) return json({ error: "案件・項目・状態を指定してください" }, 400);
     try {
       await setTodoStatus(env.DB, b.caseId, { key: b.key, status: b.status, text: b.text, basis: b.basis ?? null,
         area: b.area, priority: b.priority, note: b.note?.trim() || null }, viewer(req));
+      if (b.grow && b.status === "done") await growBidChanged(env.DB, b.caseId, String(b.grow.externalId), String(b.grow.keyword), Number(b.grow.bid));
       return json({ ok: true, status: b.status, label: STATUS_JA[b.status] });
     } catch (e) {
       return json({ error: String(e instanceof Error ? e.message : e) }, 400);

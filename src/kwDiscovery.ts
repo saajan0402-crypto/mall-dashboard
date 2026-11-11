@@ -12,6 +12,7 @@
  */
 
 import { readCreds, type ConnEnv } from "./connections";
+import { kwKey, resolvePlans, growRows } from "./kwPlan";
 import { accessToken, adsAccessToken, adsapi, spapi, errorMessage, JP_MARKETPLACE, type LwaEnv } from "./amazon";
 
 export interface KwEnv extends ConnEnv, LwaEnv {
@@ -286,13 +287,14 @@ export async function pumpKeywords(env: KwEnv, opts: { budgetMs?: number } = {})
 export interface KwCandidate {
   mall: "amazon" | "rakuten";
   keyword: string; source: string; products: string | null;
+  /** 関連商品の ID（一括に入れるとき、入れる先の広告グループ・楽天の商品ページを決めるのに使う） */
+  pids: string[];
   rank: number | null; bid: number | null; bidRange: string | null; impShare: number | null;
   orders: number; sales: number; cost: number; roas: number | null; watched: boolean;
 }
 export interface KwDecision { mall: string; keyword: string; status: "done" | "skip"; by: string | null; at: string | null; title: string | null }
 
-/** 候補を「追加した」「見送る」にしたときの鍵（要対応の状態と同じ仕組みに載せ、対応の記録・レポートに出す） */
-export const kwKey = (mall: string, keyword: string) => `kw_added:${mall}:${keyword.normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " ")}`;
+export { kwKey };
 
 export async function keywordOverview(db: D1Database, caseId: string) {
   const since = jstDay(60);
@@ -317,7 +319,8 @@ export async function keywordOverview(db: D1Database, caseId: string) {
 
   const { results: reco } = await db.prepare(
     `SELECT r.keyword, MIN(r.rank) AS rank, MAX(r.bid_median) AS bid, MIN(r.bid_low) AS bid_low, MAX(r.bid_high) AS bid_high,
-            MAX(r.imp_share) AS imp_share, MIN(r.imp_rank) AS imp_rank, GROUP_CONCAT(DISTINCT p.name) AS products, COUNT(DISTINCT r.product_id) AS np
+            MAX(r.imp_share) AS imp_share, MIN(r.imp_rank) AS imp_rank, GROUP_CONCAT(DISTINCT p.name) AS products, COUNT(DISTINCT r.product_id) AS np,
+            GROUP_CONCAT(DISTINCT r.product_id) AS pids
        FROM kw_reco r LEFT JOIN products p ON p.id = r.product_id WHERE r.case_id = ?
       GROUP BY LOWER(r.keyword) ORDER BY np DESC, rank ASC LIMIT 200`
   ).bind(caseId).all<Record<string, string | number | null>>();
@@ -329,6 +332,30 @@ export async function keywordOverview(db: D1Database, caseId: string) {
       GROUP BY LOWER(search_term) HAVING SUM(orders) > 0 ORDER BY SUM(sales) DESC LIMIT 100`
   ).bind(caseId, since).all<Record<string, string | number>>();
 
+  // 検索語が出た広告グループの商品（関連商品として出し、一括に入れるときの入れる先にする）
+  const termProducts = new Map<string, Array<{ id: string; name: string; orders: number }>>();
+  {
+    const { results: tp } = await db.prepare(
+      `SELECT LOWER(st.search_term) AS k, g.product_id AS id, p.name AS name, SUM(st.orders) AS orders
+         FROM daily_search_terms st
+         JOIN (SELECT DISTINCT campaign, ad_group, product_id FROM daily_ads
+                WHERE case_id = ?1 AND mall = 'amazon' AND level = 'product' AND date >= ?2 AND product_id IS NOT NULL) g
+           ON g.campaign = st.campaign AND g.ad_group = st.ad_group
+         JOIN products p ON p.id = g.product_id
+        WHERE st.case_id = ?1 AND st.date >= ?2 AND st.orders > 0
+        GROUP BY LOWER(st.search_term), g.product_id ORDER BY orders DESC`
+    ).bind(caseId, since).all<{ k: string; id: string; name: string; orders: number }>();
+    for (const r of tp) {
+      const a = termProducts.get(r.k.trim()) ?? [];
+      if (a.length < 3) a.push({ id: r.id, name: r.name, orders: n(r.orders) });
+      termProducts.set(r.k.trim(), a);
+    }
+  }
+  // 一括に入れる予定のもの（候補の一覧から外し、「一括待ち」に出す）
+  const plans = await resolvePlans(db, caseId).catch(() => []);
+  const planned = new Set(plans.map((p) => p.key));
+  const grow = await growRows(db, caseId);
+
   // 楽天に出店している案件か（楽天RPPのキーワードがある、または楽天の接続がある）
   const rk = await db.prepare(
     `SELECT (SELECT COUNT(*) FROM case_malls WHERE case_id = ?1 AND mall = 'rakuten' AND credentials_enc IS NOT NULL)
@@ -336,13 +363,18 @@ export async function keywordOverview(db: D1Database, caseId: string) {
   ).bind(caseId).first<{ n: number }>();
   const malls: Array<"amazon" | "rakuten"> = n(rk?.n) > 0 ? ["amazon", "rakuten"] : ["amazon"];
 
-  const fromTerm = (mall: "amazon" | "rakuten", t: Record<string, string | number>): KwCandidate => ({
-    mall, keyword: String(t.keyword), source: mall === "amazon" ? "検索語で売上あり" : "Amazon で売れた語", products: null,
+  const fromTerm = (mall: "amazon" | "rakuten", t: Record<string, string | number>): KwCandidate => {
+    const tp = termProducts.get(String(t.keyword).toLowerCase().trim()) ?? [];
+    return {
+    mall, keyword: String(t.keyword), source: mall === "amazon" ? "検索語で売上あり" : "Amazon で売れた語",
+    products: tp.length ? tp.map((x) => x.name).join(",") : null, pids: tp.map((x) => x.id),
     rank: null, bid: null, bidRange: null, impShare: null,
     orders: n(t.orders), sales: n(t.sales), cost: n(t.cost), roas: n(t.cost) ? Math.round((n(t.sales) / n(t.cost)) * 100) / 100 : null,
-    watched: wset.has(String(t.keyword).toLowerCase()) });
+    watched: wset.has(String(t.keyword).toLowerCase()) };
+  };
   const fromReco = (mall: "amazon" | "rakuten", r: Record<string, string | number | null>): KwCandidate => ({
     mall, keyword: String(r.keyword), source: "Amazon の推奨", products: r.products == null ? null : String(r.products),
+    pids: r.pids == null ? [] : String(r.pids).split(",").filter(Boolean).slice(0, 10),
     rank: r.rank == null ? null : n(r.rank),
     // 推奨入札は Amazon の値なので、楽天RPPの候補には出さない
     bid: mall === "amazon" && r.bid != null ? n(r.bid) : null,
@@ -353,7 +385,7 @@ export async function keywordOverview(db: D1Database, caseId: string) {
   const candidates: KwCandidate[] = [];
   for (const mall of malls) {
     const tg = tset[mall] ?? new Set<string>();
-    const open = (k: string) => !tg.has(k.toLowerCase().trim()) && !decided.has(kwKey(mall, k));
+    const open = (k: string) => !tg.has(k.toLowerCase().trim()) && !decided.has(kwKey(mall, k)) && !planned.has(kwKey(mall, k));
     const seen = new Set<string>();
     for (const c of [...terms.filter((t) => open(String(t.keyword))).map((t) => fromTerm(mall, t)),
                      ...reco.filter((r) => open(String(r.keyword))).map((r) => fromReco(mall, r))]) {
@@ -366,7 +398,7 @@ export async function keywordOverview(db: D1Database, caseId: string) {
 
   const recoAt = JSON.parse((await getFlag(db, `kw_reco_at:${caseId}`)) ?? "null");
   const lastError = JSON.parse((await getFlag(db, `kw_error:${caseId}`)) ?? "null");
-  return { watch, malls, candidates: candidates.slice(0, 300), decisions, recoAt, lastError };
+  return { watch, malls, candidates: candidates.slice(0, 300), decisions, plans, grow, recoAt, lastError };
 }
 
 /** 監視キーワード1つの最新の検索結果と、自社の順位の推移 */

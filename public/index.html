@@ -782,7 +782,8 @@
         </div>
         <div class="bulk-box">
           <strong style="font-size:13px">一括で反映するファイル</strong>
-          <span class="note">対応済み・今はしないにしていない提案（全タブ）をまとめます</span>
+          <span class="note">対応済み・今はしないにしていない提案（全タブ）と、キーワード発見の「一括待ち」をまとめます</span>
+          <div class="note" id="bulk-plans" style="margin-top:4px"></div>
           <div class="btns" style="margin-top:8px">
             <label class="act file-pick" for="bulk-amz-file"><span aria-hidden="true">①</span> Amazon の一括操作ファイルを選ぶ</label>
             <input type="file" id="bulk-amz-file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="visually-hidden">
@@ -921,7 +922,7 @@
         <div class="btns" style="margin-top:0">
           <span class="seg" id="kw-mall"></span>
           <span class="seg" id="kw-view">
-            <button data-view="open" aria-pressed="true">候補</button><button data-view="done" aria-pressed="false">追加済み</button><button data-view="skip" aria-pressed="false">見送り</button>
+            <button data-view="open" aria-pressed="true">候補</button><button data-view="plan" aria-pressed="false">一括待ち</button><button data-view="done" aria-pressed="false">追加済み</button><button data-view="grow" aria-pressed="false">育成中</button><button data-view="skip" aria-pressed="false">見送り</button>
           </span>
           <span class="seg" id="kw-src"></span>
         </div>
@@ -933,7 +934,9 @@
           <colgroup id="kw-cols"></colgroup>
           <thead id="kw-head"></thead>
           <tbody id="kw-cands"></tbody></table></div>
-        <p class="note" style="margin-top:8px">入札を追加したら「追加した」を押してください。<strong>追加済み</strong>に移り、ダッシュボードの「対応の記録」とレポートの「対応したこと」に載ります。関係ない語は「見送る」で候補から外せます（どちらも元に戻せます）。<br>
+        <p class="note" style="margin-top:8px"><strong>一括に入れる</strong>：<strong>一括待ち</strong>に移り、広告タブの「一括で反映するファイル」（Amazon の一括操作・楽天RPP のキーワード一括登録）に追加の行として入ります。書き出して「対応済み」にすると<strong>追加済み</strong>に移り、ダッシュボードの「対応の記録」とレポートの「対応したこと」に載ります。
+          手で入札を追加したときは「追加した」を押してください。関係ない語は「見送る」で候補から外せます（どれも元に戻せます）。<br>
+          <strong>入札</strong>：Amazon は推奨入札（中央）、無ければ検索語のクリック単価。楽天は暴発しないよう低めに入れます（その商品ページの既存キーワードの入札の中央値の70%・下限40円）。楽天で一括から追加したキーワードは<strong>育成中</strong>に入り、14日たってもクリックが10未満なら広告タブの入札の見直しに「+20%」が出ます（上限は損益分岐CPC）。<br>
           <strong>Amazon</strong>：「検索語で売上あり」は、自動ターゲティングや部分一致で売れたのに、キーワードとしてはまだ入札していない語です（直近60日）。
           <strong>楽天</strong>：楽天には検索語のレポートが無いので、Amazon で売れた語・Amazon の推奨のうち、楽天RPPでまだ入札していない語を出します（推奨入札は Amazon の値なので出しません）。<br>
           「Amazon の推奨」は、広告 API が自社 ASIN ごとに勧めるキーワードで、週に1回取り直します。推奨入札は太字が中央値、下が範囲です。気になる語は「監視する」で、競合と自社の順位を毎日記録できます。</p>
@@ -1323,7 +1326,7 @@
     // 見出しでモールが分かるので、文の頭のモール名は外す
     return m === "amazon" ? base.replace(/^Amazon\s*/i, "") : m === "rakuten" ? base.replace(/^楽天\s*/, "") : base;
   }
-  const UI_VERSION = "0.28.4";
+  const UI_VERSION = "0.29.0";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -4285,7 +4288,7 @@
     bids: {
       head: ["操作", "キーワード・ターゲット", "入札（今 → 提案）", "ROAS／目標", "クリック", "広告費", "注文", "キャンペーン／広告グループ", "商品", "理由"],
       row: (b) => [`<span class="tag ${ACT[b.action][0]}">${ACT[b.action][1]}</span>`,
-        `<strong>${esc(b.keyword)}</strong>${b.matchType ? `<div class="note">${esc(b.matchType)}</div>` : ""}`,
+        `<strong>${esc(b.keyword)}</strong>${b.grow ? ` <span class="tag pill-a">育成中</span>` : ""}${b.matchType ? `<div class="note">${esc(b.matchType)}</div>` : ""}`,
         `${yen(b.currentBid ?? b.cpc)} → <strong>${yen(b.suggestedBid)}</strong>
           <div class="note">${b.basis === "入札" ? "今の入札から" : "平均CPCから"}${b.suggestedCpc ? `・目安CPC ${yen(b.suggestedCpc)}` : ""}</div>`,
         `${b.roas ?? "—"} ／ ${b.target.roas}<div class="note">${esc(POLICY_JA[b.target.policy])}</div>`,
@@ -4400,7 +4403,8 @@
       if (!x) continue;
       await fetch("/api/todo", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ caseId: $("ads-case").value, key, status, text: advText(kind, x), area: "広告", priority: "mid",
-          basis: kind === "bids" ? x.reason : x.reason || null }) });
+          basis: kind === "bids" ? x.reason : x.reason || null,
+          grow: x.grow ? { externalId: x.grow.externalId, keyword: x.grow.keyword, bid: x.suggestedBid } : undefined }) });
       if (status === "open") delete advData.statuses[key];
       else advData.statuses[key] = { status, by: null, at: new Date().toISOString() };
     }
@@ -4419,16 +4423,30 @@
     for (const k of Object.keys(ADV_KIND)) for (const x of (advData[k] || [])) if (!st[x.key] && x.mall === mall) out.push([k, x]);
     return out;
   }
-  let bulkExported = [];
-  function showBulkDone(keys) {
-    bulkExported = keys;
-    $("btn-bulk-done").classList.toggle("hidden", !keys.length);
-    $("btn-bulk-done").textContent = `書き出した ${keys.length}件を対応済みにする`;
+  /** キーワード発見で「一括に入れる」にしたもの（モールごと） */
+  const plansFor = (mall) => ((advData && advData.kwPlans) || []).filter((p) => p.mall === mall);
+  let bulkExported = [], bulkExportedKw = [];
+  function showBulkDone(keys, kws = []) {
+    bulkExported = keys; bulkExportedKw = kws;
+    const tot = keys.length + kws.length;
+    $("btn-bulk-done").classList.toggle("hidden", !tot);
+    $("btn-bulk-done").textContent = `書き出した ${tot}件を対応済みにする`;
   }
   $("btn-bulk-done").addEventListener("click", async () => {
-    if (!bulkExported.length) return;
+    const tot = bulkExported.length + bulkExportedKw.length;
+    if (!tot) return;
     $("btn-bulk-done").disabled = true;
-    try { await setAdvStatus(bulkExported, "done"); $("bulk-msg").innerHTML = `<span class="tag ok">対応済みにしました</span> ${bulkExported.length}件`; showBulkDone([]); }
+    try {
+      if (bulkExported.length) await setAdvStatus(bulkExported, "done");
+      // キーワード発見の追加：追加済みにする（楽天は育成中に入る）
+      for (const k of bulkExportedKw) {
+        await fetch("/api/keywords/status", { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ caseId: $("ads-case").value, mall: k.mall, keyword: k.keyword, status: "done", source: k.source, via: "bulk", rows: k.rows, bid: k.bid }) });
+      }
+      $("bulk-msg").innerHTML = `<span class="tag ok">対応済みにしました</span> ${tot}件${bulkExportedKw.length ? `（うちキーワード発見の追加 ${bulkExportedKw.length}件）` : ""}`;
+      showBulkDone([]);
+      if (bulkExportedKw.length) await loadAdvice();
+    }
     finally { $("btn-bulk-done").disabled = false; }
   });
   function download(name, blob) {
@@ -4463,8 +4481,16 @@
   $("btn-bulk-rak").addEventListener("click", async () => {
     if (!advData) return;
     const items = openAdvice("rakuten");
-    if (!items.length) { $("bulk-msg").textContent = "楽天の未対応の提案はありません"; return; }
-    const lines = [], done = [], manual = [];
+    const plans = plansFor("rakuten");
+    if (!items.length && !plans.length) { $("bulk-msg").textContent = "楽天の未対応の提案・一括待ちのキーワードはありません"; return; }
+    const lines = [], done = [], manual = [], doneKw = [];
+    // キーワード発見の追加：商品ページごとに n（新規）行。入札は低め（既存キーワードの中央値の70%）
+    for (const p of plans) {
+      if (!p.rows || !p.rows.length) { manual.push(`楽天「${p.keyword}」をキーワードに追加（${p.problem || "商品ページが分からない"}）`); continue; }
+      for (const r of p.rows) lines.push(["n", r.externalId, p.keyword, Math.min(RPP_MAX_CPC, Math.max(RPP_MIN_CPC, Math.round(r.cpc)))]);
+      doneKw.push({ mall: "rakuten", keyword: p.keyword, source: p.source, rows: p.rows.map((r) => ({ externalId: r.externalId, cpc: r.cpc })) });
+    }
+    const nNew = lines.length;
     for (const [k, x] of items) {
       if (k !== "bids") { manual.push(`${advText(k, x)}（${k === "budgets" ? "予算は RPP の管理画面で変更" : "楽天では一括登録できない"}）`); continue; }
       if (!x.externalId) { manual.push(`${advText(k, x)}（商品管理番号が分からない）`); continue; }
@@ -4485,10 +4511,10 @@
       $("bulk-msg").innerHTML = `<span class="tag ng">失敗しました</span> ${esc(String(err && err.message || err))}`;
       return;
     }
-    $("bulk-msg").innerHTML = `<span class="tag ok">作りました</span> 楽天 ${lines.length}行（キーワードCPC の変更）。RPP の管理画面の「キーワード一括登録」でアップロードしてください。`
+    $("bulk-msg").innerHTML = `<span class="tag ok">作りました</span> 楽天 ${lines.length}行（${[nNew ? `新しいキーワード ${nNew}行` : "", lines.length - nNew ? `キーワードCPC の変更 ${lines.length - nNew}行` : ""].filter(Boolean).join("・")}）。RPP の管理画面の「キーワード一括登録」でアップロードしてください。`
       + `<br><span class="note">キーワードCPC は ${RPP_MIN_CPC}円〜${RPP_MAX_CPC.toLocaleString("ja-JP")}円の範囲にそろえています。</span>`
       + (manual.length ? `<details style="margin-top:4px"><summary style="cursor:pointer">一括登録に入れられなかった提案（${manual.length}件・手で反映）</summary>${manual.map(esc).join("<br>")}</details>` : "");
-    showBulkDone(done);
+    showBulkDone(done, doneKw);
   });
 
 
@@ -4609,7 +4635,7 @@
       const iCtl = ci("コントロールカラム"), iNum = ci("商品管理番号"), iKw = ci("キーワード"), iCpc = ci("キーワードCPC");
       if ([iCtl, iNum, iKw, iCpc].some((i) => i < 0)) throw new Error("RPP のキーワード一括登録の CSV ではないようです（見出し：" + head.join(" / ") + "）");
       const rows = lines.slice(1).map(parseCsvLine).filter((r) => /^[nu]$/i.test(r[iCtl] || ""))
-        .map((r) => ({ manage: r[iNum], keyword: r[iKw], cpc: Number(r[iCpc]) }));
+        .map((r) => ({ manage: r[iNum], keyword: r[iKw], cpc: Number(r[iCpc]), ctl: String(r[iCtl]).toLowerCase() }));
       if (!rows.length) throw new Error("新規（n）・変更（u）の行がありません");
       const r = await fetch("/api/ads/rpp-check", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ caseId: $("ads-case").value || currentCase, rows }) });
@@ -4618,7 +4644,9 @@
       // CSV を作った日（ファイルの更新日）より後のレポートが届いていなければ「まだ」
       const made = new Date(chkRpp.lastModified + 9 * 3600000).toISOString().slice(0, 10);
       const res = d.rows.map((x) => {
-        if (x.latestDate == null) return ["miss", x, "RPP のレポートにこのキーワードが見つからない"];
+        if (x.latestDate == null) return x.ctl === "n"
+          ? ["wait", x, "新しく追加したキーワードは、クリックが出るまでレポートに載らないことがあります。RPP の管理画面の商品のキーワード一覧で登録を確認してください"]
+          : ["miss", x, "RPP のレポートにこのキーワードが見つからない"];
         if (x.latestDate < made) return ["wait", x, `まだ反映後のレポートが届いていない（最新 ${x.latestDate}。翌日12時ごろに届きます）`];
         // アップロードした当日のレポートは、変更前の CPC のことがある。違っていれば翌日分を待つ
         if (x.latestDate === made && Number(x.latestBid) !== Number(x.cpc)) return ["wait", x, "当日のレポートは変更前の値のことがあります。翌日分のレポートで確かめます"];
@@ -4693,22 +4721,25 @@
       const lc = (v) => String(v ?? "").trim().toLowerCase().replace(/\s+/g, " ");
       const campaigns = new Map(), groups = new Map(), kws = new Map(), targets = new Map();
       const exactAnywhere = new Map();   // 完全一致のキーワード → 登録されている場所（どの広告グループ・状態）
+      const kwGroups = new Set(), ptGroups = new Set();   // キーワードの広告グループ／商品ターゲティングの広告グループ
       for (const r of rows) {
         const ent = lc(cell(r, "entity")), cn = nameOf(r, "campaignName"), gn = nameOf(r, "adGroupName");
         if (ent === "campaign") campaigns.set(lc(cn), r);
         else if (ent === "ad group") groups.set(`${lc(cn)}\u0000${lc(gn)}`, r);
         else if (ent === "keyword") {
           kws.set(`${lc(cn)}\u0000${lc(gn)}\u0000${lc(cell(r, "keyword"))}\u0000${lc(cell(r, "match"))}`, r);
+          kwGroups.add(`${lc(cn)}\u0000${lc(gn)}`);
           if (lc(cell(r, "match")) === "exact" && !exactAnywhere.has(lc(cell(r, "keyword")))) exactAnywhere.set(lc(cell(r, "keyword")), { cn, gn, state: lc(cell(r, "state")) });
         }
-        else if (ent === "product targeting") targets.set(`${lc(cn)}\u0000${lc(gn)}\u0000${lc(cell(r, "expr"))}`, r);
+        else if (ent === "product targeting") { targets.set(`${lc(cn)}\u0000${lc(gn)}\u0000${lc(cell(r, "expr"))}`, r); ptGroups.add(`${lc(cn)}\u0000${lc(gn)}`); }
       }
       if (!campaigns.size && !kws.size) { $("bulk-msg").innerHTML = `<span class="tag ng">読めません</span> キャンペーン・キーワードの行がありません。英語のファイルか確認してください`; return; }
 
       const width = header.length;
       const blank = () => new Array(width).fill(null);
       const set = (arr, k, v) => { if (idx[k] >= 0) arr[idx[k]] = v; };
-      const out = [], done = [], skipped = [];
+      const out = [], done = [], skipped = [], doneKw = [];
+      const createdNow = new Set();   // このファイルで作る完全一致キーワード（追加キーワードとキーワード発見で同じ語を二重に作らない）
       const copyUpdate = (src) => { const a = src.slice(0, width); while (a.length < width) a.push(null); set(a, "operation", "Update"); return a; };
       for (const [kind, x] of openAdvice("amazon")) {
         if (x.adType && x.adType !== "sp") { skipped.push(`${advText(kind, x)}（スポンサーブランドは対象外）`); continue; }
@@ -4738,11 +4769,12 @@
             done.push(x.key);   // 登録済みなので、対応済みに含める
             continue;
           }
+          if (x.kind !== "product" && createdNow.has(lc(x.searchTerm))) { done.push(x.key); continue; }
           const a = blank();
           set(a, "product", "Sponsored Products"); set(a, "operation", "Create"); set(a, "state", "enabled");
           set(a, "campaignId", cell(g, "campaignId")); set(a, "adGroupId", cell(g, "adGroupId")); set(a, "bid", x.suggestedBid);
           if (x.kind === "product") { set(a, "entity", "Product Targeting"); set(a, "expr", `asin="${x.searchTerm.toUpperCase()}"`); }
-          else { set(a, "entity", "Keyword"); set(a, "keyword", x.searchTerm); set(a, "match", "exact"); }
+          else { set(a, "entity", "Keyword"); set(a, "keyword", x.searchTerm); set(a, "match", "exact"); createdNow.add(lc(x.searchTerm)); }
           out.push(a); done.push(x.key);
         } else if (kind === "budgets") {
           const c = campaigns.get(lc(x.campaign));
@@ -4750,7 +4782,32 @@
           const a = copyUpdate(c); set(a, "budget", x.suggestedBudget); out.push(a); done.push(x.key);
         }
       }
+      // キーワード発見の追加：関連商品の広告グループのうち、手動ターゲティングでキーワードを入れている広告グループに完全一致で作る
+      for (const p of plansFor("amazon")) {
+        const label = `Amazon「${p.keyword}」を完全一致キーワードで追加${p.bid != null ? `（入札 ${yen(p.bid)}）` : ""}`;
+        const ex = exactAnywhere.get(lc(p.keyword));
+        if (ex) {
+          skipped.push(`${label}（すでに「${ex.cn}／${ex.gn}」に完全一致で登録済み${ex.state && ex.state !== "enabled" ? "・状態：" + ex.state + "。再開するかは手で判断" : ""}）`);
+          doneKw.push({ mall: "amazon", keyword: p.keyword, source: p.source, bid: null });
+          continue;
+        }
+        if (createdNow.has(lc(p.keyword))) { doneKw.push({ mall: "amazon", keyword: p.keyword, source: p.source, bid: p.bid }); continue; }
+        if (p.bid == null) { skipped.push(`${label}（入札を決められない。手で入れてください）`); continue; }
+        const isManual = (c) => { const row = campaigns.get(lc(c)); return row && lc(cell(row, "targetingType")) === "manual"; };
+        const cands = (p.groups || []).map((x) => ({ ...x, k: `${lc(x.campaign)}\u0000${lc(x.adGroup)}` }))
+          .filter((x) => groups.has(x.k) && isManual(x.campaign) && !ptGroups.has(x.k));
+        const pick = cands.find((x) => kwGroups.has(x.k)) || cands[0];
+        if (!pick) { skipped.push(`${label}（関連商品の手動キャンペーン（キーワード）の広告グループがファイルに無い。入れる先を手で決めてください）`); continue; }
+        const g = groups.get(pick.k);
+        const a = blank();
+        set(a, "product", "Sponsored Products"); set(a, "operation", "Create"); set(a, "state", "enabled");
+        set(a, "campaignId", cell(g, "campaignId")); set(a, "adGroupId", cell(g, "adGroupId")); set(a, "bid", p.bid);
+        set(a, "entity", "Keyword"); set(a, "keyword", p.keyword); set(a, "match", "exact");
+        createdNow.add(lc(p.keyword));
+        out.push(a); doneKw.push({ mall: "amazon", keyword: p.keyword, source: p.source, bid: p.bid });
+      }
       if (!out.length) {
+        if (doneKw.length) showBulkDone(done, doneKw);
         $("bulk-msg").innerHTML = `<span class="tag warn">反映できる行がありません</span>${skipped.length ? `<br>${skipped.slice(0, 8).map(esc).join("<br>")}` : ""}`;
         return;
       }
@@ -4761,9 +4818,9 @@
       XLSX.utils.book_append_sheet(nb, XLSX.utils.aoa_to_sheet(outAoa), ws.name);
       const outBuf = XLSX.write(nb, { type: "array", bookType: "xlsx" });
       download(`Amazon一括_${caseName()}_${jstDay(0)}.xlsx`, new Blob([outBuf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
-      $("bulk-msg").innerHTML = `<span class="tag ok">作りました</span> ${out.length}行（入札・除外・追加・予算）。広告コンソールの「一括操作」でアップロードしてください。アップロード後の結果（エラーの行）も確認してください。`
+      $("bulk-msg").innerHTML = `<span class="tag ok">作りました</span> ${out.length}行（入札・除外・追加・予算${doneKw.length ? "・キーワード発見の追加" : ""}）。広告コンソールの「一括操作」でアップロードしてください。アップロード後の結果（エラーの行）も確認してください。`
         + (skipped.length ? `<details style="margin-top:4px"><summary style="cursor:pointer">ファイルに入れられなかった提案（${skipped.length}件・手で反映）</summary>${skipped.map(esc).join("<br>")}</details>` : "");
-      showBulkDone(done);
+      showBulkDone(done, doneKw);
     } catch (err) {
       $("bulk-msg").innerHTML = `<span class="tag ng">失敗しました</span> ${esc(String(err && err.message || err))}`;
     } finally { btn.disabled = !bulkFile; }
@@ -4776,6 +4833,10 @@
     advData = await get(`/api/ads/advice?case_id=${encodeURIComponent(caseId)}&${rangeQS()}`);
     $("adv-msg").textContent = advData.error || "";
     if (!advData.error) renderAdvice();
+    const pc = (m) => ((advData && advData.kwPlans) || []).filter((p) => p.mall === m).length;
+    $("bulk-plans").innerHTML = pc("amazon") + pc("rakuten")
+      ? `キーワード発見の一括待ち：${[pc("amazon") ? `Amazon ${pc("amazon")}件` : "", pc("rakuten") ? `楽天 ${pc("rakuten")}件` : ""].filter(Boolean).join("・")}（新しいキーワードとして追加の行に入ります）`
+      : "";
   }
   $("adv-tabs").addEventListener("click", (e) => {
     const b = e.target.closest("[data-adv]");
@@ -4855,9 +4916,14 @@
     const cnt = (m) => (kwData.candidates || []).filter((c) => c.mall === m).length;
     $("kw-mall").innerHTML = malls.map((m) => `<button data-kwmall="${m}" aria-pressed="${m === kwMall}">${m === "amazon" ? "Amazon" : "楽天"}（${cnt(m)}）</button>`).join("");
     const dec = (kwData.decisions || []).filter((d) => d.mall === kwMall);
+    const plans = (kwData.plans || []).filter((p) => p.mall === kwMall);
+    const grow = kwMall === "rakuten" ? (kwData.grow || []) : [];
+    if (kwView === "grow" && kwMall !== "rakuten") kwView = "open";
     document.querySelectorAll("#kw-view [data-view]").forEach((b) => {
       const v = b.dataset.view;
-      b.textContent = v === "open" ? `候補（${cnt(kwMall)}）` : v === "done" ? `追加済み（${dec.filter((d) => d.status === "done").length}）` : `見送り（${dec.filter((d) => d.status === "skip").length}）`;
+      b.classList.toggle("hidden", v === "grow" && kwMall !== "rakuten");
+      b.textContent = v === "open" ? `候補（${cnt(kwMall)}）` : v === "plan" ? `一括待ち（${plans.length}）` : v === "grow" ? `育成中（${grow.length}）`
+        : v === "done" ? `追加済み（${dec.filter((d) => d.status === "done").length}）` : `見送り（${dec.filter((d) => d.status === "skip").length}）`;
       b.setAttribute("aria-pressed", String(v === kwView));
     });
     const srcs = kwMall === "amazon" ? ["検索語で売上あり", "Amazon の推奨"] : ["Amazon で売れた語", "Amazon の推奨"];
@@ -4866,6 +4932,36 @@
     $("kw-src").innerHTML = [["", "すべて"], ...srcs.map((x) => [x, x])].map(([v, t]) => `<button data-src="${esc(v)}" aria-pressed="${v === kwSrc}">${esc(t)}</button>`).join("");
     const sourceTag = (src) => src === "Amazon の推奨" ? `<span class="tag pill-a">Amazon の推奨</span>` : `<span class="tag ok">${esc(src)}</span>`;
     const small = "padding:3px 9px;font-size:12px;white-space:nowrap";
+    if (kwView === "plan") {
+      $("kw-cols").innerHTML = `<col style="width:22%"><col><col style="width:200px"><col style="width:130px"><col style="width:90px">`;
+      $("kw-head").innerHTML = `<tr><th>キーワード</th><th>入れる先</th><th>最初の入札</th><th>担当</th><th></th></tr>`;
+      $("kw-cands").innerHTML = plans.length ? plans.map((p) => {
+        const where = p.mall === "amazon"
+          ? (p.groups && p.groups.length ? `${esc(p.groups[0].campaign)}／${esc(p.groups[0].adGroup)}${p.groups.length > 1 ? `<div class="note">ほか ${p.groups.length - 1} 候補。一括操作ファイルの中の「手動・キーワード」の広告グループを使います</div>` : ""}` : "")
+          : (p.rows && p.rows.length ? `${p.rows.map((r) => esc(r.externalId)).join("・")}` : "");
+        const bid = p.mall === "amazon" ? (p.bid != null ? `<strong>${yen(p.bid)}</strong><div class="note">${esc(p.bidBasis || "")}</div>` : "—")
+          : (p.rows && p.rows.length ? p.rows.map((r) => `<strong>${yen(r.cpc)}</strong>${p.rows.length > 1 ? `（${esc(r.externalId)}）` : ""}<div class="note">${esc(r.basis)}</div>`).join("") : "—");
+        return `<tr><td><strong>${esc(p.keyword)}</strong>${p.products && p.products.length ? `<div class="note"><span class="kw-title" title="${esc(p.products.join("／"))}">${esc(p.products.join("／"))}</span></div>` : ""}</td>
+          <td>${where}${p.problem ? `<div><span class="tag warn">手で反映</span> <span class="note">${esc(p.problem)}</span></div>` : ""}</td>
+          <td>${bid}</td><td class="note">${esc(p.by || "—")}<div>${esc(String(p.at || "").slice(0, 16))}</div></td>
+          <td><button class="act" style="${small}" data-kw-plan="remove" data-kw="${esc(p.keyword)}">外す</button></td></tr>`;
+      }).join("") : emptyRow(5, "一括待ちのキーワードはありません。候補の「一括に入れる」で入ります。");
+      return;
+    }
+    if (kwView === "grow") {
+      $("kw-cols").innerHTML = `<col style="width:22%"><col style="width:130px"><col style="width:150px"><col style="width:120px"><col><col style="width:110px">`;
+      $("kw-head").innerHTML = `<tr><th>キーワード</th><th>商品管理番号</th><th>入札（最初→今）</th><th class="r">クリック／注文</th><th>状態</th><th>追加した日</th></tr>`;
+      $("kw-cands").innerHTML = grow.length ? grow.map((g) => {
+        const bid = g.reportBid != null && g.reportDate && g.reportDate > g.changedOn ? g.reportBid : g.bid;
+        const state = g.clicksSince >= 10 ? `<span class="tag ok">育成完了</span> <span class="note">クリックがたまったので通常の入札の見直しに移りました</span>`
+          : g.daysSince < 14 ? `<span class="tag wait">様子見</span> <span class="note">${esc(g.changedOn)} に入札。14日後に判定</span>`
+          : `<span class="tag pill-a">引き上げ候補</span> <span class="note">広告タブの入札の見直しに +20% が出ます（上限は損益分岐CPC）</span>`;
+        return `<tr><td><strong>${esc(g.keyword)}</strong></td><td>${esc(g.externalId)}</td>
+          <td>${yen(g.startBid)} → <strong>${yen(bid)}</strong></td><td class="r">${g.clicksSince}／${g.ordersSince}<div class="note" style="white-space:nowrap">${esc(g.changedOn)} 以降</div></td>
+          <td>${state}</td><td class="note">${esc(g.addedOn)}<div>${esc(g.addedBy || "")}</div></td></tr>`;
+      }).join("") : emptyRow(6, "育成中のキーワードはありません。楽天の候補を「一括に入れる」→ 広告タブで RPP の一括ファイルを作って対応済みにすると入ります。");
+      return;
+    }
     if (kwView !== "open") {
       $("kw-cols").innerHTML = `<col style="width:30%"><col style="width:120px"><col style="width:160px"><col><col style="width:110px">`;
       $("kw-head").innerHTML = `<tr><th>キーワード</th><th>状態</th><th>日時</th><th>担当</th><th></th></tr>`;
@@ -4879,7 +4975,7 @@
     }
     const amz = kwMall === "amazon";
     $("kw-cols").innerHTML = `<col style="width:19%"><col style="width:130px"><col><col style="width:70px">${amz ? `<col style="width:130px">` : ""}
-      <col style="width:52px"><col style="width:90px"><col style="width:60px"><col style="width:230px">`;
+      <col style="width:52px"><col style="width:90px"><col style="width:60px"><col style="width:300px">`;
     $("kw-head").innerHTML = `<tr><th>キーワード</th><th>出どころ</th><th>関連商品</th><th class="r">推奨順位</th>${amz ? `<th class="r">推奨入札</th>` : ""}
       <th class="r">注文</th><th class="r">売上</th><th class="r">ROAS</th><th></th></tr>`;
     const list = (kwData.candidates || []).filter((c) => c.mall === kwMall && (!kwSrc || c.source === kwSrc));
@@ -4892,7 +4988,8 @@
         <td class="r">${c.rank ?? "—"}</td>
         ${amz ? `<td class="r">${c.bid != null ? `<strong>${yen(c.bid)}</strong>` : "—"}${c.bidRange ? `<div class="note" style="white-space:nowrap">${esc(c.bidRange)}</div>` : ""}</td>` : ""}
         <td class="r">${c.orders || "—"}</td><td class="r">${c.sales ? yen(c.sales) : "—"}</td><td class="r">${c.roas ?? "—"}</td>
-        <td style="text-align:right"><button class="act primary" style="${small}" data-kw-dec="done" data-kw="${esc(c.keyword)}" data-src="${esc(c.source)}">追加した</button>
+        <td style="text-align:right"><button class="act primary" style="${small}" data-kw-plan="add" data-kw="${esc(c.keyword)}" data-src="${esc(c.source)}" data-pids="${esc((c.pids || []).join(","))}">一括に入れる</button>
+          <button class="act" style="${small}" data-kw-dec="done" data-kw="${esc(c.keyword)}" data-src="${esc(c.source)}">追加した</button>
           <button class="act" style="${small}" data-kw-dec="skip" data-kw="${esc(c.keyword)}" data-src="${esc(c.source)}">見送る</button>
           ${c.watched ? `<span class="note" style="margin-left:4px">監視中</span>` : `<button class="act" style="${small}" data-kw-watch="${esc(c.keyword)}">監視</button>`}</td></tr>`).join("")
       : emptyRow(cols, "候補はまだありません。検索語レポートの取り込みと、Amazon の推奨の取得（週1回・自動）を待ってください。");
@@ -4904,6 +5001,16 @@
     if (!r.ok) { $("kw-reco-msg").innerHTML = `<span class="tag ng">できません</span> ${esc(d.error || "")}`; return; }
     $("kw-reco-msg").innerHTML = status === "done" ? `<span class="tag ok">追加済みにしました</span> 「${esc(keyword)}」は今月の対応の記録に載ります`
       : status === "skip" ? `<span class="tag wait">見送りにしました</span> 「${esc(keyword)}」` : `<span class="tag ok">元に戻しました</span> 「${esc(keyword)}」`;
+    await loadKeywords();
+  }
+  async function kwPlan(keyword, action, source, pids) {
+    const r = await fetch("/api/keywords/plan", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ caseId: currentCase, mall: kwMall, keyword, action, source, pids: pids ? pids.split(",").filter(Boolean) : [] }) });
+    const d = await r.json();
+    if (!r.ok) { $("kw-reco-msg").innerHTML = `<span class="tag ng">できません</span> ${esc(d.error || "")}`; return; }
+    const p = (d.plans || []).find((x) => x.mall === kwMall && x.keyword.toLowerCase() === keyword.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase());
+    $("kw-reco-msg").innerHTML = action === "remove" ? `<span class="tag ok">一括待ちから外しました</span> 「${esc(keyword)}」`
+      : `<span class="tag ok">一括に入れました</span> 「${esc(keyword)}」→ 広告タブの「一括で反映するファイル」に入ります${p && p.problem ? `<br><span class="tag warn">注意</span> ${esc(p.problem)}` : ""}`;
     await loadKeywords();
   }
   function renderKwWatch() {
@@ -4947,9 +5054,10 @@
     await loadKeywords();
   }
   document.addEventListener("click", (e) => {
-    const t = e.target.closest && e.target.closest("[data-kw-watch],[data-kw-sel],[data-kw-del],[data-kw-check],[data-kw-dec],[data-kwmall],#kw-view [data-view],#kw-src [data-src]");
+    const t = e.target.closest && e.target.closest("[data-kw-watch],[data-kw-sel],[data-kw-del],[data-kw-check],[data-kw-dec],[data-kw-plan],[data-kwmall],#kw-view [data-view],#kw-src [data-src]");
     if (!t) return;
-    if (t.dataset.kwDec) kwDecide(t.dataset.kw, t.dataset.kwDec, t.dataset.src || null);
+    if (t.dataset.kwPlan) kwPlan(t.dataset.kw, t.dataset.kwPlan, t.dataset.src || null, t.dataset.pids || "");
+    else if (t.dataset.kwDec) kwDecide(t.dataset.kw, t.dataset.kwDec, t.dataset.src || null);
     else if (t.dataset.kwmall) { kwMall = t.dataset.kwmall; kwSrc = ""; renderKwCands(); }
     else if (t.dataset.view) { kwView = t.dataset.view; renderKwCands(); }
     else if (t.dataset.kwWatch) kwWatch(t.dataset.kwWatch, "add");
@@ -5153,7 +5261,8 @@
       kicker: "キーワード発見", title: "新しいキーワードと競合を見つける画面",
       lead: "入札の上げ下げ（利益ベース）だけでは売上が先細るので、まだ入札していない語と、競合の動きを集めます。",
       steps: [
-        S("<strong>新しいキーワードの候補</strong>：検索語レポートで売れたのに未入札の語と、Amazon が勧める語。良さそうなものは広告の管理画面で入札を追加します", "t-kw#kw-cands"),
+        S("<strong>新しいキーワードの候補</strong>：検索語レポートで売れたのに未入札の語と、Amazon が勧める語。良さそうなものは「一括に入れる」→ 広告タブの「一括で反映するファイル」に追加の行として入ります", "t-kw#kw-cands"),
+        S("<strong>楽天の育成中</strong>：一括から追加した楽天のキーワードは低めの入札（既存キーワードの中央値の70%）で始め、14日たってもクリックが少なければ広告タブの入札の見直しに「+20%」が出ます（上限は損益分岐CPC）", "t-kw#kw-view"),
         S("<strong>監視キーワード</strong>：毎日、Amazon・楽天の検索結果で競合と自社の順位を記録します。気になる語を追加してください", "t-kw#kw-add"),
         S("<strong>AI の週次分析</strong>：設定でオンにした案件は、毎週月曜に AI が提案を作ります（1回あたり数十円）", "t-kw#btn-ai-run"),
         S("AI チャットに自分で相談するときは、広告タブの「AIに広告を相談する」", "t-ads#btn-adai-make"),
@@ -5505,7 +5614,7 @@
       S("<strong>楽天RPP</strong>は毎日12時ごろ自動送信で届きます。14時に「届いていない」通知が来たら、送信担当に確認"),
       S("届かなかった日は、RMS から RPP の CSV をダウンロードして手で取り込む", "t-ads#btn-ads-import"),
       S("抜けている日は「取り込み状況」で確認", "t-ads#ads-coverage"),
-      S("<strong>改善提案を一括で反映</strong>：Amazon は広告コンソールの「一括操作」でスポンサープロダクトのファイル（英語）をダウンロード →「Amazon の一括操作ファイルを選ぶ」→「Amazon 用の一括ファイルを作る」→ 広告コンソールでアップロード。楽天は「楽天RPP 用の一括ファイルを作る」→ RPP の管理画面の「キーワード一括登録」でアップロード（予算は手で変更）", "t-ads#btn-bulk-amz"),
+      S("<strong>改善提案を一括で反映</strong>：Amazon は広告コンソールの「一括操作」でスポンサープロダクトのファイル（英語）をダウンロード →「Amazon の一括操作ファイルを選ぶ」→「Amazon 用の一括ファイルを作る」→ 広告コンソールでアップロード。楽天は「楽天RPP 用の一括ファイルを作る」→ RPP の管理画面の「キーワード一括登録」でアップロード（予算は手で変更）。キーワード発見の「一括待ち」も新しいキーワードとして同じファイルに入ります", "t-ads#btn-bulk-amz"),
       S("反映したら「書き出した提案を対応済みにする」。やらない提案は「今はしない」にすると、次から一括ファイルに入りません", "t-ads#adv-table"),
     ] },
     { id: "m-close", title: "月の締め・お客様への報告", when: "翌月10日以降", steps: [

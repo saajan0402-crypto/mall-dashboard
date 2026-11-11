@@ -18,6 +18,7 @@ import { amazonFinance, finCost, coveredSql, feeBasis } from "./amazonFin";
 import { rakutenPages, rakutenRevenueByProduct, shares } from "./adProducts";
 import { periodSummary } from "./caseSummary";
 import { isoWeek } from "./todos";
+import { growRows, RPP_START_RATIO, RPP_MAX_CPC, normKw } from "./kwPlan";
 
 const n = (v: unknown) => Number(v ?? 0);
 const round2 = (v: number) => Math.round(v * 100) / 100;
@@ -60,6 +61,8 @@ export interface BidAdvice {
   /** 入札がわからないときは平均クリック単価を基準にする */
   basis: "入札" | "平均クリック単価";
   reason: string;
+  /** 楽天：ツールから追加したキーワード（育成中）の段階的な引き上げ */
+  grow?: { externalId: string; keyword: string; startBid: number; addedOn: string; cap: number; capBasis: string };
 }
 
 export interface NegativeAdvice {
@@ -310,6 +313,58 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
       reason: reason + (mall === "rakuten" && action !== "up" ? "。楽天は30日帰属のため直近分は売上があとから増える可能性あり" : ""),
     });
   }
+  /* ───── 楽天：育成中のキーワード（ツールから低い入札で追加したもの）を14日ごとに +20% ───── */
+  // クリックが MIN_CLICKS に届いたら通常の入札の見直しに任せる。上限は損益分岐のCPC（＝平均販売価格 × 粗利率 × CVR）
+  const grows = await growRows(db, caseId);
+  if (grows.length) {
+    const regular = new Set(kwRows.filter((r) => r.mall === "rakuten").map((r) => normKw(String(r.keyword))));
+    const cvrOf = new Map<string, number | null>();
+    const { results: pr } = await db.prepare(
+      `SELECT external_id, SUM(clicks) AS clicks, SUM(orders) AS orders FROM daily_ads
+        WHERE case_id = ? AND mall = 'rakuten' AND level = 'product' AND date BETWEEN ? AND ? GROUP BY external_id`
+    ).bind(caseId, R.from, R.to).all<{ external_id: string; clicks: number; orders: number }>();
+    let tc = 0, to2 = 0;
+    for (const r of pr) { tc += n(r.clicks); to2 += n(r.orders); cvrOf.set(String(r.external_id), n(r.clicks) >= 30 ? n(r.orders) / n(r.clicks) : null); }
+    const shopCvr = tc >= 30 ? to2 / tc : null;
+    for (const g of grows) {
+      if (regular.has(normKw(g.keyword))) continue;                       // 通常の見直しに出ている（クリックがたまった）
+      if (g.clicksSince >= MIN_CLICKS) continue;
+      const bid = g.reportBid != null && g.reportDate != null && g.reportDate > g.changedOn ? g.reportBid : g.bid;
+      if (g.daysSince < SETTLE_DAYS) {
+        watching.push({ mall: "rakuten", campaign: "育成中", adGroup: g.externalId, keyword: g.keyword, matchType: "",
+          currentBid: bid, changedOn: g.changedOn, until: dayAfter(g.changedOn, SETTLE_DAYS) });
+        continue;
+      }
+      const pids = pages.get(g.externalId) ?? [];
+      const t = pageTarget(g.externalId) ?? targetOf("rakuten", pids[0] ?? null);
+      const prices = pids.map((id) => products.get(id)?.price).filter((x): x is number => x != null);
+      const price = prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : null;
+      const cvr = cvrOf.get(g.externalId) ?? shopCvr;
+      let cap: number, capBasis: string;
+      if (price != null && cvr != null) {
+        cap = Math.round(price * t.gm * cvr);
+        capBasis = `損益分岐CPC ${yen(cap)}（平均販売価格 ${yen(price)} × 粗利率 ${pct(t.gm)} × CVR ${pct(cvr)}）`;
+      } else {
+        cap = Math.round(g.startBid / RPP_START_RATIO);
+        capBasis = `追加したときの既存キーワードの入札の中央値 ${yen(cap)}（損益分岐CPC を出すデータが足りないため）`;
+      }
+      cap = Math.min(RPP_MAX_CPC, Math.max(MIN_BID.rakuten, cap));
+      if (bid >= cap) continue;
+      const suggestedBid = Math.min(cap, Math.max(bid + 1, Math.round(bid * 1.2)));
+      const pageProds = pids.map((x) => products.get(x)).filter((x): x is NonNullable<typeof x> => !!x);
+      bids.push({
+        key: `adv:bid:rakuten:育成中:${g.externalId}:${lk(g.keyword)}::${isoWeek()}`,
+        mall: "rakuten", adType: "rpp", campaign: "育成中", adGroup: g.externalId, keyword: g.keyword, matchType: "",
+        externalId: g.externalId,
+        product: pageProds.length ? { sku: pageProds.map((x) => x.sku).join(" / "), name: pageProds.map((x) => x.name).join(" / ") } : null,
+        clicks: g.clicksSince, cost: g.costSince, orders: g.ordersSince, sales: 0, cpc: g.clicksSince ? Math.round(g.costSince / g.clicksSince) : 0,
+        cvr: 0, roas: null, currentBid: bid, suggestedCpc: null, target: t, action: "up", suggestedBid, basis: "入札",
+        reason: `育成中（${g.addedOn} に ${yen(g.startBid)} で追加）。入札を入れてから${g.daysSince}日でクリック ${g.clicksSince}。少しずつ上げます（+20%・上限：${capBasis}）`,
+        grow: { externalId: g.externalId, keyword: g.keyword, startBid: g.startBid, addedOn: g.addedOn, cap, capBasis },
+      });
+    }
+  }
+
   const actRank = { pause: 0, down: 1, up: 2 };
   bids.sort((a, b) => actRank[a.action] - actRank[b.action] || b.cost - a.cost);
 
@@ -424,6 +479,7 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
     `提案はヘッダーの期間に関係なく、Amazon は直近${A.days}日（${A.from}〜${A.to}）、楽天は直近${R.days}日（${R.from}〜${R.to}）の実績から出しています。直近3日は、遅れて入る広告経由の売上を待つため除いています`,
     `入札を変えてから${SETTLE_DAYS}日たっていないキーワードは、変更前の実績が混ざるため提案を出さず「様子見」にしています`,
     "帰属期間：楽天RPP 30日／Amazon SP 7日／SB 14日。楽天は期間が長くても直近分の売上があとから増えることがあります",
+    `楽天でキーワード発見から追加したキーワードは「育成中」：低い入札（既存キーワードの中央値の${Math.round(RPP_START_RATIO * 100)}%）で入れ、${SETTLE_DAYS}日たってもクリックが ${MIN_CLICKS} 未満なら +20% を提案します（上限は損益分岐CPC）。クリックがたまったら通常の見直しに移ります`,
   ];
 
   watching.sort((a, b) => b.changedOn.localeCompare(a.changedOn));
