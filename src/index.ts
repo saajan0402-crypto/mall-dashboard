@@ -47,7 +47,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.28.2";
+const APP_VERSION = "0.28.3";
 
 export interface Env {
   DB: D1Database;
@@ -981,7 +981,11 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     return json({
       summary: s,
       // お客様向けのレポートには在庫の対応（補充の手配など）は載せない
-      actions: (await actionsBetween(env.DB, caseId, s.period.from, s.period.to)).filter((a) => a.area !== "在庫"),
+      // 数字は昨日までだが、対応は今日やったものまで載せる（期間の終わりが昨日のとき）。
+      // 2026-11 本番で、今日「対応済み」にしたものがレポートに出ず、反映に時間がかかるように見えた
+      actions: (await actionsBetween(env.DB, caseId, s.period.from,
+        s.period.to === new Date(Date.now() + 9 * 3600000 - 86400000).toISOString().slice(0, 10)
+          ? new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10) : s.period.to)).filter((a) => a.area !== "在庫"),
       advice: { bids: adv.bids.slice(0, 30), negatives: adv.negatives.slice(0, 30), harvest: adv.harvest.slice(0, 20),
         budgets: adv.budgets, impact: adv.impact, assumptions: adv.assumptions, windows: adv.windows, watching: adv.watching.length },
     });

@@ -1307,7 +1307,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.28.2";
+  const UI_VERSION = "0.28.3";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -3783,7 +3783,7 @@
       <div class="sec"><h2>${showStock ? 6 : 5}. 期間中に対応したこと</h2>
         ${d.actions.length ? `<ul>${d.actions.map((a) => `<li>${esc(a.day.slice(5).replace("-", "/"))}　${esc(a.status === "other"
           ? `${a.note}（${a.title.replace(/。.*$/, "")}）` : (a.note || a.title.replace(/。.*$/, "")))}</li>`).join("")}</ul>`
-          : `<p class="note">期間中に「対応済み」にした項目はありません。</p>`}
+          : `<p class="note">期間中に「対応済み」にした項目はありません（レポートの期間：${esc(d.summary.period.from)}〜${esc(d.summary.period.to)}）。</p>`}
       </div>
       <div class="sec"><h2>${showStock ? 7 : 6}. 次にやること</h2>
         ${nextTodo.length ? `<ul>${nextTodo.map((t) => `<li>${esc(t.text)}${t.basis ? `<span class="note">（${esc(t.basis)}）</span>` : ""}</li>`).join("")}</ul>`
