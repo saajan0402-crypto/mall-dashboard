@@ -47,7 +47,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.27.5";
+const APP_VERSION = "0.27.6";
 
 export interface Env {
   DB: D1Database;
@@ -964,7 +964,8 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const adv = await buildAdAdvice(env.DB, caseId, am);
     return json({
       summary: s,
-      actions: await actionsBetween(env.DB, caseId, s.period.from, s.period.to),
+      // お客様向けのレポートには在庫の対応（補充の手配など）は載せない
+      actions: (await actionsBetween(env.DB, caseId, s.period.from, s.period.to)).filter((a) => a.area !== "在庫"),
       advice: { bids: adv.bids.slice(0, 30), negatives: adv.negatives.slice(0, 30), harvest: adv.harvest.slice(0, 20),
         budgets: adv.budgets, impact: adv.impact, assumptions: adv.assumptions, windows: adv.windows, watching: adv.watching.length },
     });

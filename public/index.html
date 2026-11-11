@@ -1291,7 +1291,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.27.5";
+  const UI_VERSION = "0.27.6";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -4168,10 +4168,12 @@
   }
   $("done-month").addEventListener("change", loadDone);
   $("btn-done-text").addEventListener("click", () => {
-    if (!doneItems.length) { $("done-msg").textContent = "この月の記録がありません"; return; }
+    // お客様向けの文章には在庫の対応（補充の手配など）は入れない
+    const forReport = doneItems.filter((x) => x.area !== "在庫");
+    if (!forReport.length) { $("done-msg").textContent = "この月の記録がありません（在庫の対応は入れていません）"; return; }
     const [yy, mm] = $("done-month").value.split("-");
     const byArea = new Map();
-    doneItems.forEach((x) => { const a = x.area || "その他"; byArea.set(a, [...(byArea.get(a) || []), x]); });
+    forReport.forEach((x) => { const a = x.area || "その他"; byArea.set(a, [...(byArea.get(a) || []), x]); });
     // お客様向けなので、ツールの言い回し（「〜を確認する」など）は残しつつ、メモがあればそちらを優先して書く
     const lines = [`■ ${Number(yy)}年${Number(mm)}月に実施した対応（${caseName()}）`, ""];
     for (const [area, xs] of byArea) {
