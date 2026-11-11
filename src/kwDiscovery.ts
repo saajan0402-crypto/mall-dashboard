@@ -118,12 +118,14 @@ export async function refreshAmazonReco(env: KwEnv, caseId: string): Promise<{ o
       if (!kw) return;
       const bi = (it.bidInfo ?? []).find((x) => /exact/i.test(x.matchType ?? "")) ?? it.bidInfo?.[0];
       const sb = bi?.suggestedBid ?? it.suggestedBid;
-      const med = sb?.rangeMedian ?? bi?.bid ?? it.bid ?? null;
+      // 推奨入札は「通貨の最小単位×100」で返る（日本円でも 29300 ＝ ¥293）。円にそろえて保存する
+      const yen100 = (v: number | null | undefined) => (v == null ? null : Math.round(Number(v) / 100));
+      const med = yen100(sb?.rangeMedian ?? bi?.bid ?? it.bid ?? null);
       stmts.push(env.DB.prepare(
         `INSERT OR REPLACE INTO kw_reco (case_id, product_id, keyword, rank, match_type, bid_low, bid_median, bid_high, imp_share, imp_rank)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(caseId, p.id, kw, it.rank ?? bi?.rank ?? i + 1, bi?.matchType ?? it.matchType ?? null,
-        sb?.rangeStart == null ? null : Math.round(sb.rangeStart), med == null ? null : Math.round(med), sb?.rangeEnd == null ? null : Math.round(sb.rangeEnd),
+        yen100(sb?.rangeStart), med, yen100(sb?.rangeEnd),
         it.searchTermImpressionShare ?? null, it.searchTermImpressionRank ?? null));
       rows++;
     });
@@ -314,7 +316,7 @@ export async function keywordOverview(db: D1Database, caseId: string) {
     ...reco.filter((r) => !tset.has(String(r.keyword).toLowerCase().trim())).map((r) => ({
       keyword: String(r.keyword), source: "Amazon の推奨", products: r.products == null ? null : String(r.products),
       rank: r.rank == null ? null : n(r.rank), bid: r.bid == null ? null : n(r.bid),
-      bidRange: r.bid_low != null && r.bid_high != null ? `${r.bid_low}〜${r.bid_high}` : null,
+      bidRange: r.bid_low != null && r.bid_high != null ? `¥${n(r.bid_low).toLocaleString("ja-JP")}〜¥${n(r.bid_high).toLocaleString("ja-JP")}` : null,
       impShare: r.imp_share == null ? null : n(r.imp_share), orders: 0, sales: 0, cost: 0, roas: null,
       watched: wset.has(String(r.keyword).toLowerCase()) })),
   ];

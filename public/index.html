@@ -252,6 +252,8 @@
   .kw-serps{display:grid;gap:22px}
   table.kw-serp{table-layout:fixed;width:100%;min-width:620px}
   table.kw-serp td{white-space:normal;vertical-align:top;overflow:hidden}
+  table.kw-cand-table{table-layout:fixed;width:100%;min-width:900px}
+  table.kw-cand-table td{white-space:normal;vertical-align:middle;overflow:hidden;word-break:break-word}
   .kw-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.5;word-break:break-all}
   .kw-shop{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ai-md{font-size:13.5px;line-height:1.8}
@@ -881,12 +883,14 @@
           <button class="act" id="btn-kw-reco">Amazon の推奨を取り直す</button>
           <span class="note" id="kw-reco-msg"></span>
         </div>
-        <div class="tablewrap" style="margin-top:12px"><table style="min-width:860px">
-          <thead><tr><th>キーワード</th><th>出どころ</th><th>関連商品</th><th class="r">推奨順位</th><th class="r">推奨入札（中央・範囲）</th>
+        <div class="tablewrap" style="margin-top:12px"><table class="kw-cand-table">
+          <colgroup><col style="width:20%"><col style="width:130px"><col><col style="width:76px"><col style="width:140px">
+            <col style="width:56px"><col style="width:96px"><col style="width:68px"><col style="width:100px"></colgroup>
+          <thead><tr><th>キーワード</th><th>出どころ</th><th>関連商品</th><th class="r">推奨順位</th><th class="r">推奨入札</th>
             <th class="r">注文</th><th class="r">売上</th><th class="r">ROAS</th><th></th></tr></thead>
           <tbody id="kw-cands"></tbody></table></div>
         <p class="note" style="margin-top:8px">「検索語で売上あり」は、自動ターゲティングや部分一致で売れたのに、キーワードとしてはまだ入札していない語です（直近60日）。
-          「Amazon の推奨」は、広告 API が自社 ASIN ごとに勧めるキーワードで、週に1回取り直します。気になる語は「監視する」で、競合と自社の順位を毎日記録できます。</p>
+          「Amazon の推奨」は、広告 API が自社 ASIN ごとに勧めるキーワードで、週に1回取り直します。推奨入札は太字が中央値、下が範囲です。気になる語は「監視する」で、競合と自社の順位を毎日記録できます。</p>
       </div>
     </div>
 
@@ -1257,7 +1261,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.24.1";
+  const UI_VERSION = "0.24.2";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -4318,11 +4322,11 @@
     $("kw-cands").innerHTML = list.length ? list.slice(0, 120).map((c) => `<tr>
         <td><strong>${esc(c.keyword)}</strong></td>
         <td>${c.source === "Amazon の推奨" ? `<span class="tag pill-a">Amazon の推奨</span>` : `<span class="tag ok">検索語で売上あり</span>`}</td>
-        <td class="note" style="max-width:260px">${esc((c.products || "—").slice(0, 60))}</td>
+        <td class="note"><span class="kw-title" title="${esc(c.products || "")}">${esc((c.products || "—").split(",").join("／"))}</span></td>
         <td class="r">${c.rank ?? "—"}</td>
-        <td class="r">${c.bid != null ? yen(c.bid) : "—"}${c.bidRange ? `<div class="note">${esc(c.bidRange)}</div>` : ""}</td>
+        <td class="r">${c.bid != null ? `<strong>${yen(c.bid)}</strong>` : "—"}${c.bidRange ? `<div class="note" style="white-space:nowrap">${esc(c.bidRange)}</div>` : ""}</td>
         <td class="r">${c.orders || "—"}</td><td class="r">${c.sales ? yen(c.sales) : "—"}</td><td class="r">${c.roas ?? "—"}</td>
-        <td>${c.watched ? `<span class="note">監視中</span>` : `<button class="act" style="padding:3px 10px;font-size:12px" data-kw-watch="${esc(c.keyword)}">監視する</button>`}</td></tr>`).join("")
+        <td>${c.watched ? `<span class="note">監視中</span>` : `<button class="act" style="padding:3px 10px;font-size:12px;white-space:nowrap" data-kw-watch="${esc(c.keyword)}">監視する</button>`}</td></tr>`).join("")
       : emptyRow(9, "候補はまだありません。検索語レポートの取り込みと、Amazon の推奨の取得（週1回・自動）を待ってください。");
   }
   function renderKwWatch() {
