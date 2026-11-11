@@ -1,7 +1,7 @@
 /**
  * AI の週次分析（Claude API）
  *
- * - 案件の設定「AIの週次分析」（ai_weekly）がオンの案件だけ。既定はオフ（API の利用料がかかるため）
+ * - 案件の設定「AI分析」（ai_weekly）：0＝オフ（既定・API の利用料がかかるため）、1＝毎週月曜＋手動、2＝手動のみ
  * - 週に1回、広告の相談用データ＋キーワード発見の材料を Claude に渡し、新しいキーワード・競合を踏まえた提案を作る。
  *   Web 検索ツールを最大5回まで使わせる（競合の商品ページ・検索結果を見るため）
  * - 画面の「今すぐ分析する」は、依頼（queued）を積むだけ。実行は5分ごとの実行が拾う
@@ -30,15 +30,19 @@ function price(model: string): { in: number; out: number } {
   return { in: 3, out: 15 };
 }
 
-export async function aiEnabled(db: D1Database, caseId: string): Promise<boolean> {
+/** 0＝オフ、1＝毎週月曜＋手動、2＝手動のみ */
+export async function aiMode(db: D1Database, caseId: string): Promise<number> {
   const st = await resolveSettings(db, { caseId });
-  return (st.case.find((s) => s.key === "ai_weekly")?.effective ?? 0) === 1;
+  return st.case.find((s) => s.key === "ai_weekly")?.effective ?? 0;
+}
+export async function aiEnabled(db: D1Database, caseId: string): Promise<boolean> {
+  return (await aiMode(db, caseId)) > 0;
 }
 
 /** 画面の「今すぐ分析する」 */
 export async function queueAiReport(env: AiEnv, caseId: string, by: string | null): Promise<{ ok: boolean; message: string }> {
   if (!env.CLAUDE_API_KEY) return { ok: false, message: "Claude の API キーが未設定です（Cloudflare の CLAUDE_API_KEY）" };
-  if (!(await aiEnabled(env.DB, caseId))) return { ok: false, message: "この案件は設定で「AIの週次分析」がオフです" };
+  if (!(await aiEnabled(env.DB, caseId))) return { ok: false, message: "この案件は設定で「AI分析」がオフです" };
   const busy = await env.DB.prepare("SELECT 1 AS x FROM ai_reports WHERE case_id = ? AND status IN ('queued', 'running') LIMIT 1").bind(caseId).first();
   if (busy) return { ok: false, message: "すでに分析の依頼が入っています" };
   await env.DB.prepare("INSERT INTO ai_reports (id, case_id, status, trigger_kind, requested_by) VALUES (?, ?, 'queued', 'manual', ?)")
@@ -123,7 +127,7 @@ export async function pumpAi(env: AiEnv): Promise<number> {
   if (now.getUTCDay() !== 1 || now.getUTCHours() < 8) return 0;        // 月曜 8時（日本時間）以降
   const { results: cases } = await env.DB.prepare("SELECT id FROM cases WHERE status = 'active'").all<{ id: string }>();
   for (const c of cases) {
-    if (!(await aiEnabled(env.DB, c.id))) continue;
+    if ((await aiMode(env.DB, c.id)) !== 1) continue;      // 毎週は「毎週月曜＋手動」の案件だけ
     const last = await env.DB.prepare(
       "SELECT 1 AS x FROM ai_reports WHERE case_id = ? AND trigger_kind = 'weekly' AND created_at > datetime('now', '-6 days') LIMIT 1"
     ).bind(c.id).first();

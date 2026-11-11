@@ -35,7 +35,7 @@ import { buildAdAdvice } from "./adAdvice";
 import { renderCaseMarkdown } from "./caseReport";
 import { renderAdsMarkdown, adsPrompt } from "./adsReport";
 import { listWatch, addWatch, removeWatch, keywordOverview, keywordDetail, snapshotKeyword, refreshAmazonReco, pumpKeywords } from "./kwDiscovery";
-import { queueAiReport, listAiReports, aiEnabled, pumpAi } from "./aiAnalysis";
+import { queueAiReport, listAiReports, aiMode, pumpAi } from "./aiAnalysis";
 import { postSlack, listCaseSlack, saveCaseSlack } from "./slack";
 import { sendDailySummaries } from "./dailySummary";
 import { listEvents, saveEvent, deleteEvent, setParticipation } from "./events";
@@ -47,7 +47,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.24.0";
+const APP_VERSION = "0.24.1";
 
 export interface Env {
   DB: D1Database;
@@ -456,7 +456,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const noticeCase = b.scope === "company" ? null : (b.scopeId ?? "").split(":")[0];
     if (changes.length && (!noticeCase || await notifyEnabled(env.DB, noticeCase, "settings_notice"))) {
       const caseId = noticeCase;
-      const fmt = (v: number | null, unit: string) => (v == null ? "（上の階層に従う）" : unit === "toggle" ? (v ? "オン" : "オフ") : `${v}${unit === "percent" ? "%" : "日"}`);
+      const fmt = (v: number | null, unit: string) => (v == null ? "（上の階層に従う）" : unit === "toggle" ? (v === 2 ? "手動のみ" : v ? "オン" : "オフ") : `${v}${unit === "percent" ? "%" : "日"}`);
       const where = b.scope === "company" ? "会社共通" : b.scope === "case" ? "案件" : `案件×${(b.scopeId ?? "").endsWith(":rakuten") ? "楽天" : "Amazon"}`;
       await postSlack(env, caseId, [`:gear: *設定が変更されました*（${where}／${viewer(req) ?? "不明なユーザー"}）`,
         ...changes.map((c) => `• ${c.label}：${fmt(c.old, c.unit)} → ${fmt(c.new, c.unit)}`)].join("\n")).catch(() => null);
@@ -678,7 +678,8 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
   if (path === "/api/ai/reports" && req.method === "GET") {
     const caseId = new URL(req.url).searchParams.get("case_id");
     if (!caseId) return json({ error: "案件を指定してください" }, 400);
-    return json({ enabled: await aiEnabled(env.DB, caseId), keyReady: Boolean(env.CLAUDE_API_KEY), reports: await listAiReports(env.DB, caseId) });
+    const mode = await aiMode(env.DB, caseId);
+    return json({ enabled: mode > 0, mode, keyReady: Boolean(env.CLAUDE_API_KEY), reports: await listAiReports(env.DB, caseId) });
   }
   if (path === "/api/ai/run" && req.method === "POST") {
     const b = (await req.json()) as { caseId?: string };

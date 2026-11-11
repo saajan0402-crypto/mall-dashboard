@@ -15,6 +15,7 @@ import { amazonFinance, finCost, coveredSql, feeBasis } from "./amazonFin";
 import { buildAllocation, type Allocation } from "./adAllocation";
 import { externalAdCost, type ExternalAdCost } from "./externalAds";
 import { repeatSummary, type RepeatSummary } from "./repeat";
+import { keywordTodoData } from "./kwDiscovery";
 import { productAdTotals } from "./adProducts";
 import { latestCompleteMonth } from "./mallCharges";
 import { buildAdAdvice, type BidAdvice, type NegativeAdvice, type HarvestAdvice } from "./adAdvice";
@@ -236,6 +237,8 @@ export interface CaseSummary {
   allocation: Allocation;
   /** リピート率（楽天は注文データから、Amazon はブランド分析レポートから） */
   repeat: RepeatSummary;
+  /** キーワード発見の要対応用の集計 */
+  keywords: Awaited<ReturnType<typeof keywordTodoData>>;
   advice: {
     counts: { up: number; down: number; pause: number; negatives: number; harvest: number; budgets: number };
     impact: { wastedCost: number; bidDownCost: number };
@@ -389,8 +392,24 @@ function buildTodo(s: Omit<CaseSummary, "todo" | "doneThisMonth">): Todo[] {
       text: `入札の見直し候補：停止を検討 ${ac.pause}件・下げる ${ac.down}件・上げる ${ac.up}件（広告タブの「改善提案」に具体的な金額）`,
       basis: s.advice.impact.bidDownCost ? `下げる・停止の対象に期間内 ${yenS(s.advice.impact.bidDownCost)} を使っている` : undefined,
     });
-  if (ac.harvest)
-    out.push({ key: `ad_harvest:${wk}`, priority: "mid", area: "広告", text: `完全一致で追加する候補の検索語が ${ac.harvest} 件あります（広告タブの「改善提案」）` });
+  // 新しいキーワード：改善提案の「追加キーワード」とキーワード発見の候補を1件にまとめる（多くなりすぎないように）
+  const kw = s.keywords;
+  if (ac.harvest || (kw && (kw.strong || kw.reco))) {
+    const parts = [
+      ac.harvest ? `完全一致で追加する候補 ${ac.harvest}件（広告タブの改善提案）` : "",
+      kw?.strong ? `検索語で売れたのに未入札 ${kw.strong}件` : "",
+      kw?.reco ? `Amazon の推奨 ${kw.reco}件` : "",
+    ].filter(Boolean);
+    out.push({ key: `ad_harvest:${wk}`, priority: kw?.strong ? "mid" : "info", area: "広告",
+      text: `新しいキーワードの候補：${parts.join("・")}。キーワード発見タブで選んで入札を追加する`,
+      basis: kw?.top.length ? `上位：${kw.top.join("、")}` : undefined });
+  }
+  // 監視キーワードで自社の順位が大きく落ちたもの（まとめて1件）
+  if (kw?.drops.length) {
+    const d = kw.drops.slice(0, 3).map((x) => `${MALL_JA[x.mall] ?? x.mall}「${x.keyword}」${x.before}位→${x.now == null ? "圏外" : x.now + "位"}`);
+    out.push({ key: `kw_drop:${wk}`, priority: "mid", area: "広告",
+      text: `監視キーワードで自社の順位が1週間で大きく落ちています（${kw.drops.length}件）。競合の価格・セール・広告の強化を確認する`, basis: d.join("／") });
+  }
   if (ac.budgets)
     out.push({ key: `ad_budget:${wk}`, priority: "mid", area: "広告", text: `予算切れで売上を逃しているキャンペーンが ${ac.budgets} 件あります（広告タブの「改善提案」）` });
 
@@ -612,9 +631,9 @@ export async function buildCaseSummary(
 
   const events = await listEvents(db, caseId, from, to);
   const allocation = await buildAllocation(db, caseId, from, to);
-  const [external, repeat] = await Promise.all([externalAdCost(db, caseId, from, to), repeatSummary(db, caseId, from, to)]);
+  const [external, repeat, keywords] = await Promise.all([externalAdCost(db, caseId, from, to), repeatSummary(db, caseId, from, to), keywordTodoData(db, caseId)]);
   const base: Omit<CaseSummary, "todo" | "doneThisMonth"> = {
-    allocation, repeat,
+    allocation, repeat, keywords,
     caseId, caseName: c.name,
     period: { from, to, days, preset: per.preset },
     prev: { from: prevFrom, to: prevTo },

@@ -23,6 +23,8 @@ export interface SettingDef {
   malls?: Mall[];
   /** 手数料の概算に使う料率かどうか */
   isFeeRate?: boolean;
+  /** unit が toggle のときの選択肢（値と表示）。無ければ オフ／オン */
+  options?: Array<[number, string]>;
 }
 
 export const SETTINGS: SettingDef[] = [
@@ -36,9 +38,9 @@ export const SETTINGS: SettingDef[] = [
     scopes: ["company", "case"],
   },
   {
-    key: "ai_weekly", label: "AIの週次分析（Claude API）", unit: "toggle", fallback: 0,
-    help: "オンにすると、毎週月曜に広告とキーワード発見のデータを AI（Claude）が分析し、キーワード発見タブに提案を出します。API の利用料が1回あたり数十円かかります（既定はオフ）",
-    scopes: ["case"],
+    key: "ai_weekly", label: "AI分析（Claude API）", unit: "toggle", fallback: 0,
+    help: "広告とキーワード発見のデータを AI（Claude）が分析し、キーワード発見タブに提案を出します。API の利用料が1回あたり数十円かかります。「手動のみ」は、キーワード発見タブの「今すぐ分析する」を押したときだけ動きます（既定はオフ）",
+    scopes: ["case"], options: [[0, "オフ"], [1, "毎週月曜＋手動"], [2, "手動のみ"]],
   },
   {
     key: "stock_alert_days", label: "在庫アラート日数", unit: "days", fallback: 14,
@@ -121,6 +123,7 @@ export interface ResolvedSetting {
   /** どの階層の値が使われているか */
   from: "company" | "case" | "case_mall" | "既定";
   isFeeRate: boolean;
+  options?: Array<[number, string]>;
 }
 
 /** 設定を階層をたどって解決する */
@@ -150,7 +153,7 @@ export async function resolveSettings(
 
       const own = scope === "company" ? company : scope === "case" ? forCase : forMall;
       return {
-        key: d.key, label: d.label, help: d.help, unit: d.unit,
+        key: d.key, label: d.label, help: d.help, unit: d.unit, options: d.options,
         own, effective, from, isFeeRate: Boolean(d.isFeeRate),
       };
     });

@@ -367,3 +367,33 @@ export async function keywordMarkdown(db: D1Database, caseId: string): Promise<s
   }
   return L.join("\n");
 }
+
+/**
+ * ダッシュボードの「要対応」用（週に1件にまとめる。多くなりすぎないように）
+ *   - 新しいキーワードの候補の件数（検索語で2件以上売れて未入札の語を優先）
+ *   - 監視キーワードで、自社の順位が1週間で5位以上落ちた（または圏外になった）もの
+ */
+export async function keywordTodoData(db: D1Database, caseId: string) {
+  try {
+    const ov = await keywordOverview(db, caseId);
+    const strong = ov.candidates.filter((c) => c.source === "検索語で売上あり" && c.orders >= 2);
+    const reco = ov.candidates.filter((c) => c.source === "Amazon の推奨");
+    const { results } = await db.prepare(
+      `SELECT mall, keyword, date, MIN(CASE WHEN own = 1 THEN position END) AS pos, COUNT(*) AS n
+         FROM kw_serp WHERE case_id = ? AND date >= ? GROUP BY mall, keyword, date`
+    ).bind(caseId, jstDay(9)).all<{ mall: string; keyword: string; date: string; pos: number | null; n: number }>();
+    const drops: Array<{ mall: string; keyword: string; before: number | null; now: number | null }> = [];
+    const byKey = new Map<string, typeof results>();
+    for (const r of results) { const k = `${r.mall}\u0000${r.keyword}`; byKey.set(k, [...(byKey.get(k) ?? []), r]); }
+    for (const rows of byKey.values()) {
+      rows.sort((a, b) => a.date.localeCompare(b.date));
+      const last = rows[rows.length - 1], first = rows.find((r) => r.date <= jstDay(6)) ?? null;
+      if (!first || first === last || first.pos == null) continue;           // 1週間前に自社が載っていなければ比べない
+      const out = last.n + 1;                                                 // 圏外は「件数＋1位」とみなす
+      if ((last.pos ?? out) - first.pos >= 5) drops.push({ mall: last.mall, keyword: last.keyword, before: first.pos, now: last.pos });
+    }
+    return { strong: strong.length, reco: reco.length, top: [...strong, ...reco].slice(0, 3).map((c) => c.keyword), drops };
+  } catch {
+    return null;    // テーブルがまだ無いとき
+  }
+}
