@@ -235,6 +235,14 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
   const settleFrom = jstDay(SETTLE_DAYS);
   const dayAfter = (d: string, k = 1) => new Date(Date.parse(`${d}T00:00:00Z`) + k * 86400000).toISOString().slice(0, 10);
   const exactKeywords = new Set<string>();
+  // すでに完全一致で入札しているキーワード（クリックが少なくても・一時停止中でも）。追加キーワードの候補から外す
+  // 2026-11 本番で、クリックの少ない既存の完全一致キーワードを「追加」に出してしまい、一括アップロードで already exists になった
+  {
+    const { results: ex } = await db.prepare(
+      `SELECT DISTINCT mall, keyword FROM daily_ads WHERE case_id = ? AND level = 'keyword' AND keyword <> '' AND LOWER(match_type) LIKE '%exact%' AND date >= ?`
+    ).bind(caseId, jstDay(180)).all<{ mall: string; keyword: string }>();
+    for (const e of ex) exactKeywords.add(`${e.mall}\u0000${norm(e.keyword)}`);
+  }
   for (const r of kwRows) {
     const mall = String(r.mall), campaign = String(r.campaign), adGroup = String(r.ad_group);
     const keyword = String(r.keyword), matchType = String(r.match_type);

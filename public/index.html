@@ -1291,7 +1291,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.27.4";
+  const UI_VERSION = "0.27.5";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -4486,11 +4486,15 @@
       const rows = aoa.slice(1);
       const lc = (v) => String(v ?? "").trim().toLowerCase().replace(/\s+/g, " ");
       const campaigns = new Map(), groups = new Map(), kws = new Map(), targets = new Map();
+      const exactAnywhere = new Map();   // 完全一致のキーワード → 登録されている場所（どの広告グループ・状態）
       for (const r of rows) {
         const ent = lc(cell(r, "entity")), cn = nameOf(r, "campaignName"), gn = nameOf(r, "adGroupName");
         if (ent === "campaign") campaigns.set(lc(cn), r);
         else if (ent === "ad group") groups.set(`${lc(cn)}\u0000${lc(gn)}`, r);
-        else if (ent === "keyword") kws.set(`${lc(cn)}\u0000${lc(gn)}\u0000${lc(cell(r, "keyword"))}\u0000${lc(cell(r, "match"))}`, r);
+        else if (ent === "keyword") {
+          kws.set(`${lc(cn)}\u0000${lc(gn)}\u0000${lc(cell(r, "keyword"))}\u0000${lc(cell(r, "match"))}`, r);
+          if (lc(cell(r, "match")) === "exact" && !exactAnywhere.has(lc(cell(r, "keyword")))) exactAnywhere.set(lc(cell(r, "keyword")), { cn, gn, state: lc(cell(r, "state")) });
+        }
         else if (ent === "product targeting") targets.set(`${lc(cn)}\u0000${lc(gn)}\u0000${lc(cell(r, "expr"))}`, r);
       }
       if (!campaigns.size && !kws.size) { $("bulk-msg").innerHTML = `<span class="tag ng">読めません</span> キャンペーン・キーワードの行がありません。英語のファイルか確認してください`; return; }
@@ -4521,6 +4525,13 @@
           const c = campaigns.get(lc(x.campaign)), g = groups.get(`${lc(x.campaign)}\u0000${lc(x.adGroup)}`);
           const tt = c ? lc(cell(c, "targetingType")) : "";
           if (!g || tt !== "manual") { skipped.push(`${advText(kind, x)}（見つかったキャンペーンがオートのため、入れる先を手で決めてください）`); continue; }
+          // すでに完全一致で登録されているキーワードは作らない（Amazon が already exists で断るため）
+          const ex = x.kind !== "product" ? exactAnywhere.get(lc(x.searchTerm)) : null;
+          if (ex) {
+            skipped.push(`${advText(kind, x)}（すでに「${ex.cn}／${ex.gn}」に完全一致で登録済み${ex.state && ex.state !== "enabled" ? "・状態：" + ex.state + "。再開するかは手で判断" : ""}）`);
+            done.push(x.key);   // 登録済みなので、対応済みに含める
+            continue;
+          }
           const a = blank();
           set(a, "product", "Sponsored Products"); set(a, "operation", "Create"); set(a, "state", "enabled");
           set(a, "campaignId", cell(g, "campaignId")); set(a, "adGroupId", cell(g, "adGroupId")); set(a, "bid", x.suggestedBid);
