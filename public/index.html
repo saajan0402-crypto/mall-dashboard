@@ -242,6 +242,11 @@
     border:1px solid var(--line-strong);background:var(--surface-2);color:var(--accent)}
   .kpi .k .kpi-btn:hover{border-color:var(--accent)}
   .kw-chips{display:flex;flex-wrap:wrap;gap:8px}
+  /* ファイルを選ぶボタン（label）もボタンと同じ見た目にする */
+  label.act{font:inherit;font-size:13px;padding:7px 15px;border-radius:5px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;
+    border:1px solid var(--line-strong);background:var(--surface);color:var(--ink)}
+  label.act:hover{border-color:var(--accent);color:var(--accent)}
+  .visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;padding:0;margin:-1px}
   .bulk-box{margin-top:12px;padding:12px 14px;border:1px dashed var(--line-strong);border-radius:6px;background:var(--surface-2)}
   tr.adv-closed td{opacity:.55}
   button.act.copy-btn{padding:1px 8px;font-size:11.5px;margin-left:4px;white-space:nowrap;line-height:1.6}
@@ -779,8 +784,9 @@
           <strong style="font-size:13px">一括で反映するファイル</strong>
           <span class="note">対応済み・今はしないにしていない提案（全タブ）をまとめます</span>
           <div class="btns" style="margin-top:8px">
-            <label class="act" style="cursor:pointer">Amazon の一括操作ファイルを選ぶ<input type="file" id="bulk-amz-file" accept=".xlsx" class="hidden"></label>
-            <button class="act primary" id="btn-bulk-amz" disabled>Amazon 用の一括ファイルを作る</button>
+            <label class="act file-pick" for="bulk-amz-file"><span aria-hidden="true">①</span> Amazon の一括操作ファイルを選ぶ</label>
+            <input type="file" id="bulk-amz-file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="visually-hidden">
+            <button class="act primary" id="btn-bulk-amz" disabled title="先に①でファイルを選んでください">② Amazon 用の一括ファイルを作る</button>
             <button class="act primary" id="btn-bulk-rak">楽天RPP 用の一括ファイルを作る</button>
             <button class="act hidden" id="btn-bulk-done">書き出した提案を対応済みにする</button>
           </div>
@@ -1285,7 +1291,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.27.1";
+  const UI_VERSION = "0.27.2";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -4420,7 +4426,7 @@
   $("bulk-amz-file").addEventListener("change", (e) => {
     bulkFile = e.target.files && e.target.files[0];
     $("btn-bulk-amz").disabled = !bulkFile;
-    $("bulk-msg").textContent = bulkFile ? `選んだファイル：${bulkFile.name}` : "";
+    $("bulk-msg").innerHTML = bulkFile ? `<span class="tag ok">選びました</span> ${esc(bulkFile.name)}　→「② Amazon 用の一括ファイルを作る」を押してください` : "";
   });
   const bulkH = (s) => String(s ?? "").toLowerCase().replace(/\(.*?\)|（.*?）/g, "").replace(/[\s_]/g, "");
   const COLS = {
