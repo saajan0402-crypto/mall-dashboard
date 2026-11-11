@@ -1,6 +1,6 @@
 -- キーワード発見
 -- 監視するキーワード（案件ごと）。競合の順位・価格・レビューを毎日記録する
-CREATE TABLE kw_watch (
+CREATE TABLE IF NOT EXISTS kw_watch (
   case_id  TEXT NOT NULL REFERENCES cases(id),
   keyword  TEXT NOT NULL,
   added_by TEXT,
@@ -9,7 +9,7 @@ CREATE TABLE kw_watch (
 );
 
 -- Amazon 広告 API のキーワード推奨（自社 ASIN ごと）。週に1回取り直す
-CREATE TABLE kw_reco (
+CREATE TABLE IF NOT EXISTS kw_reco (
   case_id    TEXT NOT NULL REFERENCES cases(id),
   product_id TEXT NOT NULL,
   keyword    TEXT NOT NULL,
@@ -23,10 +23,10 @@ CREATE TABLE kw_reco (
   fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (case_id, product_id, keyword)
 );
-CREATE INDEX idx_kw_reco_case ON kw_reco (case_id, keyword);
+CREATE INDEX IF NOT EXISTS idx_kw_reco_case ON kw_reco (case_id, keyword);
 
 -- 監視キーワードの検索結果（Amazon はカタログ検索、楽天は楽天市場の商品検索）。1日1回
-CREATE TABLE kw_serp (
+CREATE TABLE IF NOT EXISTS kw_serp (
   case_id      TEXT NOT NULL REFERENCES cases(id),
   mall         TEXT NOT NULL,
   keyword      TEXT NOT NULL,
@@ -42,10 +42,10 @@ CREATE TABLE kw_serp (
   own          INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (case_id, mall, keyword, date, position)
 );
-CREATE INDEX idx_kw_serp_kw ON kw_serp (case_id, keyword, date);
+CREATE INDEX IF NOT EXISTS idx_kw_serp_kw ON kw_serp (case_id, keyword, date);
 
 -- AI の週次分析（Claude API）。案件の設定「AIの週次分析」がオンの案件だけ
-CREATE TABLE ai_reports (
+CREATE TABLE IF NOT EXISTS ai_reports (
   id            TEXT PRIMARY KEY,
   case_id       TEXT NOT NULL REFERENCES cases(id),
   created_at    TEXT NOT NULL DEFAULT (datetime('now')),
@@ -61,4 +61,4 @@ CREATE TABLE ai_reports (
   content       TEXT,
   error         TEXT
 );
-CREATE INDEX idx_ai_reports_case ON ai_reports (case_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_reports_case ON ai_reports (case_id, created_at);
