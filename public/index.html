@@ -241,6 +241,18 @@
   .kpi .k .kpi-btn{float:right;font:inherit;font-size:11.5px;padding:1px 9px;border-radius:999px;cursor:pointer;
     border:1px solid var(--line-strong);background:var(--surface-2);color:var(--accent)}
   .kpi .k .kpi-btn:hover{border-color:var(--accent)}
+  .kw-chips{display:flex;flex-wrap:wrap;gap:8px}
+  .kw-chip{display:inline-flex;align-items:center;gap:2px;border:1px solid var(--line-strong);border-radius:999px;background:var(--surface-2);font-size:13px}
+  .kw-chip button{font:inherit;background:none;border:none;cursor:pointer;color:var(--ink);padding:4px 4px 4px 12px}
+  .kw-chip button.x{padding:4px 10px 4px 4px;color:var(--muted)}
+  .kw-chip[aria-current=true]{border-color:var(--accent);background:var(--accent-soft)}
+  .kw-chip[aria-current=true] button{color:var(--accent);font-weight:700}
+  tr.own td{background:var(--accent-soft);font-weight:700}
+  .ai-md{font-size:13.5px;line-height:1.8}
+  .ai-md h3{font-size:14.5px;margin:16px 0 6px}
+  .ai-md h4{font-size:13.5px;margin:12px 0 4px}
+  .ai-md ul,.ai-md ol{padding-left:1.4em;margin:4px 0}
+  .ai-md table{margin:6px 0}
   .ext-in{width:150px;font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface);color:var(--ink);text-align:right;font-variant-numeric:tabular-nums}
   .up{color:var(--ok)} .down{color:var(--risk)}
   .todo{display:grid;gap:0}
@@ -262,6 +274,10 @@
   .grid2>*{min-width:0}
   /* 表が広くても画面全体が横に伸びないようにする（表の中だけ横スクロール） */
   main{grid-template-columns:minmax(0,1fr)} main>section{min-width:0}
+  /* セクション（見出し＋カード）の間をあける。見出しとカードの間は狭いまま、まとまり同士を離す */
+  main>section{display:grid;gap:34px;align-content:start}
+  main>section>.grid2{gap:24px 22px}
+  @media (max-width:520px){ main>section{gap:26px} }
   .ai-out{font-family:var(--mono);font-size:12px;word-break:break-all;background:var(--surface-2);
     border:1px solid var(--line);border-radius:5px;padding:8px 10px;margin-top:10px}
 </style>
@@ -311,6 +327,7 @@
       <button role="tab" id="t-dash" aria-selected="true">ダッシュボード</button>
       <button role="tab" id="t-sales" aria-selected="false">売上</button>
       <button role="tab" id="t-ads" aria-selected="false">広告</button>
+      <button role="tab" id="t-kw" aria-selected="false">キーワード発見</button>
       <button role="tab" id="t-stock" aria-selected="false">在庫</button>
       <button role="tab" id="t-report" aria-selected="false">レポート</button>
     </nav>
@@ -754,6 +771,22 @@
     </div>
 
     <div>
+      <h2>AIに広告を相談する<span class="hint">新しいキーワード・競合分析・提案の実行可否</span></h2>
+      <div class="card">
+        <p class="note" style="margin-bottom:12px">広告だけに絞ったデータ（キーワード・検索語・直近8週の推移・商品の ASIN・ツールの提案）と、
+          「新しいキーワードを探す／競合と比べる／提案を実行してよいか」の依頼文をまとめます。
+          <strong>Web 検索ができる AI</strong>（ChatGPT の検索・Claude の Web 検索など）に貼ると、商品ページや検索結果まで見て答えてくれます。</p>
+        <div class="btns" style="margin-top:0">
+          <button class="act primary" id="btn-adai-make">AI用の文章を作る</button>
+          <button class="act" id="btn-adai-copy" disabled>全文をコピー</button>
+          <button class="act" id="btn-adai-save" disabled>ファイルで保存（.md）</button>
+          <span class="note" id="adai-msg"></span>
+        </div>
+        <textarea id="adai-text" readonly spellcheck="false" class="hidden" style="margin-top:12px;min-height:320px"></textarea>
+      </div>
+    </div>
+
+    <div>
       <h2>Amazon広告の自動取り込み<span class="hint">Ads API／毎朝6時に直近14日を取り直す</span></h2>
       <div class="card">
         <div class="btns" style="margin-top:0">
@@ -827,6 +860,53 @@
       <p class="note" style="margin-top:6px">楽天の表示回数はインプレッションが返らないため、クリック数とCTRからの逆算です。
         CTRが0.00と出る低い行は求められないので「—」になります。
         検索用語のインプレッションシェアはAmazon上に30日しか残らないので、こまめに取り込むと履歴が貯まります。</p>
+    </div>
+  </section>
+
+  <!-- キーワード発見 -->
+  <section id="p-kw" class="hidden">
+    <div>
+      <h2>新しいキーワードの候補<span class="hint">まだ入札していない語／Amazon の推奨と、検索語レポートで売れた語</span></h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0">
+          <span class="seg" id="kw-src">
+            <button data-src="" aria-pressed="true">すべて</button><button data-src="検索語で売上あり" aria-pressed="false">検索語で売上あり</button><button data-src="Amazon の推奨" aria-pressed="false">Amazon の推奨</button>
+          </span>
+          <button class="act" id="btn-kw-reco">Amazon の推奨を取り直す</button>
+          <span class="note" id="kw-reco-msg"></span>
+        </div>
+        <div class="tablewrap" style="margin-top:12px"><table style="min-width:860px">
+          <thead><tr><th>キーワード</th><th>出どころ</th><th>関連商品</th><th class="r">推奨順位</th><th class="r">推奨入札（中央・範囲）</th>
+            <th class="r">注文</th><th class="r">売上</th><th class="r">ROAS</th><th></th></tr></thead>
+          <tbody id="kw-cands"></tbody></table></div>
+        <p class="note" style="margin-top:8px">「検索語で売上あり」は、自動ターゲティングや部分一致で売れたのに、キーワードとしてはまだ入札していない語です（直近60日）。
+          「Amazon の推奨」は、広告 API が自社 ASIN ごとに勧めるキーワードで、週に1回取り直します。気になる語は「監視する」で、競合と自社の順位を毎日記録できます。</p>
+      </div>
+    </div>
+
+    <div>
+      <h2>監視キーワード<span class="hint">毎日、Amazon と楽天の検索結果（競合・自社の順位）を記録します</span></h2>
+      <div class="card">
+        <div id="kw-watch" class="kw-chips"></div>
+        <div class="btns">
+          <input type="text" id="kw-add" placeholder="キーワードを入れて追加" aria-label="監視するキーワード"
+            style="font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface);color:var(--ink);min-width:240px">
+          <button class="act primary" id="btn-kw-add">追加して今すぐ調べる</button>
+          <span class="note" id="kw-watch-msg"></span>
+        </div>
+        <div id="kw-detail" style="margin-top:14px"></div>
+      </div>
+    </div>
+
+    <div>
+      <h2>AI の週次分析<span class="hint">Claude が毎週月曜に、広告とキーワードのデータから提案を作ります（案件の設定でオン/オフ）</span></h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0">
+          <button class="act primary" id="btn-ai-run">今すぐ分析する</button>
+          <span class="note" id="ai-run-msg"></span>
+        </div>
+        <div id="ai-reports" style="margin-top:12px"></div>
+      </div>
     </div>
   </section>
 
@@ -1171,7 +1251,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.22.4";
+  const UI_VERSION = "0.24.0";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -1180,10 +1260,10 @@
   const FFL = { fba: "FBA", own: "自社発送", mcf: "マルチチャネル" };
   const POLICY = { profit: "利益重視", share: "シェア獲得", nurture: "育成中" };
 
-  const tabs = [["t-dash", "p-dash"], ["t-master", "p-master"], ["t-sales", "p-sales"], ["t-stock", "p-stock"], ["t-ads", "p-ads"], ["t-settings", "p-settings"], ["t-conn", "p-conn"], ["t-status", "p-status"], ["t-cases", "p-cases"], ["t-report", "p-report"], ["t-events", "p-events"], ["t-manual", "p-manual"]];
+  const tabs = [["t-dash", "p-dash"], ["t-master", "p-master"], ["t-sales", "p-sales"], ["t-stock", "p-stock"], ["t-ads", "p-ads"], ["t-settings", "p-settings"], ["t-conn", "p-conn"], ["t-status", "p-status"], ["t-cases", "p-cases"], ["t-report", "p-report"], ["t-events", "p-events"], ["t-manual", "p-manual"], ["t-kw", "p-kw"]];
   // 2段のメニュー。上の段（グループ）ごとに、最後に開いていた画面を覚えておく
   const GROUPS = {
-    dash: { btn: "grp-dash", sub: "sub-dash", tabs: ["t-dash", "t-sales", "t-ads", "t-stock", "t-report"], last: "t-dash" },
+    dash: { btn: "grp-dash", sub: "sub-dash", tabs: ["t-dash", "t-sales", "t-ads", "t-kw", "t-stock", "t-report"], last: "t-dash" },
     set: { btn: "grp-set", sub: "sub-set", tabs: ["t-cases", "t-settings", "t-events", "t-conn", "t-status", "t-master"], last: "t-cases" },
     man: { btn: "grp-man", sub: "sub-man", tabs: ["t-manual"], last: "t-manual" },
   };
@@ -1251,6 +1331,7 @@
     if (p === "p-report") return loadReport();
     if (p === "p-events") return loadEvents();
     if (p === "p-manual") return renderManual();
+    if (p === "p-kw") return loadKeywords();
   }
   const activePanel = () => (tabs.find(([t]) => $(t).getAttribute("aria-selected") === "true") || tabs[0])[1];
 
@@ -3100,7 +3181,19 @@
 
   function settingRows(list, scope) {
     if (!list.length) return `<p class="note">この階層に設定できる項目はありません。</p>`;
-    return list.map((s) => `
+    return list.map((s) => s.unit === "toggle" ? `
+      <div class="row" style="align-items:flex-start">
+        <span style="flex:1">${esc(s.label)}
+          <span class="note" style="display:block">${esc(s.help)}</span></span>
+        <span style="text-align:right">
+          <select data-scope="${scope}" data-key="${esc(s.key)}" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink)">
+            <option value="" ${s.own == null ? "selected" : ""}>オフ（既定）</option>
+            <option value="1" ${s.own === 1 ? "selected" : ""}>オン</option>
+            <option value="0" ${s.own === 0 ? "selected" : ""}>オフ</option>
+          </select>
+          <div class="note" style="margin-top:3px">いま：${s.effective === 1 ? "オン" : "オフ"}</div>
+        </span>
+      </div>` : `
       <div class="row" style="align-items:flex-start">
         <span style="flex:1">${esc(s.label)}
           <span class="note" style="display:block">${esc(s.help)}</span></span>
@@ -3160,7 +3253,7 @@
     const scopeId = scope === "company" ? "" : scope === "case" ? caseId : `${caseId}:${mall}`;
 
     const values = {};
-    document.querySelectorAll(`input[data-scope="${scope}"]`).forEach((el) => {
+    document.querySelectorAll(`[data-scope="${scope}"][data-key]`).forEach((el) => {
       const v = el.value.trim();
       values[el.dataset.key] = v === "" ? null : Number(v);   // 空欄は継承
     });
@@ -4201,6 +4294,189 @@
     } finally { btn.disabled = false; }
   });
 
+  /* ---------- キーワード発見 ---------- */
+  let kwData = null, kwSel = "", kwSrc = "";
+  async function loadKeywords() {
+    if (!currentCase) return;
+    const d = await get(`/api/keywords?case_id=${encodeURIComponent(currentCase)}`);
+    if (d.error) { $("kw-cands").innerHTML = emptyRow(9, esc(d.error)); return; }
+    kwData = d;
+    renderKwCands();
+    renderKwWatch();
+    if (!kwSel || !d.watch.includes(kwSel)) kwSel = d.watch[0] || "";
+    if (kwSel) loadKwDetail(kwSel); else $("kw-detail").innerHTML = `<p class="note">監視キーワードがまだありません。上の候補の「監視する」か、ここで追加してください。</p>`;
+    const rc = d.recoAt;
+    $("kw-reco-msg").textContent = rc ? `Amazon の推奨：${String(rc.at).slice(0, 10)} 取得・${rc.rows}件${rc.error ? "（" + rc.error + "）" : ""}` : "Amazon の推奨はまだ取得していません";
+    loadAiReports();
+  }
+  function renderKwCands() {
+    const list = (kwData.candidates || []).filter((c) => !kwSrc || c.source === kwSrc);
+    $("kw-cands").innerHTML = list.length ? list.slice(0, 120).map((c) => `<tr>
+        <td><strong>${esc(c.keyword)}</strong></td>
+        <td>${c.source === "Amazon の推奨" ? `<span class="tag pill-a">Amazon の推奨</span>` : `<span class="tag ok">検索語で売上あり</span>`}</td>
+        <td class="note" style="max-width:260px">${esc((c.products || "—").slice(0, 60))}</td>
+        <td class="r">${c.rank ?? "—"}</td>
+        <td class="r">${c.bid != null ? yen(c.bid) : "—"}${c.bidRange ? `<div class="note">${esc(c.bidRange)}</div>` : ""}</td>
+        <td class="r">${c.orders || "—"}</td><td class="r">${c.sales ? yen(c.sales) : "—"}</td><td class="r">${c.roas ?? "—"}</td>
+        <td>${c.watched ? `<span class="note">監視中</span>` : `<button class="act" style="padding:3px 10px;font-size:12px" data-kw-watch="${esc(c.keyword)}">監視する</button>`}</td></tr>`).join("")
+      : emptyRow(9, "候補はまだありません。検索語レポートの取り込みと、Amazon の推奨の取得（週1回・自動）を待ってください。");
+  }
+  function renderKwWatch() {
+    const w = kwData.watch || [];
+    $("kw-watch").innerHTML = w.length ? w.map((k) => `<span class="kw-chip" aria-current="${k === kwSel}"><button data-kw-sel="${esc(k)}">${esc(k)}</button><button class="x" data-kw-del="${esc(k)}" aria-label="${esc(k)} の監視をやめる">×</button></span>`).join("")
+      : `<span class="note">まだありません</span>`;
+    if (!kwData.rakutenReady) $("kw-watch-msg").innerHTML = `<span class="tag warn">楽天の競合は未設定</span> 楽天ウェブサービスのアプリIDを Cloudflare に入れると、楽天の検索結果も記録します`;
+    else if (kwData.lastError) $("kw-watch-msg").textContent = `最後のエラー（${String(kwData.lastError.at).slice(0, 10)}・${kwData.lastError.keyword}）：${(kwData.lastError.errors || []).join(" ／ ")}`;
+  }
+  async function loadKwDetail(k) {
+    kwSel = k; renderKwWatch();
+    const d = await get(`/api/keywords/detail?case_id=${encodeURIComponent(currentCase)}&keyword=${encodeURIComponent(k)}`, { quiet: true });
+    if (d.error) { $("kw-detail").innerHTML = `<p class="note">${esc(d.error)}</p>`; return; }
+    const hist = (mall) => d.history.filter((h) => h.mall === mall).map((h) => `${h.date.slice(5)} ${h.own_pos ? h.own_pos + "位" : "圏外"}`).join("・");
+    const tbl = (x, mall) => {
+      if (!x.rows.length) return `<p class="note">まだ記録がありません（毎日自動で調べます）。</p>`;
+      const own = x.rows.find((r) => r.own);
+      return `<p class="note" style="margin:4px 0 6px">${esc(x.date)} 時点・自社の順位：<strong>${own ? own.position + "位" : (mall === "rakuten" ? "60位以内に無し" : "上位20件に無し")}</strong>${hist(mall) ? `／推移：${esc(hist(mall))}` : ""}</p>
+        <div class="tablewrap"><table style="min-width:640px"><thead><tr><th class="r">順位</th><th>商品</th><th>${mall === "amazon" ? "ブランド" : "店舗"}</th>
+          ${mall === "rakuten" ? `<th class="r">価格</th><th class="r">レビュー</th>` : `<th class="r">ランキング</th>`}</tr></thead>
+          <tbody>${x.rows.slice(0, 20).map((r) => `<tr class="${r.own ? "own" : ""}"><td class="r">${r.position}</td>
+            <td style="max-width:420px">${mall === "amazon" ? `<a href="https://www.amazon.co.jp/dp/${esc(r.item_id)}" target="_blank" rel="noopener">${esc(r.title || r.item_id)}</a>` : esc(r.title)}${r.own ? ` <span class="tag ok">自社</span>` : ""}</td>
+            <td>${esc(r.shop || "—")}</td>
+            ${mall === "rakuten" ? `<td class="r">${r.price != null ? yen(r.price) : "—"}</td><td class="r">${r.review_count ?? "—"}${r.review_avg ? `（${r.review_avg}）` : ""}</td>` : `<td class="r">${r.sales_rank ?? "—"}</td>`}</tr>`).join("")}</tbody></table></div>`;
+    };
+    $("kw-detail").innerHTML = `<div class="btns" style="margin:0 0 6px"><strong>「${esc(k)}」の検索結果</strong>
+        <button class="act" style="padding:3px 10px;font-size:12px" data-kw-check="${esc(k)}">今すぐ調べ直す</button></div>
+      <div class="grid2"><div><h3 style="font-size:13px;margin:6px 0 0">${mallTag("amazon")} カタログ検索（関連度順）</h3>${tbl(d.amazon, "amazon")}</div>
+        <div><h3 style="font-size:13px;margin:6px 0 0">${mallTag("rakuten")} 楽天市場の検索（楽天標準順）</h3>${tbl(d.rakuten, "rakuten")}</div></div>
+      <p class="note" style="margin-top:8px">Amazon はカタログ検索 API の結果で、実際の検索結果の並びとは少し違います（広告枠も含みません）。楽天は楽天市場の検索結果（楽天標準順）の上位60件です。</p>`;
+  }
+  async function kwWatch(keyword, action) {
+    $("kw-watch-msg").textContent = action === "remove" ? "外しています…" : "調べています…（10秒ほど）";
+    const r = await fetch("/api/keywords/watch", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ caseId: currentCase, keyword, action }) });
+    const d = await r.json();
+    if (!r.ok) { $("kw-watch-msg").innerHTML = `<span class="tag ng">できません</span> ${esc(d.error || "")}`; return; }
+    $("kw-watch-msg").innerHTML = d.errors && d.errors.length ? `<span class="tag warn">一部取れませんでした</span> ${esc(d.errors.join(" ／ "))}` : `<span class="tag ok">${action === "remove" ? "外しました" : "記録しました"}</span>`;
+    if (action !== "remove") kwSel = keyword.normalize("NFKC").trim().replace(/\s+/g, " ");
+    await loadKeywords();
+  }
+  document.addEventListener("click", (e) => {
+    const t = e.target.closest && e.target.closest("[data-kw-watch],[data-kw-sel],[data-kw-del],[data-kw-check],#kw-src [data-src]");
+    if (!t) return;
+    if (t.dataset.kwWatch) kwWatch(t.dataset.kwWatch, "add");
+    else if (t.dataset.kwSel) loadKwDetail(t.dataset.kwSel);
+    else if (t.dataset.kwDel) kwWatch(t.dataset.kwDel, "remove");
+    else if (t.dataset.kwCheck) kwWatch(t.dataset.kwCheck, "check");
+    else if (t.dataset.src != null) {
+      kwSrc = t.dataset.src;
+      document.querySelectorAll("#kw-src [data-src]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.src === kwSrc)));
+      renderKwCands();
+    }
+  });
+  $("btn-kw-add").addEventListener("click", () => { const v = $("kw-add").value.trim(); if (v) { $("kw-add").value = ""; kwWatch(v, "add"); } });
+  $("kw-add").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btn-kw-add").click(); });
+  $("btn-kw-reco").addEventListener("click", async () => {
+    const b = $("btn-kw-reco"); b.disabled = true; $("kw-reco-msg").textContent = "Amazon に問い合わせています…（30秒ほど）";
+    try {
+      const r = await fetch("/api/keywords/reco", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ caseId: currentCase }) });
+      const d = await r.json();
+      $("kw-reco-msg").textContent = d.message || "";
+      if (d.ok) await loadKeywords();
+    } finally { b.disabled = false; }
+  });
+
+  /* AI の週次分析 */
+  // AI の Markdown を、見出し・箇条書き・表・太字だけ HTML にする（先に全体をエスケープしてから）
+  function mdLite(md) {
+    const lines = esc(md).split("\n");
+    const out = []; let list = null, table = [];
+    const inline = (t) => t.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/(https?:\/\/[^\s)<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+    const flushList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+    const flushTable = () => {
+      if (!table.length) return;
+      const rows = table.filter((r) => !/^\|\s*-{2,}/.test(r)).map((r) => r.replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim())));
+      out.push(`<div class="tablewrap"><table><thead><tr>${rows[0].map((c) => `<th>${c}</th>`).join("")}</tr></thead><tbody>${rows.slice(1).map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
+      table = [];
+    };
+    for (const l of lines) {
+      if (/^\s*\|/.test(l)) { flushList(); table.push(l.trim()); continue; }
+      flushTable();
+      let m;
+      if ((m = l.match(/^(#{1,4})\s+(.*)/))) { flushList(); out.push(`<h${Math.min(4, m[1].length + 1)}>${inline(m[2])}</h${Math.min(4, m[1].length + 1)}>`); }
+      else if ((m = l.match(/^\s*[-*]\s+(.*)/))) { if (list !== "ul") { flushList(); out.push("<ul>"); list = "ul"; } out.push(`<li>${inline(m[1])}</li>`); }
+      else if ((m = l.match(/^\s*\d+[.)]\s+(.*)/))) { if (list !== "ol") { flushList(); out.push("<ol>"); list = "ol"; } out.push(`<li>${inline(m[1])}</li>`); }
+      else if (!l.trim()) { flushList(); }
+      else { flushList(); out.push(`<p style="margin:4px 0">${inline(l)}</p>`); }
+    }
+    flushList(); flushTable();
+    return out.join("");
+  }
+  async function loadAiReports() {
+    const d = await get(`/api/ai/reports?case_id=${encodeURIComponent(currentCase)}`, { quiet: true });
+    if (d.error) { $("ai-reports").innerHTML = `<p class="note">${esc(d.error)}</p>`; return; }
+    $("btn-ai-run").disabled = !d.enabled || !d.keyReady;
+    $("ai-run-msg").innerHTML = !d.keyReady ? `<span class="tag warn">API キー未設定</span> Cloudflare のシークレット CLAUDE_API_KEY に Claude の API キーを入れてください`
+      : !d.enabled ? `<span class="tag wait">オフ</span> 設定タブ → 案件ごと →「AIの週次分析」をオンにすると使えます（1回あたり数十円）` : "毎週月曜の朝に自動で分析します";
+    const rs = d.reports || [];
+    if (!rs.length) { $("ai-reports").innerHTML = `<p class="note">まだ分析はありません。</p>`; return; }
+    const ST = { queued: ["wait", "待機中"], running: ["wait", "分析中"], done: ["ok", "完了"], error: ["ng", "失敗"] };
+    const latest = rs.find((r) => r.status === "done");
+    $("ai-reports").innerHTML =
+      (latest ? `<div class="ai-md">${mdLite(latest.content || "")}</div><p class="note" style="margin-top:10px">${esc(String(latest.created_at).slice(0, 16))} の分析・${esc(latest.model || "")}・費用の目安 $${latest.cost_usd ?? "—"}（約 ${latest.cost_usd != null ? Math.round(latest.cost_usd * 150) : "—"}円）</p>` : "")
+      + `<details style="margin-top:10px"><summary class="note" style="cursor:pointer">これまでの分析（${rs.length}件）</summary><div class="tablewrap"><table><thead><tr><th>日時</th><th>きっかけ</th><th>状態</th><th class="r">費用の目安</th><th></th></tr></thead><tbody>${
+        rs.map((r, i) => `<tr><td>${esc(String(r.created_at).slice(0, 16))}</td><td>${r.trigger_kind === "weekly" ? "毎週" : "手動" + (r.requested_by ? "・" + esc(r.requested_by) : "")}</td>
+          <td><span class="tag ${ST[r.status]?.[0] || "wait"}">${ST[r.status]?.[1] || esc(r.status)}</span>${r.error ? `<div class="note">${esc(r.error)}</div>` : ""}</td>
+          <td class="r">${r.cost_usd != null ? "$" + r.cost_usd : "—"}</td><td>${r.status === "done" && r !== latest ? `<button class="act" style="padding:2px 8px;font-size:12px" data-ai-show="${i}">表示</button>` : ""}</td></tr>`).join("")}</tbody></table></div></details>`;
+    $("ai-reports").dataset.reports = JSON.stringify(rs.map((r) => r.content || ""));
+  }
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest("[data-ai-show]");
+    if (!b) return;
+    const list = JSON.parse($("ai-reports").dataset.reports || "[]");
+    const md = list[Number(b.dataset.aiShow)] || "";
+    renderGuide({ kicker: "AI の週次分析", title: "これまでの分析", lead: `<div class="ai-md">${mdLite(md)}</div>` }, "ai-old", true);
+  });
+  $("btn-ai-run").addEventListener("click", async () => {
+    const b = $("btn-ai-run"); b.disabled = true;
+    const r = await fetch("/api/ai/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ caseId: currentCase }) });
+    const d = await r.json();
+    $("ai-run-msg").innerHTML = r.ok ? `<span class="tag ok">依頼しました</span> ${esc(d.message)}` : `<span class="tag ng">できません</span> ${esc(d.message || d.error || "")}`;
+    await loadAiReports();
+  });
+
+  /* ---------- 広告タブの AI 相談 ---------- */
+  $("btn-adai-make").addEventListener("click", async () => {
+    const caseId = $("ads-case").value || currentCase;
+    if (!caseId) { $("adai-msg").textContent = "案件を選んでください"; return; }
+    const btn = $("btn-adai-make"); btn.disabled = true;
+    $("adai-msg").textContent = "作成中…";
+    try {
+      const r = await fetch(`/api/ads/markdown?case_id=${encodeURIComponent(caseId)}&${rangeQS()}`);
+      if (!r.ok) { $("adai-msg").textContent = "作成できませんでした"; return; }
+      const text = await r.text();
+      const ta = $("adai-text");
+      ta.value = text; ta.classList.remove("hidden"); ta.focus(); ta.select(); ta.scrollTop = 0;
+      $("btn-adai-copy").disabled = false; $("btn-adai-save").disabled = false;
+      $("adai-msg").textContent = `${text.length.toLocaleString("ja-JP")}文字。下の欄に出しました`;
+    } finally { btn.disabled = false; }
+  });
+  $("btn-adai-copy").addEventListener("click", async () => {
+    const ta = $("adai-text"); ta.focus(); ta.select();
+    let ok = false;
+    try { await navigator.clipboard.writeText(ta.value); ok = true; } catch (e) { try { ok = document.execCommand("copy"); } catch (e2) { ok = false; } }
+    $("adai-msg").innerHTML = ok ? `<span class="tag ok">コピーしました</span> Web 検索ができる AI のチャットに貼り付けてください`
+      : "ボタンでコピーできません。欄が選択された状態なので Ctrl+C（Macは ⌘C）を押してください";
+  });
+  $("btn-adai-save").addEventListener("click", () => {
+    const blob = new Blob([$("adai-text").value], { type: "text/markdown;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `広告相談_${caseName()}_${range.from}_${range.to}.md`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
   $("btn-ai-copy").addEventListener("click", async () => {
     const ta = $("ai-text");
     ta.focus(); ta.select();
@@ -4283,6 +4559,17 @@
         S("<strong>改善提案</strong>（入札・除外・追加キーワード・予算）は週に一度見るのがおすすめです", "t-ads#adv-tabs"),
       ],
       wait: "Amazon：朝のうち／楽天RPP：翌日12時ごろ",
+    }),
+    "p-kw": () => ({
+      kicker: "キーワード発見", title: "新しいキーワードと競合を見つける画面",
+      lead: "入札の上げ下げ（利益ベース）だけでは売上が先細るので、まだ入札していない語と、競合の動きを集めます。",
+      steps: [
+        S("<strong>新しいキーワードの候補</strong>：検索語レポートで売れたのに未入札の語と、Amazon が勧める語。良さそうなものは広告の管理画面で入札を追加します", "t-kw#kw-cands"),
+        S("<strong>監視キーワード</strong>：毎日、Amazon・楽天の検索結果で競合と自社の順位を記録します。気になる語を追加してください", "t-kw#kw-add"),
+        S("<strong>AI の週次分析</strong>：設定でオンにした案件は、毎週月曜に AI が提案を作ります（1回あたり数十円）", "t-kw#btn-ai-run"),
+        S("AI チャットに自分で相談するときは、広告タブの「AIに広告を相談する」", "t-ads#btn-adai-make"),
+      ],
+      wait: "監視キーワード：毎日／Amazon の推奨：週1回／AI の週次分析：毎週月曜",
     }),
     "p-stock": () => ({
       kicker: "在庫", title: "在庫：毎朝の最新の状態",
@@ -4574,6 +4861,9 @@
     ["楽天の過去の売上の取り込み", "1年分で30分〜1時間", "一度だけ（番号を変えたらもう一度）"],
     ["接続情報の登録", "翌朝6〜7時から毎日の取り込みが始まる", "管理者"],
     ["セール・イベントの登録", "すぐ", "—"],
+    ["監視キーワードを追加する", "その場で1回調べる。以後は毎日", "自動"],
+    ["Amazon のキーワード推奨", "週1回（「取り直す」でその場で）", "自動"],
+    ["AI の週次分析", "毎週月曜8時以降（「今すぐ分析する」は5分以内に開始・数分で完了）", "設定でオンの案件だけ・1回あたり数十円"],
     ["前日の売上（毎日）", "楽天 6時ごろ／Amazon 7時ごろ", "自動"],
     ["前日の広告（毎日）", "Amazon 朝のうち／楽天RPP 12時ごろ", "自動"],
     ["Amazon の手数料（実額）", "出荷から数日／月の確定は翌月10日ごろ", "自動"],
@@ -4583,6 +4873,7 @@
       S("ダッシュボードの<strong>データの鮮度</strong>で、前日分が入っているか確認（楽天RPPは昼過ぎ）", "t-dash#dash-fresh"),
       S("<strong>要対応</strong>を上から見て、ステータスを付ける（対応済み・今はしない・自由記述）", "t-dash#dash-todo"),
       S("広告の<strong>改善提案</strong>は週に一度、広告タブで", "t-ads#adv-tabs"),
+      S("週に一度、<strong>キーワード発見</strong>で新しい候補と監視キーワードの順位を見る。AI の週次分析がオンなら、その提案も", "t-kw#kw-cands"),
       S("月に一度、ダッシュボードの<strong>外部広告費</strong>の「入力」から、SNS広告などの月の合計（税別）を入れる。確定したら上書き", "t-dash#dash-kpis"),
       S("同じ内容が毎朝7時に Slack の日次サマリでも届きます"),
     ] },

@@ -33,6 +33,9 @@ import { decodeCsv, parseCsv } from "./adImport";
 import { buildCaseSummary, periodSummary, dataRange, resolvePeriod } from "./caseSummary";
 import { buildAdAdvice } from "./adAdvice";
 import { renderCaseMarkdown } from "./caseReport";
+import { renderAdsMarkdown, adsPrompt } from "./adsReport";
+import { listWatch, addWatch, removeWatch, keywordOverview, keywordDetail, snapshotKeyword, refreshAmazonReco, pumpKeywords } from "./kwDiscovery";
+import { queueAiReport, listAiReports, aiEnabled, pumpAi } from "./aiAnalysis";
 import { postSlack, listCaseSlack, saveCaseSlack } from "./slack";
 import { sendDailySummaries } from "./dailySummary";
 import { listEvents, saveEvent, deleteEvent, setParticipation } from "./events";
@@ -44,7 +47,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.22.4";
+const APP_VERSION = "0.24.0";
 
 export interface Env {
   DB: D1Database;
@@ -53,6 +56,12 @@ export interface Env {
   /** 案件ごとの接続情報を暗号化するための親鍵（Workers のシークレット） */
   SECRET_KEY?: string;
   CLAUDE_API_KEY?: string;
+  /** AI の週次分析に使うモデル（任意。無ければ claude-sonnet-4-5） */
+  CLAUDE_MODEL?: string;
+  /** 楽天ウェブサービス（楽天市場の商品検索 API）。キーワード発見の競合調査に使う */
+  RAKUTEN_WS_APP_ID?: string;
+  RAKUTEN_WS_ACCESS_KEY?: string;
+  RAKUTEN_WS_REFERER?: string;
   SLACK_WEBHOOK_URL?: string;
   /** Amazon LWA のクライアント情報。全案件で共通なのでアプリ側に置く */
   AMAZON_LWA_CLIENT_ID?: string;
@@ -447,7 +456,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const noticeCase = b.scope === "company" ? null : (b.scopeId ?? "").split(":")[0];
     if (changes.length && (!noticeCase || await notifyEnabled(env.DB, noticeCase, "settings_notice"))) {
       const caseId = noticeCase;
-      const fmt = (v: number | null, unit: string) => (v == null ? "（上の階層に従う）" : `${v}${unit === "percent" ? "%" : "日"}`);
+      const fmt = (v: number | null, unit: string) => (v == null ? "（上の階層に従う）" : unit === "toggle" ? (v ? "オン" : "オフ") : `${v}${unit === "percent" ? "%" : "日"}`);
       const where = b.scope === "company" ? "会社共通" : b.scope === "case" ? "案件" : `案件×${(b.scopeId ?? "").endsWith(":rakuten") ? "楽天" : "Amazon"}`;
       await postSlack(env, caseId, [`:gear: *設定が変更されました*（${where}／${viewer(req) ?? "不明なユーザー"}）`,
         ...changes.map((c) => `• ${c.label}：${fmt(c.old, c.unit)} → ${fmt(c.new, c.unit)}`)].join("\n")).catch(() => null);
@@ -633,6 +642,64 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
   }
 
   // 画面の「データを直接コピー」用。共有URLを使わずにAIへ渡せる
+  // キーワード発見
+  if (path === "/api/keywords" && req.method === "GET") {
+    const caseId = new URL(req.url).searchParams.get("case_id");
+    if (!caseId) return json({ error: "案件を指定してください" }, 400);
+    return json({ ...(await keywordOverview(env.DB, caseId)), rakutenReady: Boolean(env.RAKUTEN_WS_APP_ID && env.RAKUTEN_WS_ACCESS_KEY) });
+  }
+  if (path === "/api/keywords/detail") {
+    const u = new URL(req.url);
+    const caseId = u.searchParams.get("case_id"), kw = u.searchParams.get("keyword");
+    if (!caseId || !kw) return json({ error: "案件とキーワードを指定してください" }, 400);
+    return json(await keywordDetail(env.DB, caseId, kw));
+  }
+  if (path === "/api/keywords/watch" && req.method === "POST") {
+    const b = (await req.json()) as { caseId?: string; keyword?: string; action?: "add" | "remove" | "check" };
+    if (!b.caseId || !b.keyword) return json({ error: "案件とキーワードを指定してください" }, 400);
+    try {
+      if (b.action === "remove") await removeWatch(env.DB, b.caseId, b.keyword);
+      else {
+        if (b.action !== "check") await addWatch(env.DB, b.caseId, b.keyword, viewer(req));
+        const errors = await snapshotKeyword(env, b.caseId, b.keyword.normalize("NFKC").trim().replace(/\s+/g, " "));
+        return json({ ok: true, watch: await listWatch(env.DB, b.caseId), errors });
+      }
+    } catch (e) {
+      return json({ error: String(e instanceof Error ? e.message : e) }, 400);
+    }
+    return json({ ok: true, watch: await listWatch(env.DB, b.caseId) });
+  }
+  if (path === "/api/keywords/reco" && req.method === "POST") {
+    const b = (await req.json()) as { caseId?: string };
+    if (!b.caseId) return json({ error: "案件を指定してください" }, 400);
+    return json(await refreshAmazonReco(env, b.caseId));
+  }
+  // AI の週次分析（Claude API）
+  if (path === "/api/ai/reports" && req.method === "GET") {
+    const caseId = new URL(req.url).searchParams.get("case_id");
+    if (!caseId) return json({ error: "案件を指定してください" }, 400);
+    return json({ enabled: await aiEnabled(env.DB, caseId), keyReady: Boolean(env.CLAUDE_API_KEY), reports: await listAiReports(env.DB, caseId) });
+  }
+  if (path === "/api/ai/run" && req.method === "POST") {
+    const b = (await req.json()) as { caseId?: string };
+    if (!b.caseId) return json({ error: "案件を指定してください" }, 400);
+    const r = await queueAiReport(env, b.caseId, viewer(req));
+    return json(r, r.ok ? 200 : 400);
+  }
+
+  // 広告タブの「AIに相談する」：広告だけに絞ったデータと依頼文
+  if (path === "/api/ads/markdown") {
+    const u = new URL(req.url);
+    const caseId = u.searchParams.get("case_id");
+    if (!caseId) return json({ error: "案件を指定してください" }, 400);
+    const c = await env.DB.prepare("SELECT name FROM cases WHERE id = ?").bind(caseId).first<{ name: string }>();
+    if (!c) return json({ error: "案件が見つかりません" }, 404);
+    const per = await resolvePeriod(env.DB, caseId, periodQuery(u));
+    const st = await resolveSettings(env.DB, { caseId, mall: "amazon" });
+    const am = st.case.find((x) => x.key === "ad_profit_margin")?.effective ?? 10;
+    const md = adsPrompt(c.name, per.from, per.to) + (await renderAdsMarkdown(env.DB, caseId, c.name, per.from, per.to, am));
+    return new Response(md, { headers: { "content-type": "text/markdown; charset=utf-8" } });
+  }
   if (path === "/api/dashboard/markdown") {
     const u = new URL(req.url);
     const caseId = u.searchParams.get("case_id");
@@ -1110,6 +1177,10 @@ export default {
           // リピート率：楽天は取り込み済みの注文（R2）から購入者の印を作る／Amazon はブランド分析レポート（月単位）
           await reparseRakutenCustomers(env, 6).catch(() => 0);
           await pumpRepeatAmazon(env, { budgetMs: 20000 }).catch(() => 0);
+          // キーワード発見：監視キーワードの検索結果（毎日）と Amazon のキーワード推奨（週1回）
+          await pumpKeywords(env, { budgetMs: 30000 }).catch(() => 0);
+          // AI の週次分析（設定でオンの案件だけ・1回に1件）
+          await pumpAi(env).catch(() => 0);
           // 新しい入金明細（出荷日ベース）。直近14日は毎日取り直し、古い日は少しずつ埋める
           await pumpTransactions(env, { budgetMs: 60000 }).catch(() => 0);
           // 楽天の過去の売上（始めた案件だけ）

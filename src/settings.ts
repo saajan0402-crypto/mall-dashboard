@@ -16,7 +16,7 @@ export interface SettingDef {
   key: string;
   label: string;
   help: string;
-  unit: "percent" | "days";
+  unit: "percent" | "days" | "toggle";
   fallback: number;
   scopes: Scope[];
   /** case_mall のとき、どのモールに出すか */
@@ -34,6 +34,11 @@ export const SETTINGS: SettingDef[] = [
     key: "ad_profit_margin", label: "広告費を引いた後の目標利益率", unit: "percent", fallback: 10,
     help: "広告の改善提案に使います。「利益重視」の商品は、広告費を引いた後にこの率が残るように入札を提案します（目標粗利率は広告費を引く前の基準）",
     scopes: ["company", "case"],
+  },
+  {
+    key: "ai_weekly", label: "AIの週次分析（Claude API）", unit: "toggle", fallback: 0,
+    help: "オンにすると、毎週月曜に広告とキーワード発見のデータを AI（Claude）が分析し、キーワード発見タブに提案を出します。API の利用料が1回あたり数十円かかります（既定はオフ）",
+    scopes: ["case"],
   },
   {
     key: "stock_alert_days", label: "在庫アラート日数", unit: "days", fallback: 14,
