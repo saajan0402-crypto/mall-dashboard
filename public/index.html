@@ -1307,7 +1307,23 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.28.3";
+  /* レポートの「期間中に対応したこと」をモールで分ける。項目の印（key）にモール名があればそれ、無ければ文の頭で判断 */
+  const ACT_GROUPS = [["amazon", "Amazon"], ["rakuten", "楽天"], ["common", "共通"]];
+  function actMall(a) {
+    const seg = String(a.key || "").split(":").slice(0, 3);
+    if (seg.includes("amazon")) return "amazon";
+    if (seg.includes("rakuten")) return "rakuten";
+    const t = String(a.title || "");
+    if (/^Amazon/i.test(t)) return "amazon";
+    if (/^楽天/.test(t)) return "rakuten";
+    return "common";
+  }
+  function actText(a, m) {
+    const base = a.status === "other" ? `${a.note}（${a.title.replace(/。.*$/, "")}）` : (a.note || a.title.replace(/。.*$/, ""));
+    // 見出しでモールが分かるので、文の頭のモール名は外す
+    return m === "amazon" ? base.replace(/^Amazon\s*/i, "") : m === "rakuten" ? base.replace(/^楽天\s*/, "") : base;
+  }
+  const UI_VERSION = "0.28.4";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -3781,8 +3797,10 @@
         <p class="note" style="margin-top:4px">ほか ${okN} 件は問題なし・判定不可。在庫は作成時点の状態です。</p>
       </div>` : ""}
       <div class="sec"><h2>${showStock ? 6 : 5}. 期間中に対応したこと</h2>
-        ${d.actions.length ? `<ul>${d.actions.map((a) => `<li>${esc(a.day.slice(5).replace("-", "/"))}　${esc(a.status === "other"
-          ? `${a.note}（${a.title.replace(/。.*$/, "")}）` : (a.note || a.title.replace(/。.*$/, "")))}</li>`).join("")}</ul>`
+        ${d.actions.length ? ACT_GROUPS.map(([m, label]) => {
+            const xs = d.actions.filter((a) => actMall(a) === m);
+            return xs.length ? `<h3>${label}</h3><ul>${xs.map((a) => `<li>${esc(actText(a, m))}</li>`).join("")}</ul>` : "";
+          }).join("")
           : `<p class="note">期間中に「対応済み」にした項目はありません（レポートの期間：${esc(d.summary.period.from)}〜${esc(d.summary.period.to)}）。</p>`}
       </div>
       <div class="sec"><h2>${showStock ? 7 : 6}. 次にやること</h2>
@@ -3937,8 +3955,9 @@
       s.inventory.map((r) => [LV_JA[r.level], MALL_JA[r.mall] || r.mall, r.sku, r.name, r.qty, r.inbound, r.velocity, r.daysOfSupply, r.snsNext30, r.reason]),
       [null, null, null, null, INT, INT, "0.0", INT, INT], [10, 8, 18, 36]);
 
-    sheet("対応したこと", "期間中に対応したこと", ["日付", "分野", "内容", "メモ", "担当"],
-      d.actions.map((x) => [x.day, x.area || "", x.title, x.note || "", x.by || ""]), [], [12, 8, 60, 40, 24]);
+    sheet("対応したこと", "期間中に対応したこと", ["モール", "日付", "分野", "内容", "メモ", "担当"],
+      ACT_GROUPS.flatMap(([m, label]) => d.actions.filter((x) => actMall(x) === m)
+        .map((x) => [label, x.day, x.area || "", x.title, x.note || "", x.by || ""])), [], [8, 12, 8, 60, 40, 24]);
     sheet("次にやること", "次にやること（未対応）", ["優先度", "分野", "内容", "根拠"],
       s.todo.filter((t) => t.priority !== "info" && (t.status || "open") === "open").map((t) => [PRI[t.priority][1], t.area, t.text, t.basis || ""]),
       [], [12, 8, 70, 50]);
