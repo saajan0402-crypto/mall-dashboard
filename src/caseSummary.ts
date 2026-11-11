@@ -394,13 +394,14 @@ function buildTodo(s: Omit<CaseSummary, "todo" | "doneThisMonth">): Todo[] {
     });
   // 新しいキーワード：改善提案の「追加キーワード」とキーワード発見の候補を1件にまとめる（多くなりすぎないように）
   const kw = s.keywords;
-  if (ac.harvest || (kw && (kw.strong || kw.reco))) {
+  if (ac.harvest || (kw && (kw.strong || kw.reco || kw.rakuten))) {
     const parts = [
       ac.harvest ? `完全一致で追加する候補 ${ac.harvest}件（広告タブの改善提案）` : "",
       kw?.strong ? `検索語で売れたのに未入札 ${kw.strong}件` : "",
+      kw?.rakuten ? `Amazon で売れた語のうち楽天RPPに未登録 ${kw.rakuten}件` : "",
       kw?.reco ? `Amazon の推奨 ${kw.reco}件` : "",
     ].filter(Boolean);
-    out.push({ key: `ad_harvest:${wk}`, priority: kw?.strong ? "mid" : "info", area: "広告",
+    out.push({ key: `ad_harvest:${wk}`, priority: kw?.strong || kw?.rakuten ? "mid" : "info", area: "広告",
       text: `新しいキーワードの候補：${parts.join("・")}。キーワード発見タブで選んで入札を追加する`,
       basis: kw?.top.length ? `上位：${kw.top.join("、")}` : undefined });
   }

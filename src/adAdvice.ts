@@ -198,6 +198,9 @@ export async function buildAdAdvice(
     const shared = mall === "rakuten" ? pageTarget(r.external_id == null ? null : String(r.external_id)) : null;
     const pid = shared ? null : productFor(mall, campaign, adGroup, r.product_id == null ? null : String(r.product_id));
     const prod = pid ? products.get(pid) : undefined;
+    // 楽天の1つの商品ページに SKU ごとの別商品があるときは、紐づく商品をすべて並べる
+    const pagePids = mall === "rakuten" && r.external_id != null ? pages.get(String(r.external_id)) ?? [] : [];
+    const pageProds = pagePids.map((x) => products.get(x)).filter((x): x is NonNullable<typeof x> => !!x);
     const target = shared ?? targetOf(mall, pid);
     const cpc = cost / clicks;
     const currentBid = r.bid == null ? null : n(r.bid);
@@ -236,7 +239,8 @@ export async function buildAdAdvice(
     if (suggestedBid === Math.round(base)) continue;
     bids.push({
       mall, adType: r.ad_type == null ? null : String(r.ad_type), campaign, adGroup, keyword, matchType,
-      product: prod ? { sku: prod.sku, name: prod.name } : null,
+      product: prod ? { sku: prod.sku, name: prod.name }
+        : pageProds.length ? { sku: pageProds.map((x) => x.sku).join(" / "), name: pageProds.map((x) => x.name).join(" / ") } : null,
       clicks, cost, orders, sales, cpc: Math.round(cpc), cvr: round2((orders / clicks) * 100),
       roas: roas == null ? null : round2(roas), currentBid, suggestedCpc: r.suggested == null ? null : n(r.suggested),
       target, action, suggestedBid, basis: currentBid == null ? "平均クリック単価" : "入札",

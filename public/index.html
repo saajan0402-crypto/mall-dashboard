@@ -252,7 +252,7 @@
   .kw-serps{display:grid;gap:22px}
   table.kw-serp{table-layout:fixed;width:100%;min-width:620px}
   table.kw-serp td{white-space:normal;vertical-align:top;overflow:hidden}
-  table.kw-cand-table{table-layout:fixed;width:100%;min-width:900px}
+  table.kw-cand-table{table-layout:fixed;width:100%;min-width:1060px}
   table.kw-cand-table td{white-space:normal;vertical-align:middle;overflow:hidden;word-break:break-word}
   .kw-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.5;word-break:break-all}
   .kw-shop{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -877,19 +877,23 @@
       <h2>新しいキーワードの候補<span class="hint">まだ入札していない語／Amazon の推奨と、検索語レポートで売れた語</span></h2>
       <div class="card">
         <div class="btns" style="margin-top:0">
-          <span class="seg" id="kw-src">
-            <button data-src="" aria-pressed="true">すべて</button><button data-src="検索語で売上あり" aria-pressed="false">検索語で売上あり</button><button data-src="Amazon の推奨" aria-pressed="false">Amazon の推奨</button>
+          <span class="seg" id="kw-mall"></span>
+          <span class="seg" id="kw-view">
+            <button data-view="open" aria-pressed="true">候補</button><button data-view="done" aria-pressed="false">追加済み</button><button data-view="skip" aria-pressed="false">見送り</button>
           </span>
+          <span class="seg" id="kw-src"></span>
+        </div>
+        <div class="btns">
           <button class="act" id="btn-kw-reco">Amazon の推奨を取り直す</button>
           <span class="note" id="kw-reco-msg"></span>
         </div>
         <div class="tablewrap" style="margin-top:12px"><table class="kw-cand-table">
-          <colgroup><col style="width:20%"><col style="width:130px"><col><col style="width:76px"><col style="width:140px">
-            <col style="width:56px"><col style="width:96px"><col style="width:68px"><col style="width:100px"></colgroup>
-          <thead><tr><th>キーワード</th><th>出どころ</th><th>関連商品</th><th class="r">推奨順位</th><th class="r">推奨入札</th>
-            <th class="r">注文</th><th class="r">売上</th><th class="r">ROAS</th><th></th></tr></thead>
+          <colgroup id="kw-cols"></colgroup>
+          <thead id="kw-head"></thead>
           <tbody id="kw-cands"></tbody></table></div>
-        <p class="note" style="margin-top:8px">「検索語で売上あり」は、自動ターゲティングや部分一致で売れたのに、キーワードとしてはまだ入札していない語です（直近60日）。
+        <p class="note" style="margin-top:8px">入札を追加したら「追加した」を押してください。<strong>追加済み</strong>に移り、ダッシュボードの「対応の記録」とレポートの「対応したこと」に載ります。関係ない語は「見送る」で候補から外せます（どちらも元に戻せます）。<br>
+          <strong>Amazon</strong>：「検索語で売上あり」は、自動ターゲティングや部分一致で売れたのに、キーワードとしてはまだ入札していない語です（直近60日）。
+          <strong>楽天</strong>：楽天には検索語のレポートが無いので、Amazon で売れた語・Amazon の推奨のうち、楽天RPPでまだ入札していない語を出します（推奨入札は Amazon の値なので出しません）。<br>
           「Amazon の推奨」は、広告 API が自社 ASIN ごとに勧めるキーワードで、週に1回取り直します。推奨入札は太字が中央値、下が範囲です。気になる語は「監視する」で、競合と自社の順位を毎日記録できます。</p>
       </div>
     </div>
@@ -1261,7 +1265,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.24.2";
+  const UI_VERSION = "0.25.0";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -4303,7 +4307,7 @@
   });
 
   /* ---------- キーワード発見 ---------- */
-  let kwData = null, kwSel = "", kwSrc = "";
+  let kwData = null, kwSel = "", kwSrc = "", kwMall = "amazon", kwView = "open";
   async function loadKeywords() {
     if (!currentCase) return;
     const d = await get(`/api/keywords?case_id=${encodeURIComponent(currentCase)}`);
@@ -4318,16 +4322,60 @@
     loadAiReports();
   }
   function renderKwCands() {
-    const list = (kwData.candidates || []).filter((c) => !kwSrc || c.source === kwSrc);
-    $("kw-cands").innerHTML = list.length ? list.slice(0, 120).map((c) => `<tr>
+    const malls = kwData.malls || ["amazon"];
+    if (!malls.includes(kwMall)) kwMall = malls[0];
+    const cnt = (m) => (kwData.candidates || []).filter((c) => c.mall === m).length;
+    $("kw-mall").innerHTML = malls.map((m) => `<button data-kwmall="${m}" aria-pressed="${m === kwMall}">${m === "amazon" ? "Amazon" : "楽天"}（${cnt(m)}）</button>`).join("");
+    const dec = (kwData.decisions || []).filter((d) => d.mall === kwMall);
+    document.querySelectorAll("#kw-view [data-view]").forEach((b) => {
+      const v = b.dataset.view;
+      b.textContent = v === "open" ? `候補（${cnt(kwMall)}）` : v === "done" ? `追加済み（${dec.filter((d) => d.status === "done").length}）` : `見送り（${dec.filter((d) => d.status === "skip").length}）`;
+      b.setAttribute("aria-pressed", String(v === kwView));
+    });
+    const srcs = kwMall === "amazon" ? ["検索語で売上あり", "Amazon の推奨"] : ["Amazon で売れた語", "Amazon の推奨"];
+    if (kwSrc && !srcs.includes(kwSrc)) kwSrc = "";
+    $("kw-src").classList.toggle("hidden", kwView !== "open");
+    $("kw-src").innerHTML = [["", "すべて"], ...srcs.map((x) => [x, x])].map(([v, t]) => `<button data-src="${esc(v)}" aria-pressed="${v === kwSrc}">${esc(t)}</button>`).join("");
+    const sourceTag = (src) => src === "Amazon の推奨" ? `<span class="tag pill-a">Amazon の推奨</span>` : `<span class="tag ok">${esc(src)}</span>`;
+    const small = "padding:3px 9px;font-size:12px;white-space:nowrap";
+    if (kwView !== "open") {
+      $("kw-cols").innerHTML = `<col style="width:30%"><col style="width:120px"><col style="width:160px"><col><col style="width:110px">`;
+      $("kw-head").innerHTML = `<tr><th>キーワード</th><th>状態</th><th>日時</th><th>担当</th><th></th></tr>`;
+      const rows = dec.filter((d) => d.status === kwView);
+      $("kw-cands").innerHTML = rows.length ? rows.map((d) => `<tr><td><strong>${esc(d.keyword)}</strong></td>
+          <td>${d.status === "done" ? `<span class="tag ok">追加済み</span>` : `<span class="tag wait">見送り</span>`}</td>
+          <td>${esc(String(d.at || "").slice(0, 16))}</td><td class="note">${esc(d.by || "—")}</td>
+          <td><button class="act" style="${small}" data-kw-dec="open" data-kw="${esc(d.keyword)}">元に戻す</button></td></tr>`).join("")
+        : emptyRow(5, kwView === "done" ? "まだ追加済みにしたキーワードはありません。" : "見送ったキーワードはありません。");
+      return;
+    }
+    const amz = kwMall === "amazon";
+    $("kw-cols").innerHTML = `<col style="width:19%"><col style="width:130px"><col><col style="width:70px">${amz ? `<col style="width:130px">` : ""}
+      <col style="width:52px"><col style="width:90px"><col style="width:60px"><col style="width:230px">`;
+    $("kw-head").innerHTML = `<tr><th>キーワード</th><th>出どころ</th><th>関連商品</th><th class="r">推奨順位</th>${amz ? `<th class="r">推奨入札</th>` : ""}
+      <th class="r">注文</th><th class="r">売上</th><th class="r">ROAS</th><th></th></tr>`;
+    const list = (kwData.candidates || []).filter((c) => c.mall === kwMall && (!kwSrc || c.source === kwSrc));
+    const cols = amz ? 9 : 8;
+    $("kw-cands").innerHTML = list.length ? list.slice(0, 150).map((c) => `<tr>
         <td><strong>${esc(c.keyword)}</strong></td>
-        <td>${c.source === "Amazon の推奨" ? `<span class="tag pill-a">Amazon の推奨</span>` : `<span class="tag ok">検索語で売上あり</span>`}</td>
+        <td>${sourceTag(c.source)}</td>
         <td class="note"><span class="kw-title" title="${esc(c.products || "")}">${esc((c.products || "—").split(",").join("／"))}</span></td>
         <td class="r">${c.rank ?? "—"}</td>
-        <td class="r">${c.bid != null ? `<strong>${yen(c.bid)}</strong>` : "—"}${c.bidRange ? `<div class="note" style="white-space:nowrap">${esc(c.bidRange)}</div>` : ""}</td>
+        ${amz ? `<td class="r">${c.bid != null ? `<strong>${yen(c.bid)}</strong>` : "—"}${c.bidRange ? `<div class="note" style="white-space:nowrap">${esc(c.bidRange)}</div>` : ""}</td>` : ""}
         <td class="r">${c.orders || "—"}</td><td class="r">${c.sales ? yen(c.sales) : "—"}</td><td class="r">${c.roas ?? "—"}</td>
-        <td>${c.watched ? `<span class="note">監視中</span>` : `<button class="act" style="padding:3px 10px;font-size:12px;white-space:nowrap" data-kw-watch="${esc(c.keyword)}">監視する</button>`}</td></tr>`).join("")
-      : emptyRow(9, "候補はまだありません。検索語レポートの取り込みと、Amazon の推奨の取得（週1回・自動）を待ってください。");
+        <td style="text-align:right"><button class="act primary" style="${small}" data-kw-dec="done" data-kw="${esc(c.keyword)}" data-src="${esc(c.source)}">追加した</button>
+          <button class="act" style="${small}" data-kw-dec="skip" data-kw="${esc(c.keyword)}" data-src="${esc(c.source)}">見送る</button>
+          ${c.watched ? `<span class="note" style="margin-left:4px">監視中</span>` : `<button class="act" style="${small}" data-kw-watch="${esc(c.keyword)}">監視</button>`}</td></tr>`).join("")
+      : emptyRow(cols, "候補はまだありません。検索語レポートの取り込みと、Amazon の推奨の取得（週1回・自動）を待ってください。");
+  }
+  async function kwDecide(keyword, status, source) {
+    const r = await fetch("/api/keywords/status", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ caseId: currentCase, mall: kwMall, keyword, status, source }) });
+    const d = await r.json();
+    if (!r.ok) { $("kw-reco-msg").innerHTML = `<span class="tag ng">できません</span> ${esc(d.error || "")}`; return; }
+    $("kw-reco-msg").innerHTML = status === "done" ? `<span class="tag ok">追加済みにしました</span> 「${esc(keyword)}」は今月の対応の記録に載ります`
+      : status === "skip" ? `<span class="tag wait">見送りにしました</span> 「${esc(keyword)}」` : `<span class="tag ok">元に戻しました</span> 「${esc(keyword)}」`;
+    await loadKeywords();
   }
   function renderKwWatch() {
     const w = kwData.watch || [];
@@ -4370,15 +4418,17 @@
     await loadKeywords();
   }
   document.addEventListener("click", (e) => {
-    const t = e.target.closest && e.target.closest("[data-kw-watch],[data-kw-sel],[data-kw-del],[data-kw-check],#kw-src [data-src]");
+    const t = e.target.closest && e.target.closest("[data-kw-watch],[data-kw-sel],[data-kw-del],[data-kw-check],[data-kw-dec],[data-kwmall],#kw-view [data-view],#kw-src [data-src]");
     if (!t) return;
-    if (t.dataset.kwWatch) kwWatch(t.dataset.kwWatch, "add");
+    if (t.dataset.kwDec) kwDecide(t.dataset.kw, t.dataset.kwDec, t.dataset.src || null);
+    else if (t.dataset.kwmall) { kwMall = t.dataset.kwmall; kwSrc = ""; renderKwCands(); }
+    else if (t.dataset.view) { kwView = t.dataset.view; renderKwCands(); }
+    else if (t.dataset.kwWatch) kwWatch(t.dataset.kwWatch, "add");
     else if (t.dataset.kwSel) loadKwDetail(t.dataset.kwSel);
     else if (t.dataset.kwDel) kwWatch(t.dataset.kwDel, "remove");
     else if (t.dataset.kwCheck) kwWatch(t.dataset.kwCheck, "check");
     else if (t.dataset.src != null) {
       kwSrc = t.dataset.src;
-      document.querySelectorAll("#kw-src [data-src]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.src === kwSrc)));
       renderKwCands();
     }
   });

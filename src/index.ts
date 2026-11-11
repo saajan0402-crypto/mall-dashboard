@@ -34,7 +34,7 @@ import { buildCaseSummary, periodSummary, dataRange, resolvePeriod } from "./cas
 import { buildAdAdvice } from "./adAdvice";
 import { renderCaseMarkdown } from "./caseReport";
 import { renderAdsMarkdown, adsPrompt } from "./adsReport";
-import { listWatch, addWatch, removeWatch, keywordOverview, keywordDetail, snapshotKeyword, refreshAmazonReco, pumpKeywords } from "./kwDiscovery";
+import { listWatch, addWatch, removeWatch, keywordOverview, keywordDetail, snapshotKeyword, refreshAmazonReco, pumpKeywords, kwKey } from "./kwDiscovery";
 import { queueAiReport, listAiReports, aiMode, pumpAi } from "./aiAnalysis";
 import { postSlack, listCaseSlack, saveCaseSlack } from "./slack";
 import { sendDailySummaries } from "./dailySummary";
@@ -47,7 +47,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.24.2";
+const APP_VERSION = "0.25.0";
 
 export interface Env {
   DB: D1Database;
@@ -668,6 +668,17 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       return json({ error: String(e instanceof Error ? e.message : e) }, 400);
     }
     return json({ ok: true, watch: await listWatch(env.DB, b.caseId) });
+  }
+  // 候補を「追加した」「見送る」「元に戻す」。追加したものは要対応の状態と同じ記録に残し、対応の記録・レポートに出す
+  if (path === "/api/keywords/status" && req.method === "POST") {
+    const b = (await req.json()) as { caseId?: string; mall?: string; keyword?: string; status?: "done" | "skip" | "open"; source?: string };
+    if (!b.caseId || !b.keyword || !b.mall || !["done", "skip", "open"].includes(b.status ?? "")) return json({ error: "案件・モール・キーワード・状態を指定してください" }, 400);
+    const mallJa = b.mall === "rakuten" ? "楽天RPP" : "Amazon広告";
+    const kw = b.keyword.normalize("NFKC").trim();
+    const text = b.status === "skip" ? `${mallJa}のキーワード候補「${kw}」を見送り` : `${mallJa}に新しいキーワード「${kw}」を追加`;
+    await setTodoStatus(env.DB, b.caseId, { key: kwKey(b.mall, kw), status: b.status!, text, basis: b.source ? `候補の出どころ：${b.source}` : null,
+      area: "広告", priority: "mid" }, viewer(req));
+    return json({ ok: true });
   }
   if (path === "/api/keywords/reco" && req.method === "POST") {
     const b = (await req.json()) as { caseId?: string };

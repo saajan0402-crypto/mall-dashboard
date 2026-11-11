@@ -283,15 +283,37 @@ export async function pumpKeywords(env: KwEnv, opts: { budgetMs?: number } = {})
 
 /* ───────── 画面用 ───────── */
 
+export interface KwCandidate {
+  mall: "amazon" | "rakuten";
+  keyword: string; source: string; products: string | null;
+  rank: number | null; bid: number | null; bidRange: string | null; impShare: number | null;
+  orders: number; sales: number; cost: number; roas: number | null; watched: boolean;
+}
+export interface KwDecision { mall: string; keyword: string; status: "done" | "skip"; by: string | null; at: string | null; title: string | null }
+
+/** 候補を「追加した」「見送る」にしたときの鍵（要対応の状態と同じ仕組みに載せ、対応の記録・レポートに出す） */
+export const kwKey = (mall: string, keyword: string) => `kw_added:${mall}:${keyword.normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " ")}`;
+
 export async function keywordOverview(db: D1Database, caseId: string) {
   const since = jstDay(60);
-  // 入札済みのキーワード・検索語（候補から外す）
+  // 入札済みのキーワード（モールごと。候補から外す）
   const { results: targeted } = await db.prepare(
-    "SELECT DISTINCT LOWER(keyword) AS k FROM daily_ads WHERE case_id = ? AND level = 'keyword' AND keyword <> '' AND date >= ?"
-  ).bind(caseId, since).all<{ k: string }>();
-  const tset = new Set(targeted.map((t) => t.k.trim()));
+    "SELECT DISTINCT mall, LOWER(keyword) AS k FROM daily_ads WHERE case_id = ? AND level = 'keyword' AND keyword <> '' AND date >= ?"
+  ).bind(caseId, since).all<{ mall: string; k: string }>();
+  const tset = { amazon: new Set<string>(), rakuten: new Set<string>() } as Record<string, Set<string>>;
+  for (const t of targeted) (tset[t.mall] ??= new Set()).add(t.k.trim());
   const watch = await listWatch(db, caseId);
   const wset = new Set(watch.map((w) => w.toLowerCase()));
+
+  // 追加した／見送った候補
+  const { results: st } = await db.prepare(
+    "SELECT key, status, updated_by, updated_at, title FROM todo_status WHERE case_id = ? AND key LIKE 'kw_added:%' AND status IN ('done', 'skip')"
+  ).bind(caseId).all<{ key: string; status: "done" | "skip"; updated_by: string | null; updated_at: string | null; title: string | null }>();
+  const decided = new Map(st.map((r) => [r.key, r]));
+  const decisions: KwDecision[] = st.map((r) => {
+    const [, mall, ...rest] = r.key.split(":");
+    return { mall, keyword: rest.join(":"), status: r.status, by: r.updated_by, at: r.updated_at, title: r.title };
+  }).sort((a, b) => String(b.at).localeCompare(String(a.at)));
 
   const { results: reco } = await db.prepare(
     `SELECT r.keyword, MIN(r.rank) AS rank, MAX(r.bid_median) AS bid, MIN(r.bid_low) AS bid_low, MAX(r.bid_high) AS bid_high,
@@ -300,32 +322,51 @@ export async function keywordOverview(db: D1Database, caseId: string) {
       GROUP BY LOWER(r.keyword) ORDER BY np DESC, rank ASC LIMIT 200`
   ).bind(caseId).all<Record<string, string | number | null>>();
 
-  // 検索語レポートで売れたのに入札していない語
+  // Amazon の検索語レポートで売れた語
   const { results: terms } = await db.prepare(
     `SELECT search_term AS keyword, SUM(clicks) AS clicks, SUM(cost) AS cost, SUM(orders) AS orders, SUM(sales) AS sales
        FROM daily_search_terms WHERE case_id = ? AND date >= ? AND search_term NOT GLOB '[bB]0[0-9A-Za-z]*'
       GROUP BY LOWER(search_term) HAVING SUM(orders) > 0 ORDER BY SUM(sales) DESC LIMIT 100`
   ).bind(caseId, since).all<Record<string, string | number>>();
 
-  const candidates = [
-    ...terms.filter((t) => !tset.has(String(t.keyword).toLowerCase().trim())).map((t) => ({
-      keyword: String(t.keyword), source: "検索語で売上あり", products: null as string | null,
-      rank: null as number | null, bid: null as number | null, bidRange: null as string | null, impShare: null as number | null,
-      orders: n(t.orders), sales: n(t.sales), cost: n(t.cost), roas: n(t.cost) ? Math.round((n(t.sales) / n(t.cost)) * 100) / 100 : null,
-      watched: wset.has(String(t.keyword).toLowerCase()) })),
-    ...reco.filter((r) => !tset.has(String(r.keyword).toLowerCase().trim())).map((r) => ({
-      keyword: String(r.keyword), source: "Amazon の推奨", products: r.products == null ? null : String(r.products),
-      rank: r.rank == null ? null : n(r.rank), bid: r.bid == null ? null : n(r.bid),
-      bidRange: r.bid_low != null && r.bid_high != null ? `¥${n(r.bid_low).toLocaleString("ja-JP")}〜¥${n(r.bid_high).toLocaleString("ja-JP")}` : null,
-      impShare: r.imp_share == null ? null : n(r.imp_share), orders: 0, sales: 0, cost: 0, roas: null,
-      watched: wset.has(String(r.keyword).toLowerCase()) })),
-  ];
-  const seen = new Set<string>();
-  const dedup = candidates.filter((c) => { const k = c.keyword.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+  // 楽天に出店している案件か（楽天RPPのキーワードがある、または楽天の接続がある）
+  const rk = await db.prepare(
+    `SELECT (SELECT COUNT(*) FROM case_malls WHERE case_id = ?1 AND mall = 'rakuten' AND credentials_enc IS NOT NULL)
+          + (SELECT COUNT(*) FROM (SELECT 1 FROM daily_ads WHERE case_id = ?1 AND mall = 'rakuten' LIMIT 1)) AS n`
+  ).bind(caseId).first<{ n: number }>();
+  const malls: Array<"amazon" | "rakuten"> = n(rk?.n) > 0 ? ["amazon", "rakuten"] : ["amazon"];
+
+  const fromTerm = (mall: "amazon" | "rakuten", t: Record<string, string | number>): KwCandidate => ({
+    mall, keyword: String(t.keyword), source: mall === "amazon" ? "検索語で売上あり" : "Amazon で売れた語", products: null,
+    rank: null, bid: null, bidRange: null, impShare: null,
+    orders: n(t.orders), sales: n(t.sales), cost: n(t.cost), roas: n(t.cost) ? Math.round((n(t.sales) / n(t.cost)) * 100) / 100 : null,
+    watched: wset.has(String(t.keyword).toLowerCase()) });
+  const fromReco = (mall: "amazon" | "rakuten", r: Record<string, string | number | null>): KwCandidate => ({
+    mall, keyword: String(r.keyword), source: "Amazon の推奨", products: r.products == null ? null : String(r.products),
+    rank: r.rank == null ? null : n(r.rank),
+    // 推奨入札は Amazon の値なので、楽天RPPの候補には出さない
+    bid: mall === "amazon" && r.bid != null ? n(r.bid) : null,
+    bidRange: mall === "amazon" && r.bid_low != null && r.bid_high != null ? `¥${n(r.bid_low).toLocaleString("ja-JP")}〜¥${n(r.bid_high).toLocaleString("ja-JP")}` : null,
+    impShare: r.imp_share == null ? null : n(r.imp_share), orders: 0, sales: 0, cost: 0, roas: null,
+    watched: wset.has(String(r.keyword).toLowerCase()) });
+
+  const candidates: KwCandidate[] = [];
+  for (const mall of malls) {
+    const tg = tset[mall] ?? new Set<string>();
+    const open = (k: string) => !tg.has(k.toLowerCase().trim()) && !decided.has(kwKey(mall, k));
+    const seen = new Set<string>();
+    for (const c of [...terms.filter((t) => open(String(t.keyword))).map((t) => fromTerm(mall, t)),
+                     ...reco.filter((r) => open(String(r.keyword))).map((r) => fromReco(mall, r))]) {
+      const k = c.keyword.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      candidates.push(c);
+    }
+  }
 
   const recoAt = JSON.parse((await getFlag(db, `kw_reco_at:${caseId}`)) ?? "null");
   const lastError = JSON.parse((await getFlag(db, `kw_error:${caseId}`)) ?? "null");
-  return { watch, candidates: dedup.slice(0, 150), recoAt, lastError };
+  return { watch, malls, candidates: candidates.slice(0, 300), decisions, recoAt, lastError };
 }
 
 /** 監視キーワード1つの最新の検索結果と、自社の順位の推移 */
@@ -352,8 +393,12 @@ export async function keywordMarkdown(db: D1Database, caseId: string): Promise<s
   L.push("### 新しいキーワードの候補（まだ入札していない語）", "");
   if (!ov.candidates.length) L.push("（候補なし）");
   else {
-    L.push("| キーワード | 出どころ | 関連商品 | 推奨順位 | 推奨入札（中央） | 検索語の注文 | 検索語の売上 |", "| --- | --- | --- | --- | --- | --- | --- |");
-    for (const c of ov.candidates.slice(0, 60)) L.push(`| ${c.keyword} | ${c.source} | ${(c.products ?? "—").slice(0, 40)} | ${c.rank ?? "—"} | ${c.bid ?? "—"} | ${c.orders || "—"} | ${c.sales ? "¥" + c.sales.toLocaleString("ja-JP") : "—"} |`);
+    L.push("| 入札先 | キーワード | 出どころ | 関連商品 | 推奨順位 | 推奨入札（中央・Amazon） | Amazon の検索語の注文 | 同・売上 |", "| --- | --- | --- | --- | --- | --- | --- | --- |");
+    for (const c of ov.candidates.slice(0, 80)) L.push(`| ${c.mall === "amazon" ? "Amazon" : "楽天RPP"} | ${c.keyword} | ${c.source} | ${(c.products ?? "—").slice(0, 40)} | ${c.rank ?? "—"} | ${c.bid ?? "—"} | ${c.orders || "—"} | ${c.sales ? "¥" + c.sales.toLocaleString("ja-JP") : "—"} |`);
+  }
+  if (ov.decisions.some((d) => d.status === "done")) {
+    L.push("", "### 最近追加したキーワード（担当者が追加済みにしたもの）", "");
+    for (const d of ov.decisions.filter((x) => x.status === "done").slice(0, 30)) L.push(`- ${d.mall === "amazon" ? "Amazon" : "楽天RPP"}：${d.keyword}（${String(d.at ?? "").slice(0, 10)}）`);
   }
   L.push("");
   for (const k of ov.watch.slice(0, 8)) {
@@ -378,8 +423,9 @@ export async function keywordMarkdown(db: D1Database, caseId: string): Promise<s
 export async function keywordTodoData(db: D1Database, caseId: string) {
   try {
     const ov = await keywordOverview(db, caseId);
-    const strong = ov.candidates.filter((c) => c.source === "検索語で売上あり" && c.orders >= 2);
-    const reco = ov.candidates.filter((c) => c.source === "Amazon の推奨");
+    const strong = ov.candidates.filter((c) => c.mall === "amazon" && c.source === "検索語で売上あり" && c.orders >= 2);
+    const reco = ov.candidates.filter((c) => c.mall === "amazon" && c.source === "Amazon の推奨");
+    const rakutenStrong = ov.candidates.filter((c) => c.mall === "rakuten" && c.source === "Amazon で売れた語" && c.orders >= 2);
     const { results } = await db.prepare(
       `SELECT mall, keyword, date, MIN(CASE WHEN own = 1 THEN position END) AS pos, COUNT(*) AS n
          FROM kw_serp WHERE case_id = ? AND date >= ? GROUP BY mall, keyword, date`
@@ -394,7 +440,7 @@ export async function keywordTodoData(db: D1Database, caseId: string) {
       const out = last.n + 1;                                                 // 圏外は「件数＋1位」とみなす
       if ((last.pos ?? out) - first.pos >= 5) drops.push({ mall: last.mall, keyword: last.keyword, before: first.pos, now: last.pos });
     }
-    return { strong: strong.length, reco: reco.length, top: [...strong, ...reco].slice(0, 3).map((c) => c.keyword), drops };
+    return { strong: strong.length, reco: reco.length, rakuten: rakutenStrong.length, top: [...strong, ...rakutenStrong, ...reco].slice(0, 3).map((c) => c.keyword), drops };
   } catch {
     return null;    // テーブルがまだ無いとき
   }
