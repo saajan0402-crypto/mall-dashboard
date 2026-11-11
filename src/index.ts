@@ -47,7 +47,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.26.0";
+const APP_VERSION = "0.27.1";
 
 export interface Env {
   DB: D1Database;
@@ -587,7 +587,12 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const st = await resolveSettings(env.DB, { caseId, mall: "amazon" });
     const am = st.case.find((x) => x.key === "ad_profit_margin")?.effective ?? 10;
     void per;   // 提案はヘッダーの期間に関係なく固定の期間で出す（adviceWindows）
-    return json({ ...(await buildAdAdvice(env.DB, caseId, am)), adMargin: am });
+    // 提案ごとの「対応済み」「今はしない」（要対応と同じ記録に載せる）
+    const { results: advSt } = await env.DB.prepare(
+      "SELECT key, status, updated_by, updated_at FROM todo_status WHERE case_id = ? AND key LIKE 'adv:%' AND status <> 'open'"
+    ).bind(caseId).all<{ key: string; status: string; updated_by: string | null; updated_at: string | null }>();
+    const statuses = Object.fromEntries(advSt.map((r) => [r.key, { status: r.status, by: r.updated_by, at: r.updated_at }]));
+    return json({ ...(await buildAdAdvice(env.DB, caseId, am)), adMargin: am, statuses });
   }
 
   if (path === "/api/dashboard") {

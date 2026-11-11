@@ -17,6 +17,7 @@
 import { amazonFinance, finCost, coveredSql, feeBasis } from "./amazonFin";
 import { rakutenPages, rakutenRevenueByProduct, shares } from "./adProducts";
 import { periodSummary } from "./caseSummary";
+import { isoWeek } from "./todos";
 
 const n = (v: unknown) => Number(v ?? 0);
 const round2 = (v: number) => Math.round(v * 100) / 100;
@@ -24,7 +25,8 @@ const yen = (v: number) => "¥" + Math.round(v).toLocaleString("ja-JP");
 const pct = (v: number) => `${Math.round(v * 1000) / 10}%`;
 
 /** モールごとの最低入札額 */
-const MIN_BID: Record<string, number> = { amazon: 2, rakuten: 10 };
+// 楽天RPP のキーワードCPC は40円から（商品CPC は10円からだが、ここで提案するのはキーワード単位）
+const MIN_BID: Record<string, number> = { amazon: 2, rakuten: 40 };
 const MIN_CLICKS = 10;
 const UP_MAX = 1.3, DOWN_MAX = 0.6;
 
@@ -43,7 +45,11 @@ export interface Target {
 }
 
 export interface BidAdvice {
+  /** 対応済み・今はしない を記録する鍵（入札は週ごとに出直すので週を含む） */
+  key: string;
   mall: string; adType: string | null; campaign: string; adGroup: string; keyword: string; matchType: string;
+  /** 楽天：商品管理番号（RPP の一括登録に使う） */
+  externalId: string | null;
   product: { sku: string; name: string } | null;
   clicks: number; cost: number; orders: number; sales: number;
   cpc: number; cvr: number; roas: number | null;
@@ -57,6 +63,7 @@ export interface BidAdvice {
 }
 
 export interface NegativeAdvice {
+  key: string;
   mall: string; adType: string; campaign: string; adGroup: string; searchTerm: string; targeting: string;
   kind: "keyword" | "product";
   clicks: number; cost: number; orders: number; sales: number; roas: number | null;
@@ -64,6 +71,7 @@ export interface NegativeAdvice {
 }
 
 export interface HarvestAdvice {
+  key: string;
   mall: string; adType: string; campaign: string; adGroup: string; searchTerm: string;
   kind: "keyword" | "product";
   clicks: number; cost: number; orders: number; sales: number; roas: number; cpc: number;
@@ -71,6 +79,7 @@ export interface HarvestAdvice {
 }
 
 export interface BudgetAdvice {
+  key: string;
   mall: string; adType: string | null; campaign: string;
   cost: number; sales: number; roas: number; coverage: number; budget: number | null;
   suggestedBudget: number | null; reason: string;
@@ -81,6 +90,7 @@ export interface BudgetAdvice {
  */
 export interface AdviceWindows { amazon: { from: string; to: string; days: number }; rakuten: { from: string; to: string; days: number } }
 const jstDay = (n: number) => new Date(Date.now() + 9 * 3600000 - n * 86400000).toISOString().slice(0, 10);
+const lk = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
 export function adviceWindows(): AdviceWindows {
   const to = jstDay(3);
   return { amazon: { from: jstDay(32), to, days: 30 }, rakuten: { from: jstDay(62), to, days: 60 } };
@@ -281,7 +291,9 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
     const suggestedBid = Math.max(minBid, Math.round(base * clamped));
     if (suggestedBid === Math.round(base)) continue;
     bids.push({
+      key: `adv:bid:${mall}:${campaign}:${adGroup}:${lk(keyword)}:${matchType}:${isoWeek()}`,
       mall, adType: r.ad_type == null ? null : String(r.ad_type), campaign, adGroup, keyword, matchType,
+      externalId: r.external_id == null || r.external_id === "" ? null : String(r.external_id),
       product: prod ? { sku: prod.sku, name: prod.name }
         : pageProds.length ? { sku: pageProds.map((x) => x.sku).join(" / "), name: pageProds.map((x) => x.name).join(" / ") } : null,
       clicks, cost, orders, sales, cpc: Math.round(cpc), cvr: round2((orders / clicks) * 100),
@@ -322,6 +334,7 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
         harvested.add(key);
         const cpc = cost / Math.max(1, clicks);
         harvest.push({
+          key: `adv:harv:${mall}:${lk(term)}`,
           mall, adType, campaign, adGroup, searchTerm: term, kind, clicks, cost, orders, sales,
           roas: round2(roas), cpc: Math.round(cpc),
           suggestedBid: Math.max(MIN_BID[mall] ?? 2, Math.round(cpc * Math.min(UP_MAX, Math.max(1, roas / target.roas)))),
@@ -336,6 +349,7 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
     const allowedCpa = price != null ? price * target.acos : null;
     if (orders === 0 && clicks >= 5 && ((allowedCpa != null && cost >= allowedCpa) || clicks >= 15)) {
       negatives.push({
+        key: `adv:neg:${mall}:${campaign}:${adGroup}:${lk(term)}`,
         mall, adType, campaign, adGroup, searchTerm: term, targeting, kind, clicks, cost, orders, sales, roas: null,
         reason: allowedCpa != null && cost >= allowedCpa
           ? `${clicks}クリック・${yen(cost)}で注文0。1注文に使ってよい額（${yen(allowedCpa)}）を超えています`
@@ -343,6 +357,7 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
       });
     } else if (orders >= 1 && roas != null && roas < (1 / target.gm) * 0.5 && allowedCpa != null && cost >= allowedCpa * 2) {
       negatives.push({
+        key: `adv:neg:${mall}:${campaign}:${adGroup}:${lk(term)}`,
         mall, adType, campaign, adGroup, searchTerm: term, targeting, kind, clicks, cost, orders, sales, roas: round2(roas),
         reason: `売れてはいるが ROAS ${round2(roas)} で損益分岐（${round2(1 / target.gm)}）の半分未満。除外するか、この語だけ入札を下げる`,
       });
@@ -374,6 +389,7 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
     if (coverage < 90 && roas >= target.roas) {
       const budget = c.budget == null ? null : n(c.budget);
       budgets.push({
+        key: `adv:bud:${mall}:${campaign}:${isoWeek()}`,
         mall, adType: c.ad_type == null ? null : String(c.ad_type), campaign, cost, sales, roas: round2(roas),
         coverage: Math.round(coverage), budget,
         suggestedBudget: budget ? Math.round(budget * Math.min(1.5, 100 / Math.max(coverage, 1))) : null,
