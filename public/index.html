@@ -242,6 +242,7 @@
     border:1px solid var(--line-strong);background:var(--surface-2);color:var(--accent)}
   .kpi .k .kpi-btn:hover{border-color:var(--accent)}
   .kw-chips{display:flex;flex-wrap:wrap;gap:8px}
+  .copy-btn{padding:1px 8px;font-size:11.5px;margin-left:4px;white-space:nowrap}
   .kw-chip{display:inline-flex;align-items:center;gap:2px;border:1px solid var(--line-strong);border-radius:999px;background:var(--surface-2);font-size:13px}
   .kw-chip button{font:inherit;background:none;border:none;cursor:pointer;color:var(--ink);padding:4px 4px 4px 12px}
   .kw-chip button.x{padding:4px 10px 4px 4px;color:var(--muted)}
@@ -1265,7 +1266,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.25.0";
+  const UI_VERSION = "0.25.1";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -4162,6 +4163,36 @@
     $("done-msg").textContent = "選択した状態で出しました。Ctrl+C（Macは ⌘C）でコピーできます";
   });
 
+  /* ---------- 長い一覧をコピーできるセル ---------- */
+  // 楽天の1つの商品ページに紐づく商品が多いと横に長くなるので、2件まで出して「ほか◯件」とし、全部はコピーで渡す
+  function productCell(p) {
+    if (!p) return "—";
+    const skus = String(p.sku || "").split(" / ").filter(Boolean);
+    if (skus.length <= 2) return `<span style="word-break:break-all">${esc(skus.join(" / "))}</span>`;
+    const names = String(p.name || "").split(" / ");
+    const full = skus.map((x, i) => `${x}\t${names[i] ?? ""}`).join("\n");
+    return `<div style="max-width:240px"><span style="word-break:break-all">${esc(skus.slice(0, 2).join(" / "))}</span>
+      <div class="note" style="margin-top:2px">ほか ${skus.length - 2}件（全 ${skus.length}件）
+        <button type="button" class="act copy-btn" data-copy="${esc(full)}" title="${esc(skus.join("\n"))}">コピー</button></div></div>`;
+  }
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* 下で別の方法 */ }
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      const ok = document.execCommand("copy"); ta.remove(); return ok;
+    } catch (e) { return false; }
+  }
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest && e.target.closest("[data-copy]");
+    if (!b) return;
+    const ok = await copyText(b.dataset.copy);
+    const before = b.textContent;
+    b.textContent = ok ? "コピーしました" : "コピーできません";
+    setTimeout(() => { b.textContent = before; }, 1500);
+  });
+
   /* ---------- 広告の改善提案 ---------- */
   let advData = null, advTab = "bids";
   const ACT = { up: ["ok", "上げる"], down: ["warn", "下げる"], pause: ["ng", "停止を検討"] };
@@ -4176,7 +4207,7 @@
         `${b.roas ?? "—"} ／ ${b.target.roas}<div class="note">${esc(POLICY_JA[b.target.policy])}</div>`,
         b.clicks, yen(b.cost), b.orders,
         `${mallTag(b.mall)} ${esc(b.campaign)}<div class="note">${esc(b.adGroup)}</div>`,
-        b.product ? `${esc(b.product.sku)}` : "—",
+        productCell(b.product),
         esc(b.reason)],
       csv: ["操作", "モール", "広告の種類", "キャンペーン", "広告グループ", "キーワード・ターゲット", "マッチタイプ", "商品SKU", "クリック", "広告費", "注文", "売上", "ROAS", "目標ROAS", "今の入札", "基準", "提案入札", "理由"],
       csvRow: (b) => [ACT[b.action][1], MALL_JA[b.mall] || b.mall, b.adType || "", b.campaign, b.adGroup, b.keyword, b.matchType,
@@ -4359,7 +4390,8 @@
     $("kw-cands").innerHTML = list.length ? list.slice(0, 150).map((c) => `<tr>
         <td><strong>${esc(c.keyword)}</strong></td>
         <td>${sourceTag(c.source)}</td>
-        <td class="note"><span class="kw-title" title="${esc(c.products || "")}">${esc((c.products || "—").split(",").join("／"))}</span></td>
+        <td class="note"><span class="kw-title" title="${esc(c.products || "")}">${esc((c.products || "—").split(",").join("／"))}</span>${
+          (c.products || "").split(",").length > 2 ? `<button type="button" class="act copy-btn" data-copy="${esc((c.products || "").split(",").join("\n"))}">コピー</button>` : ""}</td>
         <td class="r">${c.rank ?? "—"}</td>
         ${amz ? `<td class="r">${c.bid != null ? `<strong>${yen(c.bid)}</strong>` : "—"}${c.bidRange ? `<div class="note" style="white-space:nowrap">${esc(c.bidRange)}</div>` : ""}</td>` : ""}
         <td class="r">${c.orders || "—"}</td><td class="r">${c.sales ? yen(c.sales) : "—"}</td><td class="r">${c.roas ?? "—"}</td>
