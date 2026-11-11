@@ -76,8 +76,31 @@ export interface BudgetAdvice {
   suggestedBudget: number | null; reason: string;
 }
 
+/** 提案に使う期間。ヘッダーの期間に関係なく固定する（担当者ごとに提案が変わらないように）
+ *   Amazon：直近30日／楽天：直近60日（RPP は30日さかのぼって売上を数えるため長めに）。どちらも直近3日は除く（遅れて入る広告経由の売上を待つ）
+ */
+export interface AdviceWindows { amazon: { from: string; to: string; days: number }; rakuten: { from: string; to: string; days: number } }
+const jstDay = (n: number) => new Date(Date.now() + 9 * 3600000 - n * 86400000).toISOString().slice(0, 10);
+export function adviceWindows(): AdviceWindows {
+  const to = jstDay(3);
+  return { amazon: { from: jstDay(32), to, days: 30 }, rakuten: { from: jstDay(62), to, days: 60 } };
+}
+/** 入札を変えてからこの日数の間は提案を出さず「様子見」にする（変更の結果が出る前に同じ提案を重ねないため） */
+const SETTLE_DAYS = 14;
+
+export interface WatchingBid {
+  mall: string; campaign: string; adGroup: string; keyword: string; matchType: string;
+  currentBid: number | null; changedOn: string; until: string;
+}
+export interface CampaignResult { mall: string; adType: string | null; campaign: string; cost: number; sales: number; roas: number | null; breakEven: number | null }
+
 export interface AdAdvice {
   from: string; to: string;
+  windows: AdviceWindows;
+  /** 入札を変えて14日未満のため提案を止めているキーワード */
+  watching: WatchingBid[];
+  /** キャンペーンごとの結果（提案と同じ期間）。要対応の「広告で赤字」に使う */
+  campaigns: CampaignResult[];
   assumptions: string[];
   targets: Array<{ label: string; gm: number | null; acos: number | null; roas: number | null }>;
   bids: BidAdvice[];
@@ -92,10 +115,14 @@ export interface AdAdvice {
 const isAsin = (s: string) => /^b0[0-9a-z]{8}$/i.test(s.trim());
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
 
-export async function buildAdAdvice(
-  db: D1Database, caseId: string, from: string, to: string, adMarginPct: number,
-): Promise<AdAdvice> {
+export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct: number): Promise<AdAdvice> {
   const tm = adMarginPct / 100;
+  const W = adviceWindows();
+  // 粗利率など商品の数字は長いほう（楽天の60日）で見る。広告の実績はモールごとの期間で見る
+  const from = W.rakuten.from, to = W.amazon.to;
+  const A = W.amazon, R = W.rakuten;
+  /** SQL：モールごとの期間（別名 a の daily_ads 用） */
+  const mallWin = (alias: string) => `((${alias}mall = 'rakuten' AND ${alias}date BETWEEN '${R.from}' AND '${R.to}') OR (${alias}mall <> 'rakuten' AND ${alias}date BETWEEN '${A.from}' AND '${A.to}'))`;
 
   /* 粗利率：モール別と商品別 */
   const pl = await periodSummary(db, caseId, from, to);
@@ -140,7 +167,7 @@ export async function buildAdAdvice(
     `SELECT campaign, ad_group, product_id, SUM(cost) AS cost FROM daily_ads
       WHERE case_id = ? AND mall = 'amazon' AND level = 'product' AND date BETWEEN ? AND ? AND product_id IS NOT NULL
       GROUP BY campaign, ad_group, product_id ORDER BY cost DESC`
-  ).bind(caseId, from, to).all<{ campaign: string; ad_group: string; product_id: string }>();
+  ).bind(caseId, A.from, A.to).all<{ campaign: string; ad_group: string; product_id: string }>();
   const groupProduct = new Map<string, string>();
   const campaignProduct = new Map<string, string>();
   for (const g of groupRows) {
@@ -154,7 +181,7 @@ export async function buildAdAdvice(
   // 楽天RPP：1つの商品ページ（商品管理番号）に SKU ごとの別商品があるときは、
   // 楽天の売上の比率で重みをつけた粗利率で目標を決める（1つの商品の粗利率だけで決めない）
   const pages = await rakutenPages(db, caseId);
-  const rakRevenue = await rakutenRevenueByProduct(db, caseId, from, to);
+  const rakRevenue = await rakutenRevenueByProduct(db, caseId, R.from, R.to);
   const pageTarget = (num: string | null): Target | null => {
     const pids = num ? pages.get(num) : undefined;
     if (!pids || pids.length < 2) return null;
@@ -180,14 +207,23 @@ export async function buildAdAdvice(
                AND b.match_type = a.match_type AND b.bid IS NOT NULL ORDER BY b.date DESC LIMIT 1) AS bid,
             (SELECT suggested_cpc FROM daily_ads b WHERE b.case_id = a.case_id AND b.mall = a.mall AND b.level = 'keyword'
                AND b.campaign = a.campaign AND b.ad_group = a.ad_group AND b.keyword = a.keyword
-               AND b.suggested_cpc IS NOT NULL ORDER BY b.date DESC LIMIT 1) AS suggested
+               AND b.suggested_cpc IS NOT NULL ORDER BY b.date DESC LIMIT 1) AS suggested,
+            -- 今の入札と違う入札だった最後の日（＝その翌日に入札を変えた）
+            (SELECT MAX(c.date) FROM daily_ads c WHERE c.case_id = a.case_id AND c.mall = a.mall AND c.level = 'keyword'
+               AND c.campaign = a.campaign AND c.ad_group = a.ad_group AND c.keyword = a.keyword AND c.match_type = a.match_type
+               AND c.bid IS NOT NULL AND c.bid <> (SELECT b.bid FROM daily_ads b WHERE b.case_id = a.case_id AND b.mall = a.mall AND b.level = 'keyword'
+                 AND b.campaign = a.campaign AND b.ad_group = a.ad_group AND b.keyword = a.keyword
+                 AND b.match_type = a.match_type AND b.bid IS NOT NULL ORDER BY b.date DESC LIMIT 1)) AS last_other_bid
        FROM daily_ads a
-      WHERE a.case_id = ? AND a.level = 'keyword' AND a.date BETWEEN ? AND ?
+      WHERE a.case_id = ? AND a.level = 'keyword' AND ${mallWin("a.")}
       GROUP BY mall, ad_type, campaign, ad_group, keyword, match_type
      HAVING SUM(clicks) >= ?`
-  ).bind(caseId, from, to, MIN_CLICKS).all<Record<string, string | number | null>>();
+  ).bind(caseId, MIN_CLICKS).all<Record<string, string | number | null>>();
 
   const bids: BidAdvice[] = [];
+  const watching: WatchingBid[] = [];
+  const settleFrom = jstDay(SETTLE_DAYS);
+  const dayAfter = (d: string, k = 1) => new Date(Date.parse(`${d}T00:00:00Z`) + k * 86400000).toISOString().slice(0, 10);
   const exactKeywords = new Set<string>();
   for (const r of kwRows) {
     const mall = String(r.mall), campaign = String(r.campaign), adGroup = String(r.ad_group);
@@ -195,6 +231,13 @@ export async function buildAdAdvice(
     if (/exact/i.test(matchType)) exactKeywords.add(`${mall}\u0000${norm(keyword)}`);
     const clicks = n(r.clicks), cost = n(r.cost), orders = n(r.orders), sales = n(r.sales);
     if (cost <= 0) continue;
+    // 入札を変えてから14日たっていなければ様子見（変更前の実績が混ざっていて、同じ提案を重ねてしまうため）
+    if (r.last_other_bid != null && String(r.last_other_bid) >= settleFrom) {
+      const changedOn = dayAfter(String(r.last_other_bid));
+      watching.push({ mall, campaign, adGroup, keyword, matchType, currentBid: r.bid == null ? null : n(r.bid),
+        changedOn, until: dayAfter(changedOn, SETTLE_DAYS) });
+      continue;
+    }
     const shared = mall === "rakuten" ? pageTarget(r.external_id == null ? null : String(r.external_id)) : null;
     const pid = shared ? null : productFor(mall, campaign, adGroup, r.product_id == null ? null : String(r.product_id));
     const prod = pid ? products.get(pid) : undefined;
@@ -256,7 +299,7 @@ export async function buildAdAdvice(
             SUM(clicks) AS clicks, SUM(cost) AS cost, SUM(orders) AS orders, SUM(sales) AS sales
        FROM daily_search_terms WHERE case_id = ? AND date BETWEEN ? AND ?
       GROUP BY mall, ad_type, campaign, ad_group, search_term HAVING SUM(clicks) >= 3`
-  ).bind(caseId, from, to).all<Record<string, string | number | null>>();
+  ).bind(caseId, A.from, A.to).all<Record<string, string | number | null>>();
 
   const negatives: NegativeAdvice[] = [];
   const harvest: HarvestAdvice[] = [];
@@ -312,11 +355,17 @@ export async function buildAdAdvice(
   const { results: campRows } = await db.prepare(
     `SELECT mall, ad_type, campaign, SUM(cost) AS cost, SUM(sales) AS sales,
             AVG(budget_coverage) AS coverage, MAX(budget) AS budget
-       FROM daily_ads WHERE case_id = ? AND level = 'campaign' AND date BETWEEN ? AND ?
-      GROUP BY mall, ad_type, campaign HAVING AVG(budget_coverage) IS NOT NULL AND SUM(cost) > 0`
-  ).bind(caseId, from, to).all<Record<string, string | number | null>>();
+       FROM daily_ads WHERE case_id = ? AND level = 'campaign' AND ${mallWin("")}
+      GROUP BY mall, ad_type, campaign HAVING SUM(cost) > 0`
+  ).bind(caseId).all<Record<string, string | number | null>>();
+  const campaigns: CampaignResult[] = campRows.map((c) => {
+    const gm = mallGm.get(String(c.mall));
+    return { mall: String(c.mall), adType: c.ad_type == null ? null : String(c.ad_type), campaign: String(c.campaign),
+      cost: n(c.cost), sales: n(c.sales), roas: n(c.cost) > 0 ? round2(n(c.sales) / n(c.cost)) : null, breakEven: gm ? round2(1 / gm) : null };
+  }).sort((a, b) => b.cost - a.cost);
   const budgets: BudgetAdvice[] = [];
   for (const c of campRows) {
+    if (c.coverage == null) continue;
     const mall = String(c.mall), campaign = String(c.campaign);
     const cost = n(c.cost), sales = n(c.sales), coverage = n(c.coverage);
     const pid = productFor(mall, campaign, "", null);
@@ -348,11 +397,14 @@ export async function buildAdAdvice(
     `粗利率は商品ごと（期間内の売上・原価・手数料から）。商品が特定できない広告はモール全体の粗利率を使います`,
     `1回の変更は −40%〜＋30% まで。クリックが ${MIN_CLICKS} 未満のものは判断していません`,
     "入札がわからないもの（CSVで入れた期間など）は、平均クリック単価を基準に提案しています",
-    "帰属期間：楽天RPP 30日／Amazon SP 7日／SB 14日。直近の数日は売上があとから増えるので、期間の終わりを数日前にすると判断が安定します",
+    `提案はヘッダーの期間に関係なく、Amazon は直近${A.days}日（${A.from}〜${A.to}）、楽天は直近${R.days}日（${R.from}〜${R.to}）の実績から出しています。直近3日は、遅れて入る広告経由の売上を待つため除いています`,
+    `入札を変えてから${SETTLE_DAYS}日たっていないキーワードは、変更前の実績が混ざるため提案を出さず「様子見」にしています`,
+    "帰属期間：楽天RPP 30日／Amazon SP 7日／SB 14日。楽天は期間が長くても直近分の売上があとから増えることがあります",
   ];
 
+  watching.sort((a, b) => b.changedOn.localeCompare(a.changedOn));
   return {
-    from, to, assumptions, targets,
+    from, to, windows: W, watching, campaigns, assumptions, targets,
     bids: bids.slice(0, 150), negatives: negatives.slice(0, 150), harvest: harvest.slice(0, 100), budgets,
     impact: {
       wastedCost: negatives.filter((x) => x.orders === 0).reduce((t, x) => t + x.cost, 0),

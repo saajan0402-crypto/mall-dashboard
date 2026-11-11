@@ -47,7 +47,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.25.2";
+const APP_VERSION = "0.26.0";
 
 export interface Env {
   DB: D1Database;
@@ -586,7 +586,8 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const per = await resolvePeriod(env.DB, caseId, periodQuery(u));
     const st = await resolveSettings(env.DB, { caseId, mall: "amazon" });
     const am = st.case.find((x) => x.key === "ad_profit_margin")?.effective ?? 10;
-    return json({ ...(await buildAdAdvice(env.DB, caseId, per.from, per.to, am)), adMargin: am });
+    void per;   // 提案はヘッダーの期間に関係なく固定の期間で出す（adviceWindows）
+    return json({ ...(await buildAdAdvice(env.DB, caseId, am)), adMargin: am });
   }
 
   if (path === "/api/dashboard") {
@@ -955,12 +956,12 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     if (!s) return json({ error: "案件が見つかりません" }, 404);
     const st = await resolveSettings(env.DB, { caseId, mall: "amazon" });
     const am = st.case.find((x) => x.key === "ad_profit_margin")?.effective ?? 10;
-    const adv = await buildAdAdvice(env.DB, caseId, s.period.from, s.period.to, am);
+    const adv = await buildAdAdvice(env.DB, caseId, am);
     return json({
       summary: s,
       actions: await actionsBetween(env.DB, caseId, s.period.from, s.period.to),
       advice: { bids: adv.bids.slice(0, 30), negatives: adv.negatives.slice(0, 30), harvest: adv.harvest.slice(0, 20),
-        budgets: adv.budgets, impact: adv.impact, assumptions: adv.assumptions },
+        budgets: adv.budgets, impact: adv.impact, assumptions: adv.assumptions, windows: adv.windows, watching: adv.watching.length },
     });
   }
 

@@ -27,7 +27,7 @@ function table(head: string[], rows: Array<Array<unknown>>): string {
 export async function renderAdsMarkdown(db: D1Database, caseId: string, caseName: string, from: string, to: string, adMarginPct: number): Promise<string> {
   const [pl, totals, adv, prodAds] = await Promise.all([
     periodSummary(db, caseId, from, to), adTotals(db, caseId, from, to),
-    buildAdAdvice(db, caseId, from, to, adMarginPct), productAdTotals(db, caseId, from, to),
+    buildAdAdvice(db, caseId, adMarginPct), productAdTotals(db, caseId, from, to),
   ]);
 
   // 商品（ASIN・楽天の番号・粗利率・損益分岐ROAS）
@@ -124,6 +124,7 @@ export async function renderAdsMarkdown(db: D1Database, caseId: string, caseName
       roasOf(n(t.sales), n(t.cost)), t.best_rank ?? "—", t.best_share == null ? "—" : `${t.best_share}%`])));
 
   L.push("## ツールの提案（利益ベース）", "");
+  L.push(`提案の期間（上の表の期間とは別に固定）：Amazon ${adv.windows.amazon.from}〜${adv.windows.amazon.to}（直近${adv.windows.amazon.days}日）／楽天 ${adv.windows.rakuten.from}〜${adv.windows.rakuten.to}（直近${adv.windows.rakuten.days}日）。直近3日は除く。入札を変えて14日未満のキーワード ${adv.watching.length}件は様子見のため提案に含めていない。`, "");
   L.push(`### 入札の見直し（${adv.bids.length}件中 上位30）`, "");
   L.push(table(["モール", "キーワード／ターゲット", "キャンペーン", "クリック", "広告費", "ROAS", "目標ROAS", "提案", "今の入札→提案"],
     adv.bids.slice(0, 30).map((b) => [MALL(b.mall), b.keyword, b.campaign, b.clicks, yen(b.cost), b.roas ?? "—", b.target.roas,

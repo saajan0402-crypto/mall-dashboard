@@ -401,7 +401,7 @@
       <div><h2>データの鮮度</h2><div class="card" id="dash-fresh"></div></div>
     </div>
     <div>
-      <h2>モール間の広告費の配分<span class="hint">ヘッダーの期間で計算</span></h2>
+      <h2>モール間の広告費の配分<span class="hint">直近60日（直近3日を除く）で計算・ヘッダーの期間とは別に固定</span></h2>
       <div class="card" id="dash-alloc"></div>
     </div>
     <div>
@@ -1271,7 +1271,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.25.2";
+  const UI_VERSION = "0.26.0";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -4249,6 +4249,8 @@
   function renderAdvice() {
     const d = advData;
     if (!d) return;
+    const w = advData && advData.windows;
+    $("adv-period").textContent = w ? `Amazon：${w.amazon.from.slice(5).replace("-", "/")}〜${w.amazon.to.slice(5).replace("-", "/")}（直近${w.amazon.days}日）／楽天：${w.rakuten.from.slice(5).replace("-", "/")}〜${w.rakuten.to.slice(5).replace("-", "/")}（直近${w.rakuten.days}日）の実績から・直近3日は除く・ヘッダーの期間とは別に固定` : "";
     const cnt = { bids: d.bids.length, negatives: d.negatives.length, harvest: d.harvest.length, budgets: d.budgets.length };
     document.querySelectorAll("#adv-tabs button").forEach((b) => {
       const k = b.dataset.adv;
@@ -4258,7 +4260,8 @@
     const c = (a) => d.bids.filter((b) => b.action === a).length;
     $("adv-summary").innerHTML = advTab === "bids"
       ? `<span class="tag ng">停止を検討 ${c("pause")}</span> <span class="tag warn">下げる ${c("down")}</span> <span class="tag ok">上げる ${c("up")}</span>
-         <span class="note" style="margin-left:6px">下げる・停止の対象に期間内 ${yen(d.impact.bidDownCost)} を使っています</span>`
+         <span class="note" style="margin-left:6px">下げる・停止の対象に期間内 ${yen(d.impact.bidDownCost)} を使っています</span>
+         ${(d.watching || []).length ? `<span class="tag wait" style="margin-left:6px">様子見 ${d.watching.length}</span>` : ""}`
       : advTab === "negatives"
         ? `<span class="note">注文0の検索語に期間内 ${yen(d.impact.wastedCost)}。除外すると、この分が他のキーワードに回ります</span>`
         : advTab === "budgets" ? `<span class="note">予算切れの判定は「予算内に収まっていた時間」を使います。APIでは取れないので、Amazonのキャンペーンレポート（CSV）を入れた期間だけ出ます</span>` : "";
@@ -4269,6 +4272,14 @@
       <tbody>${list.map((x) => `<tr>${cfg.row(x).map((v, i) =>
         `<td${typeof v === "number" ? ' class="r"' : ""}${i === cfg.head.length - 1 ? ' style="white-space:normal;min-width:260px;font-size:12.5px"' : ""}>${v}</td>`).join("")}</tr>`).join("")}</tbody>
       </table></div>` : `<p class="note">この期間では該当がありません。</p>`;
+    // 入札を変えて14日未満のキーワード（提案を止めているもの）
+    if (advTab === "bids" && (d.watching || []).length) {
+      $("adv-table").innerHTML += `<details style="margin-top:10px"><summary class="note" style="cursor:pointer">様子見中のキーワード（${d.watching.length}件）：入札を変えてから14日たつまで、変更前の実績が混ざるので提案を出していません</summary>
+        <div class="tablewrap" style="margin-top:6px"><table style="min-width:640px"><thead><tr><th>キーワード・ターゲット</th><th>キャンペーン／広告グループ</th><th class="r">今の入札</th><th>入札を変えた日</th><th>提案を再開する日</th></tr></thead>
+        <tbody>${d.watching.map((x) => `<tr><td><strong>${esc(x.keyword)}</strong>${x.matchType ? `<div class="note">${esc(x.matchType)}</div>` : ""}</td>
+          <td>${mallTag(x.mall)} ${esc(x.campaign)}<div class="note">${esc(x.adGroup)}</div></td>
+          <td class="r">${x.currentBid != null ? yen(x.currentBid) : "—"}</td><td>${esc(x.changedOn)}</td><td>${esc(x.until)}</td></tr>`).join("")}</tbody></table></div></details>`;
+    }
     $("adv-assume").innerHTML = `<ul class="steps">${d.assumptions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>
       <div class="tablewrap"><table style="min-width:420px"><thead><tr><th>対象</th><th class="r">粗利率（広告費前）</th><th class="r">目標ACoS</th><th class="r">目標ROAS</th></tr></thead>
       <tbody>${d.targets.map((t) => `<tr><td>${esc(t.label)}</td><td class="r">${t.gm == null ? "—（仮に30%）" : t.gm + "%"}</td>
@@ -4279,7 +4290,6 @@
   async function loadAdvice() {
     const caseId = $("ads-case").value;
     if (!caseId) return;
-    $("adv-period").textContent = `${rangeLabel()} の実績から`;
     $("adv-msg").textContent = "計算中…";
     advData = await get(`/api/ads/advice?case_id=${encodeURIComponent(caseId)}&${rangeQS()}`);
     $("adv-msg").textContent = advData.error || "";
@@ -4960,6 +4970,7 @@
     ["セール・イベントの登録", "すぐ", "—"],
     ["監視キーワードを追加する", "その場で1回調べる。以後は毎日", "自動"],
     ["Amazon のキーワード推奨", "週1回（「取り直す」でその場で）", "自動"],
+    ["広告の改善提案・要対応・配分の提案", "ヘッダーの期間に関係なく固定：Amazon 直近30日／楽天 直近60日（直近3日を除く）。入札を変えて14日未満のキーワードは「様子見」", "自動"],
     ["AI の週次分析", "毎週月曜8時以降（「今すぐ分析する」は5分以内に開始・数分で完了）", "設定でオンの案件だけ・1回あたり数十円"],
     ["前日の売上（毎日）", "楽天 6時ごろ／Amazon 7時ごろ", "自動"],
     ["前日の広告（毎日）", "Amazon 朝のうち／楽天RPP 12時ごろ", "自動"],

@@ -18,7 +18,7 @@ import { repeatSummary, type RepeatSummary } from "./repeat";
 import { keywordTodoData } from "./kwDiscovery";
 import { productAdTotals } from "./adProducts";
 import { latestCompleteMonth } from "./mallCharges";
-import { buildAdAdvice, type BidAdvice, type NegativeAdvice, type HarvestAdvice } from "./adAdvice";
+import { buildAdAdvice, adviceWindows, type BidAdvice, type NegativeAdvice, type HarvestAdvice, type AdviceWindows, type CampaignResult } from "./adAdvice";
 
 /** 日本時間で n 日前の日付 */
 export const jst = (n = 0) =>
@@ -240,8 +240,12 @@ export interface CaseSummary {
   /** キーワード発見の要対応用の集計 */
   keywords: Awaited<ReturnType<typeof keywordTodoData>>;
   advice: {
-    counts: { up: number; down: number; pause: number; negatives: number; harvest: number; budgets: number };
+    counts: { up: number; down: number; pause: number; negatives: number; harvest: number; budgets: number; watching: number };
     impact: { wastedCost: number; bidDownCost: number };
+    /** 提案に使った期間（ヘッダーの期間とは別に固定） */
+    windows: AdviceWindows;
+    /** 広告で赤字のキャンペーン（提案と同じ期間） */
+    losing: CampaignResult[];
     topBids: BidAdvice[];
     topNegatives: NegativeAdvice[];
     topHarvest: HarvestAdvice[];
@@ -363,12 +367,13 @@ function buildTodo(s: Omit<CaseSummary, "todo" | "doneThisMonth">): Todo[] {
   for (const r of s.inventory.filter((x) => x.level === "risk"))
     out.push({ key: `stock:${r.mall}:${r.sku}`, priority: "high", area: "在庫", text: `${MALL_JA[r.mall] ?? r.mall}「${r.name}」（${r.sku}）が欠品間近。発注・納品のタイミングを決める`, basis: r.reason });
 
-  const below = s.ads.campaigns.filter((c) => c.belowBreakEven && c.cost >= 3000);
-  for (const c of below.slice(0, 5))
+  // 提案と同じ固定の期間（Amazon 30日・楽天 60日）で判断する。ヘッダーの期間で要対応が変わらないように
+  const W = s.advice.windows;
+  for (const c of s.advice.losing)
     out.push({
-      key: `ad_be:${c.mall}:${c.name}`, priority: "high", area: "広告",
-      text: `${MALL_JA[c.mall] ?? c.mall}${c.adType ? " " + (TYPE_JA[c.adType] ?? c.adType) : ""}「${c.name}」は広告で赤字。入札・対象キーワードを見直す`,
-      basis: `期間の広告費 ${yenS(c.cost)} / ROAS ${c.roas} ＜ 損益分岐 ${be}`,
+      key: `ad_be:${c.mall}:${c.campaign}`, priority: "high", area: "広告",
+      text: `${MALL_JA[c.mall] ?? c.mall}${c.adType ? " " + (TYPE_JA[c.adType] ?? c.adType) : ""}「${c.campaign}」は広告で赤字。入札・対象キーワードを見直す`,
+      basis: `直近${c.mall === "rakuten" ? W.rakuten.days : W.amazon.days}日の広告費 ${yenS(c.cost)} / ROAS ${c.roas} ＜ 損益分岐 ${c.breakEven}`,
     });
 
   if (ac0(s).negatives)
@@ -592,7 +597,7 @@ export async function buildCaseSummary(
   const adMargin = val(sAmz.case, "ad_profit_margin", 10);
 
   /* 広告の改善提案 */
-  const adv = await buildAdAdvice(db, caseId, from, to, adMargin);
+  const adv = await buildAdAdvice(db, caseId, adMargin);
 
   /* 気をつけること */
   const warnings: string[] = [];
@@ -631,7 +636,9 @@ export async function buildCaseSummary(
     warnings.push(`比べる直前の期間（${prevFrom}〜${prevTo}）の売上データが${n(prevAgg?.n) ? "一部しか無い" : "無い"}ため、前期間比は出していません`);
 
   const events = await listEvents(db, caseId, from, to);
-  const allocation = await buildAllocation(db, caseId, from, to);
+  // モール間の配分は、両方のモールを同じ期間で比べる必要があるので楽天に合わせて直近60日（直近3日を除く）で固定
+  const aw = adviceWindows();
+  const allocation = await buildAllocation(db, caseId, aw.rakuten.from, aw.rakuten.to);
   const [external, repeat, keywords] = await Promise.all([externalAdCost(db, caseId, from, to), repeatSummary(db, caseId, from, to), keywordTodoData(db, caseId)]);
   const base: Omit<CaseSummary, "todo" | "doneThisMonth"> = {
     allocation, repeat, keywords,
@@ -677,9 +684,11 @@ export async function buildCaseSummary(
         up: adv.bids.filter((b) => b.action === "up").length,
         down: adv.bids.filter((b) => b.action === "down").length,
         pause: adv.bids.filter((b) => b.action === "pause").length,
-        negatives: adv.negatives.length, harvest: adv.harvest.length, budgets: adv.budgets.length,
+        negatives: adv.negatives.length, harvest: adv.harvest.length, budgets: adv.budgets.length, watching: adv.watching.length,
       },
       impact: adv.impact,
+      windows: adv.windows,
+      losing: adv.campaigns.filter((c) => c.breakEven != null && c.roas != null && c.roas < c.breakEven && c.cost >= 3000).slice(0, 5),
       topBids: adv.bids.slice(0, 10), topNegatives: adv.negatives.slice(0, 10), topHarvest: adv.harvest.slice(0, 10),
     },
     products, inventory, freshness, warnings, events,
