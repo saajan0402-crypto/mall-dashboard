@@ -242,7 +242,9 @@
     border:1px solid var(--line-strong);background:var(--surface-2);color:var(--accent)}
   .kpi .k .kpi-btn:hover{border-color:var(--accent)}
   .kw-chips{display:flex;flex-wrap:wrap;gap:8px}
-  .copy-btn{padding:1px 8px;font-size:11.5px;margin-left:4px;white-space:nowrap}
+  button.act.copy-btn{padding:1px 8px;font-size:11.5px;margin-left:4px;white-space:nowrap;line-height:1.6}
+  /* 商品の欄：幅を決めて折り返す（td は既定で折り返さないため、ここで上書き） */
+  .prod-cell{white-space:normal;overflow-wrap:anywhere;width:220px;max-width:220px;line-height:1.5}
   .kw-chip{display:inline-flex;align-items:center;gap:2px;border:1px solid var(--line-strong);border-radius:999px;background:var(--surface-2);font-size:13px}
   .kw-chip button{font:inherit;background:none;border:none;cursor:pointer;color:var(--ink);padding:4px 4px 4px 12px}
   .kw-chip button.x{padding:4px 10px 4px 4px;color:var(--muted)}
@@ -284,7 +286,10 @@
   /* 表が広くても画面全体が横に伸びないようにする（表の中だけ横スクロール） */
   main{grid-template-columns:minmax(0,1fr)} main>section{min-width:0}
   /* セクション（見出し＋カード）の間をあける。見出しとカードの間は狭いまま、まとまり同士を離す */
-  main>section{display:grid;gap:34px;align-content:start}
+  main>section{display:grid;gap:34px;align-content:start;grid-template-columns:minmax(0,1fr)}
+  /* 中身（広い表など）でセクションが画面の幅を超えて伸びないようにする。広い表は枠の中で横にスクロールする */
+  main>section>*,main>section .card,main>section .grid2>*{min-width:0}
+  .tablewrap{max-width:100%}
   main>section>.grid2{gap:24px 22px}
   @media (max-width:520px){ main>section{gap:26px} }
   .ai-out{font-family:var(--mono);font-size:12px;word-break:break-all;background:var(--surface-2);
@@ -1266,7 +1271,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.25.1";
+  const UI_VERSION = "0.25.2";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -4168,10 +4173,10 @@
   function productCell(p) {
     if (!p) return "—";
     const skus = String(p.sku || "").split(" / ").filter(Boolean);
-    if (skus.length <= 2) return `<span style="word-break:break-all">${esc(skus.join(" / "))}</span>`;
+    if (skus.length <= 2) return `<div class="prod-cell">${skus.map(esc).join("<br>")}</div>`;
     const names = String(p.name || "").split(" / ");
     const full = skus.map((x, i) => `${x}\t${names[i] ?? ""}`).join("\n");
-    return `<div style="max-width:240px"><span style="word-break:break-all">${esc(skus.slice(0, 2).join(" / "))}</span>
+    return `<div class="prod-cell">${skus.slice(0, 2).map(esc).join("<br>")}
       <div class="note" style="margin-top:2px">ほか ${skus.length - 2}件（全 ${skus.length}件）
         <button type="button" class="act copy-btn" data-copy="${esc(full)}" title="${esc(skus.join("\n"))}">コピー</button></div></div>`;
   }
