@@ -790,6 +790,22 @@
             <button class="act primary" id="btn-bulk-rak">楽天RPP 用の一括ファイルを作る</button>
             <button class="act hidden" id="btn-bulk-done">書き出した提案を対応済みにする</button>
           </div>
+          <div class="btns" style="margin-top:6px">
+            <span class="note">アップロードのあと：</span>
+            <label class="act file-pick" for="chk-up-file">アップロードしたファイル</label>
+            <input type="file" id="chk-up-file" accept=".xlsx" class="visually-hidden">
+            <label class="act file-pick" for="chk-now-file">今ダウンロードしたファイル</label>
+            <input type="file" id="chk-now-file" accept=".xlsx" class="visually-hidden">
+            <button class="act" id="btn-bulk-check" disabled>③ 反映をチェックする</button>
+          </div>
+          <div class="btns" style="margin-top:6px">
+            <span class="note">楽天：</span>
+            <label class="act file-pick" for="chk-rpp-file">アップロードした RPP の CSV</label>
+            <input type="file" id="chk-rpp-file" accept=".csv,text/csv" class="visually-hidden">
+            <button class="act" id="btn-rpp-check" disabled>楽天の反映をチェックする</button>
+            <span class="note">RPP のレポート（翌日12時ごろ届く）のキーワードCPC と突き合わせます</span>
+          </div>
+          <div id="chk-result" style="margin-top:8px"></div>
           <div class="note" id="bulk-msg" style="margin-top:6px">Amazon は、広告コンソールの「一括操作」でスポンサープロダクトのファイルをダウンロードして選んでください（キャンペーン・キーワードの ID をそこから読みます）。</div>
         </div>
         <div id="adv-summary" style="margin-top:12px"></div>
@@ -1291,7 +1307,7 @@
 (function () {
   "use strict";
   /** サーバー側の APP_VERSION と同じ値にする */
-  const UI_VERSION = "0.27.6";
+  const UI_VERSION = "0.28.1";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -4432,6 +4448,153 @@
       + `<br><span class="note">キーワードCPC は ${RPP_MIN_CPC}円〜${RPP_MAX_CPC.toLocaleString("ja-JP")}円の範囲にそろえています。</span>`
       + (manual.length ? `<details style="margin-top:4px"><summary style="cursor:pointer">一括登録に入れられなかった提案（${manual.length}件・手で反映）</summary>${manual.map(esc).join("<br>")}</details>` : "");
     showBulkDone(done);
+  });
+
+
+  /* ③ 反映チェック：アップロードしたファイルと、アップロード後にダウンロードし直したファイルを突き合わせる（読むだけ。日本語のファイルも可） */
+  const CHK_COLS = {
+    entity: ["entity", "エンティティ"], operation: ["operation", "操作"],
+    adGroupId: ["adgroupid", "広告グループid"], keywordId: ["keywordid", "キーワードid"], targetId: ["producttargetingid", "商品ターゲティングid"],
+    campaignName: ["campaignname", "キャンペーン名"], adGroupName: ["adgroupname", "広告グループ名"],
+    state: ["state", "ステータス"], bid: ["bid", "入札額"], keyword: ["keywordtext", "キーワードテキスト"], match: ["matchtype", "マッチタイプ"],
+    expr: ["producttargetingexpression", "商品ターゲティング式"], budget: ["dailybudget", "1日の予算"], campaignId: ["campaignid", "キャンペーンid"],
+  };
+  const ENT = { "keyword": "kw", "キーワード": "kw", "product targeting": "pt", "商品ターゲティング": "pt",
+    "negative keyword": "neg", "除外キーワード": "neg", "negative product targeting": "negpt", "除外商品ターゲティング": "negpt",
+    "campaign": "camp", "キャンペーン": "camp", "ad group": "ag", "広告グループ": "ag" };
+  async function readBulkSheet(file) {
+    const XLSX = await loadSheetJS();
+    const buf = new Uint8Array(await file.arrayBuffer());
+    const names = XLSX.read(buf, { type: "array", bookSheets: true }).SheetNames || [];
+    const sheet = names.find((n) => /^sponsored\s*products\s*campaigns?$/i.test(n)) || names.find((n) => /sponsored\s*products/i.test(n) && !/search\s*term/i.test(n))
+      || names.find((n) => /スポンサープロダクト.*キャンペーン/.test(n)) || names.find((n) => /スポンサー\s*プロダクト/.test(n) && !/検索/.test(n));
+    if (!sheet) throw new Error(`${file.name}：スポンサープロダクトのシートが見つかりません`);
+    const wb = XLSX.read(buf, { type: "array", sheets: [sheet], dense: true });
+    const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sheet], { header: 1, raw: true, defval: null, blankrows: false });
+    const header = (aoa[0] || []).map((v) => String(v ?? ""));
+    const norm = (h) => String(h).toLowerCase().replace(/\(.*?\)|（.*?）/g, "").replace(/[\s_]/g, "");
+    const at = {};
+    for (const [k, names2] of Object.entries(CHK_COLS)) {
+      let exact = -1, info = -1;
+      header.forEach((h, i) => { if (!names2.includes(norm(h))) return; if (/informational|情報提供/i.test(h)) { if (info < 0) info = i; } else if (exact < 0) exact = i; });
+      at[k] = [exact, info];
+    }
+    const get = (r, k) => { const [e, i] = at[k]; const v = (e >= 0 ? r[e] : null) ?? (i >= 0 ? r[i] : null); return v == null ? "" : String(v).trim(); };
+    return aoa.slice(1).map((r) => ({
+      ent: ENT[get(r, "entity").toLowerCase()] || get(r, "entity"), op: get(r, "operation").toLowerCase(),
+      campaignId: get(r, "campaignId"), adGroupId: get(r, "adGroupId"), keywordId: get(r, "keywordId"), targetId: get(r, "targetId"),
+      campaign: get(r, "campaignName"), adGroup: get(r, "adGroupName"), state: get(r, "state"), bid: get(r, "bid"),
+      keyword: get(r, "keyword"), match: get(r, "match").toLowerCase(), expr: get(r, "expr"), budget: get(r, "budget"),
+    }));
+  }
+  let chkUp = null, chkNow = null;
+  const chkReady = () => { $("btn-bulk-check").disabled = !(chkUp && chkNow); };
+  $("chk-up-file").addEventListener("change", (e) => { chkUp = e.target.files[0] || null; document.querySelector('label[for="chk-up-file"]').textContent = chkUp ? `✓ ${chkUp.name}` : "アップロードしたファイル"; chkReady(); });
+  $("chk-now-file").addEventListener("change", (e) => { chkNow = e.target.files[0] || null; document.querySelector('label[for="chk-now-file"]').textContent = chkNow ? `✓ ${chkNow.name}` : "今ダウンロードしたファイル"; chkReady(); });
+  $("btn-bulk-check").addEventListener("click", async () => {
+    const btn = $("btn-bulk-check"); btn.disabled = true;
+    $("chk-result").innerHTML = `<span class="note">突き合わせています…</span>`;
+    try {
+      const [up, now] = await Promise.all([readBulkSheet(chkUp), readBulkSheet(chkNow)]);
+      const num = (v) => (v === "" ? null : Number(String(v).replace(/[,¥]/g, "")));
+      const byKw = new Map(), byPt = new Map();
+      for (const r of now) { if (r.ent === "kw" && r.keywordId) byKw.set(r.keywordId, r); if (r.ent === "pt" && r.targetId) byPt.set(r.targetId, r); }
+      const lc = (v) => String(v || "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+      const res = [];
+      for (const u of up) {
+        if (!u.op) continue;
+        const label = u.keyword || u.expr || u.campaign || "";
+        if ((u.ent === "kw" || u.ent === "pt") && /update|更新/.test(u.op)) {
+          const r = u.ent === "kw" ? byKw.get(u.keywordId) : byPt.get(u.targetId);
+          if (!r) { res.push(["miss", "入札の変更", label, u.bid, "—", "今のファイルに見つからない（フィルターで一時停止中が外れている可能性）"]); continue; }
+          const ok = num(r.bid) === num(u.bid);
+          res.push([ok ? "ok" : "diff", "入札の変更", `${label}<div class="note">${esc(r.adGroup || r.campaign)}</div>`, u.bid, r.bid, ok ? "" : "アップロード後に別の変更が入った（変更履歴で確認）"]);
+        } else if ((u.ent === "neg" || u.ent === "negpt") && /create|作成/.test(u.op)) {
+          const m = now.find((r) => r.ent === u.ent && r.adGroupId === u.adGroupId && (u.ent === "neg" ? lc(r.keyword) === lc(u.keyword) : lc(r.expr) === lc(u.expr)));
+          res.push([m ? "ok" : "miss", "除外の追加", label, "—", m ? (m.state || "あり") : "—", m ? "" : "見つからない（アップロード結果のエラーを確認）"]);
+        } else if ((u.ent === "kw" || u.ent === "pt") && /create|作成/.test(u.op)) {
+          const m = now.find((r) => r.ent === u.ent && r.adGroupId === u.adGroupId && (u.ent === "kw" ? lc(r.keyword) === lc(u.keyword) : lc(r.expr) === lc(u.expr)));
+          res.push([m ? (num(m.bid) === num(u.bid) ? "ok" : "diff") : "miss", "キーワードの追加", label, u.bid, m ? m.bid : "—", m ? (num(m.bid) === num(u.bid) ? "" : "すでにあったキーワードの可能性") : "見つからない（エラーの行か、一時停止中で外れている）"]);
+        } else if (u.ent === "camp" && /update|更新/.test(u.op) && u.budget) {
+          const m = now.find((r) => r.ent === "camp" && r.campaignId === u.campaignId);
+          const ok = m && num(m.budget) === num(u.budget);
+          res.push([m ? (ok ? "ok" : "diff") : "miss", "予算の変更", label, u.budget, m ? m.budget : "—", ok ? "" : m ? "アップロード後に別の変更が入った" : "見つからない"]);
+        }
+      }
+      if (!res.length) { $("chk-result").innerHTML = `<span class="tag warn">突き合わせる行がありません</span> 左に「アップロードしたファイル」（このツールで作ったもの）を選んでいるか確認してください`; return; }
+      const cnt = (k) => res.filter((r) => r[0] === k).length;
+      const TAG = { ok: ["ok", "一致"], diff: ["warn", "違う"], miss: ["ng", "見つからない"] };
+      const order = { diff: 0, miss: 1, ok: 2 };
+      res.sort((a, b) => order[a[0]] - order[b[0]]);
+      $("chk-result").innerHTML = `<div><span class="tag ok">一致 ${cnt("ok")}</span> <span class="tag warn">違う ${cnt("diff")}</span> <span class="tag ng">見つからない ${cnt("miss")}</span>
+          <span class="note" style="margin-left:6px">「違う」は、アップロードは成功していて、そのあとに入札ルール・別のツール・人の手で変わったものです。Amazon の変更履歴で確認できます</span></div>
+        <div class="tablewrap" style="margin-top:6px"><table style="min-width:760px"><thead><tr><th>結果</th><th>種類</th><th>キーワード・ターゲット</th><th class="r">アップロードした値</th><th class="r">今の値</th><th>メモ</th></tr></thead>
+        <tbody>${res.map((r) => `<tr><td><span class="tag ${TAG[r[0]][0]}">${TAG[r[0]][1]}</span></td><td>${esc(r[1])}</td><td style="white-space:normal">${r[2].includes("<div") ? r[2] : esc(r[2])}</td>
+          <td class="r">${esc(r[3])}</td><td class="r">${esc(r[4])}</td><td class="note" style="white-space:normal">${esc(r[5])}</td></tr>`).join("")}</tbody></table></div>`;
+    } catch (err) {
+      $("chk-result").innerHTML = `<span class="tag ng">突き合わせできません</span> ${esc(String(err && err.message || err))}`;
+    } finally { chkReady(); }
+  });
+
+
+  /* 楽天の反映チェック：アップロードした RPP の CSV（Shift_JIS）と、その後に届いた RPP のレポートのキーワードCPC を突き合わせる */
+  let chkRpp = null;
+  $("chk-rpp-file").addEventListener("change", (e) => {
+    chkRpp = e.target.files[0] || null;
+    document.querySelector('label[for="chk-rpp-file"]').textContent = chkRpp ? `✓ ${chkRpp.name}` : "アップロードした RPP の CSV";
+    $("btn-rpp-check").disabled = !chkRpp;
+  });
+  function parseCsvLine(line) {
+    const out = []; let cur = "", q = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (q) { if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') q = false; else cur += c; }
+      else if (c === '"') q = true; else if (c === ",") { out.push(cur); cur = ""; } else cur += c;
+    }
+    out.push(cur);
+    return out.map((v) => v.trim());
+  }
+  $("btn-rpp-check").addEventListener("click", async () => {
+    const btn = $("btn-rpp-check"); btn.disabled = true;
+    $("chk-result").innerHTML = `<span class="note">突き合わせています…</span>`;
+    try {
+      const Encoding = await loadEncoding();
+      const bytes = new Uint8Array(await chkRpp.arrayBuffer());
+      const enc = Encoding.detect(bytes);
+      const text = Encoding.codeToString(Encoding.convert(bytes, { to: "UNICODE", from: enc === "UTF8" ? "UTF8" : "SJIS" })).replace(/^﻿/, "");
+      const lines = text.split(/\r?\n/).filter((l) => l.trim());
+      const head = parseCsvLine(lines[0] || "");
+      const ci = (name) => head.findIndex((h) => h.replace(/\s/g, "") === name);
+      const iCtl = ci("コントロールカラム"), iNum = ci("商品管理番号"), iKw = ci("キーワード"), iCpc = ci("キーワードCPC");
+      if ([iCtl, iNum, iKw, iCpc].some((i) => i < 0)) throw new Error("RPP のキーワード一括登録の CSV ではないようです（見出し：" + head.join(" / ") + "）");
+      const rows = lines.slice(1).map(parseCsvLine).filter((r) => /^[nu]$/i.test(r[iCtl] || ""))
+        .map((r) => ({ manage: r[iNum], keyword: r[iKw], cpc: Number(r[iCpc]) }));
+      if (!rows.length) throw new Error("新規（n）・変更（u）の行がありません");
+      const r = await fetch("/api/ads/rpp-check", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ caseId: $("ads-case").value || currentCase, rows }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "突き合わせできませんでした");
+      // CSV を作った日（ファイルの更新日）より後のレポートが届いていなければ「まだ」
+      const made = new Date(chkRpp.lastModified + 9 * 3600000).toISOString().slice(0, 10);
+      const res = d.rows.map((x) => {
+        if (x.latestDate == null) return ["miss", x, "RPP のレポートにこのキーワードが見つからない"];
+        if (x.latestDate < made) return ["wait", x, `まだ反映後のレポートが届いていない（最新 ${x.latestDate}。翌日12時ごろに届きます）`];
+        // アップロードした当日のレポートは、変更前の CPC のことがある。違っていれば翌日分を待つ
+        if (x.latestDate === made && Number(x.latestBid) !== Number(x.cpc)) return ["wait", x, "当日のレポートは変更前の値のことがあります。翌日分のレポートで確かめます"];
+        return [Number(x.latestBid) === Number(x.cpc) ? "ok" : "diff", x, Number(x.latestBid) === Number(x.cpc) ? "" : "アップロード後に別の変更が入ったか、反映されていない（RPP の管理画面で確認）"];
+      });
+      const TAG = { ok: ["ok", "一致"], diff: ["warn", "違う"], miss: ["ng", "見つからない"], wait: ["wait", "まだ"] };
+      const order = { diff: 0, miss: 1, wait: 2, ok: 3 };
+      res.sort((a, b) => order[a[0]] - order[b[0]]);
+      const cnt = (k) => res.filter((x) => x[0] === k).length;
+      $("chk-result").innerHTML = `<div><span class="tag ok">一致 ${cnt("ok")}</span> <span class="tag warn">違う ${cnt("diff")}</span> <span class="tag wait">まだ ${cnt("wait")}</span> <span class="tag ng">見つからない ${cnt("miss")}</span>
+          <span class="note" style="margin-left:6px">楽天RPP のレポートは翌日12時ごろに届くので、アップロードした翌日の午後から確かめられます（最新のレポート：${esc(d.latestReport || "—")}）</span></div>
+        <div class="tablewrap" style="margin-top:6px"><table style="min-width:760px"><thead><tr><th>結果</th><th>商品ページ（商品管理番号）</th><th>キーワード</th><th class="r">アップロードしたCPC</th><th class="r">レポートのCPC</th><th>レポートの日</th><th>メモ</th></tr></thead>
+        <tbody>${res.map(([k, x, memo]) => `<tr><td><span class="tag ${TAG[k][0]}">${TAG[k][1]}</span></td><td>${esc(x.manage)}</td><td><strong>${esc(x.keyword)}</strong></td>
+          <td class="r">${esc(x.cpc)}</td><td class="r">${x.latestBid == null ? "—" : esc(x.latestBid)}</td><td>${esc(x.latestDate || "—")}</td><td class="note" style="white-space:normal">${esc(memo)}</td></tr>`).join("")}</tbody></table></div>`;
+    } catch (err) {
+      $("chk-result").innerHTML = `<span class="tag ng">突き合わせできません</span> ${esc(String(err && err.message || err))}`;
+    } finally { btn.disabled = !chkRpp; }
   });
 
   // Amazon：担当者がダウンロードした一括操作ファイルを読み、ID を引き当てて「変更する行だけ」のファイルを作る

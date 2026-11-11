@@ -47,7 +47,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.27.6";
+const APP_VERSION = "0.28.1";
 
 export interface Env {
   DB: D1Database;
@@ -691,6 +691,22 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     if (!b.caseId) return json({ error: "案件を指定してください" }, 400);
     return json(await refreshAmazonReco(env, b.caseId));
   }
+  // 楽天RPP の反映チェック：アップロードした「キーワード一括登録」の行を、その後に届いた RPP のキーワードレポート（キーワードCPC）と突き合わせる
+  if (path === "/api/ads/rpp-check" && req.method === "POST") {
+    const b = (await req.json()) as { caseId?: string; rows?: Array<{ manage: string; keyword: string; cpc: number }> };
+    if (!b.caseId || !Array.isArray(b.rows)) return json({ error: "案件と行を指定してください" }, 400);
+    const out = [];
+    for (const r of b.rows.slice(0, 500)) {
+      const x = await env.DB.prepare(
+        `SELECT date, bid FROM daily_ads WHERE case_id = ? AND mall = 'rakuten' AND level = 'keyword' AND external_id = ? AND keyword = ? AND bid IS NOT NULL
+          ORDER BY date DESC LIMIT 1`
+      ).bind(b.caseId, r.manage, r.keyword).first<{ date: string; bid: number }>();
+      out.push({ ...r, latestDate: x?.date ?? null, latestBid: x?.bid ?? null });
+    }
+    const last = await env.DB.prepare("SELECT MAX(date) AS d FROM daily_ads WHERE case_id = ? AND mall = 'rakuten' AND level = 'keyword'").bind(b.caseId).first<{ d: string | null }>();
+    return json({ rows: out, latestReport: last?.d ?? null });
+  }
+
   // AI の週次分析（Claude API）
   if (path === "/api/ai/reports" && req.method === "GET") {
     const caseId = new URL(req.url).searchParams.get("case_id");
