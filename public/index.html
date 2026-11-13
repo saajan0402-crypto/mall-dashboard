@@ -801,6 +801,12 @@
           </div>
           <div class="btns" style="margin-top:6px">
             <span class="note">楽天：</span>
+            <label class="act file-pick" for="rpp-kw-file">RPP の登録キーワード一覧を読み込む</label>
+            <input type="file" id="rpp-kw-file" accept=".csv,text/csv" class="visually-hidden">
+            <span class="note" id="rpp-kw-msg">RPP の管理画面からダウンロードした登録キーワードの一覧（CSV）。商品ごとの登録数（上限20）とかぶりの判定に使います。一括ファイルを作る前に、最新のものを読み込んでください</span>
+          </div>
+          <div class="btns" style="margin-top:6px">
+            <span class="note">楽天：</span>
             <label class="act file-pick" for="chk-rpp-file">アップロードした RPP の CSV</label>
             <input type="file" id="chk-rpp-file" accept=".csv,text/csv" class="visually-hidden">
             <button class="act" id="btn-rpp-check" disabled>楽天の反映をチェックする</button>
@@ -929,6 +935,7 @@
         <div class="btns">
           <button class="act" id="btn-kw-reco">Amazon の推奨を取り直す</button>
           <span class="note" id="kw-reco-msg"></span>
+          <span class="note" id="kw-rpp"></span>
         </div>
         <div class="tablewrap" style="margin-top:12px"><table class="kw-cand-table">
           <colgroup id="kw-cols"></colgroup>
@@ -956,7 +963,8 @@
         </div>
         <div id="seo-pages" style="margin-top:10px"></div>
         <p class="note" style="margin-top:8px">商品ページの文章は API から読むだけです（1日1回・「取り直す」でいつでも）。Amazon は商品名・箇条書き・商品説明、楽天は商品名・キャッチコピー・商品説明文。Amazon の「検索キーワード」は、接続タブにセラーIDが入っているときだけ取れます。<br>
-          <strong>提案</strong>：Amazon は検索語で注文のある語と Amazon の推奨、楽天は RPP で注文のある語のうち、文章に入っていない語です。注文が3件以上の語は「商品名に」、それ以外は「検索キーワード（Amazon）／商品説明文（楽天）に」。<br>
+          <strong>提案</strong>：Amazon は検索語で注文のある語句と Amazon の推奨、楽天は RPP で注文のある語句から、<strong>文章に無い単語</strong>だけを取り出して出します（スペース・語順・ひらがな／カタカナ・全角／半角の違いは無視。同じ単語から来た語句は1つにまとめ、注文・売上を合計）。合計の注文が3件以上の単語は「商品名に」、それ以外は「検索キーワード（Amazon）／商品説明文（楽天）に」。
+          ブランド名の読み（ISM とイズムなど）や漢字とかなの違い（詰め替えとつめかえなど）は機械では同じと判定できないので、そのまま出ます。読みなら「ISM（イズム）」のように併記するのが一般的です。<br>
           モールの管理画面で直したら「反映済み」を押してください。その商品ページの文章を取り直して、入ったか確かめます（まだなら「まだ入っていません」と出ます）。対応の記録・レポートにも載ります。</p>
       </div>
     </div>
@@ -1344,7 +1352,7 @@
     // 見出しでモールが分かるので、文の頭のモール名は外す
     return m === "amazon" ? base.replace(/^Amazon\s*/i, "") : m === "rakuten" ? base.replace(/^楽天\s*/, "") : base;
   }
-  const UI_VERSION = "0.31.1";
+  const UI_VERSION = "0.32.0";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -4529,10 +4537,14 @@
     // キーワード発見の追加：商品ページごとに n（新規）行。入札は低め（既存キーワードの中央値の70%）
     for (const p of plans) {
       if (!p.rows || !p.rows.length) { manual.push(`楽天「${p.keyword}」をキーワードに追加（${p.problem || "商品ページが分からない"}）`); continue; }
-      for (const r of p.rows) lines.push(["n", r.externalId, p.keyword, Math.min(RPP_MAX_CPC, Math.max(RPP_MIN_CPC, Math.round(r.cpc)))]);
-      doneKw.push({ mall: "rakuten", keyword: p.keyword, source: p.source, rows: p.rows.map((r) => ({ externalId: r.externalId, cpc: r.cpc })) });
+      // 登録が上限（20個）の商品は、外す語の d（削除）行を先に入れる
+      for (const r of p.rows) {
+        if (r.remove) lines.push(["d", r.externalId, r.remove.keyword, ""]);
+        lines.push(["n", r.externalId, p.keyword, Math.min(RPP_MAX_CPC, Math.max(RPP_MIN_CPC, Math.round(r.cpc)))]);
+      }
+      doneKw.push({ mall: "rakuten", keyword: p.keyword, source: p.source, rows: p.rows.map((r) => ({ externalId: r.externalId, cpc: r.cpc, remove: r.remove ? r.remove.keyword : null })) });
     }
-    const nNew = lines.length;
+    const nNew = lines.filter((l) => l[0] === "n").length, nDel = lines.filter((l) => l[0] === "d").length;
     for (const [k, x] of items) {
       if (k !== "bids") { manual.push(`${advText(k, x)}（${k === "budgets" ? "予算は RPP の管理画面で変更" : "楽天では一括登録できない"}）`); continue; }
       if (!x.externalId) { manual.push(`${advText(k, x)}（商品管理番号が分からない）`); continue; }
@@ -4553,7 +4565,7 @@
       $("bulk-msg").innerHTML = `<span class="tag ng">失敗しました</span> ${esc(String(err && err.message || err))}`;
       return;
     }
-    $("bulk-msg").innerHTML = `<span class="tag ok">作りました</span> 楽天 ${lines.length}行（${[nNew ? `新しいキーワード ${nNew}行` : "", lines.length - nNew ? `キーワードCPC の変更 ${lines.length - nNew}行` : ""].filter(Boolean).join("・")}）。RPP の管理画面の「キーワード一括登録」でアップロードしてください。`
+    $("bulk-msg").innerHTML = `<span class="tag ok">作りました</span> 楽天 ${lines.length}行（${[nNew ? `新しいキーワード ${nNew}行` : "", nDel ? `上限のための入れ替え（削除）${nDel}行` : "", lines.length - nNew - nDel ? `キーワードCPC の変更 ${lines.length - nNew - nDel}行` : ""].filter(Boolean).join("・")}）。RPP の管理画面の「キーワード一括登録」でアップロードしてください。`
       + `<br><span class="note">キーワードCPC は ${RPP_MIN_CPC}円〜${RPP_MAX_CPC.toLocaleString("ja-JP")}円の範囲にそろえています。</span>`
       + (manual.length ? `<details style="margin-top:4px"><summary style="cursor:pointer">一括登録に入れられなかった提案（${manual.length}件・手で反映）</summary>${manual.map(esc).join("<br>")}</details>` : "");
     showBulkDone(done, doneKw);
@@ -4648,6 +4660,34 @@
 
   /* 楽天の反映チェック：アップロードした RPP の CSV（Shift_JIS）と、その後に届いた RPP のレポートのキーワードCPC を突き合わせる */
   let chkRpp = null;
+  // 楽天RPP の登録キーワード一覧（Shift_JIS の CSV）を読んで送る
+  $("rpp-kw-file").addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    $("rpp-kw-msg").textContent = "読み込んでいます…";
+    try {
+      const Encoding = await loadEncoding();
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const enc = Encoding.detect(bytes);
+      const text = Encoding.codeToString(Encoding.convert(bytes, { to: "UNICODE", from: enc === "UTF8" ? "UTF8" : "SJIS" })).replace(/^\uFEFF/, "");
+      const lines = text.split(/\r?\n/).filter((l) => l.trim());
+      const head = parseCsvLine(lines[0] || "");
+      const ci = (name) => head.findIndex((h) => h.replace(/\s/g, "") === name);
+      const iNum = ci("商品管理番号"), iKw = ci("キーワード"), iCpc = ci("キーワードCPC"), iItem = ci("商品CPC"), iSug = ci("目安CPC"), iName = ci("商品名");
+      if (iNum < 0 || iKw < 0) throw new Error("RPP の登録キーワード一覧ではないようです（見出し：" + head.slice(0, 9).join(" / ") + "）");
+      const rows = lines.slice(1).map(parseCsvLine).filter((r) => r[iKw]).map((r) => ({ num: r[iNum], keyword: r[iKw],
+        cpc: iCpc >= 0 ? r[iCpc] : null, itemCpc: iItem >= 0 ? r[iItem] : null, suggested: iSug >= 0 ? r[iSug] : null, name: iName >= 0 ? r[iName] : null }));
+      const r = await fetch("/api/rpp-keywords", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ caseId: $("ads-case").value || currentCase, rows }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "読み込めませんでした");
+      $("rpp-kw-msg").innerHTML = `<span class="tag ok">読み込みました</span> ${d.items}商品・${d.rows}件。キーワード発見の楽天の「一括待ち」に、商品ごとの登録数（上限20）と入れ替える語が出ます`;
+      await loadAdvice();
+    } catch (err) {
+      $("rpp-kw-msg").innerHTML = `<span class="tag ng">読み込めません</span> ${esc(String(err && err.message || err))}`;
+    }
+  });
   $("chk-rpp-file").addEventListener("change", (e) => {
     chkRpp = e.target.files[0] || null;
     document.querySelector('label[for="chk-rpp-file"]').textContent = chkRpp ? `✓ ${chkRpp.name}` : "アップロードした RPP の CSV";
@@ -4991,7 +5031,7 @@
           <div class="note" style="white-space:pre-wrap;max-height:240px;overflow:auto;margin-top:4px">${c.bullets && c.bullets.length ? "【箇条書き】\n" + esc(c.bullets.join("\n")) + "\n" : ""}${c.description ? "【説明文】\n" + esc(c.description.slice(0, 3000)) + "\n" : ""}${c.searchTerms ? "【検索キーワード】\n" + esc(c.searchTerms) : (p.mall === "amazon" ? "【検索キーワード】接続タブにセラーIDが入っていないため取得していません" : "")}</div></details>` : ""}
         ${sugg.length ? `<div class="tablewrap"><table style="min-width:640px"><thead><tr><th>キーワード</th><th>入れる場所</th><th class="r">注文</th><th class="r">売上</th><th>根拠</th><th></th></tr></thead>
           <tbody>${sugg.map((x) => `<tr><td><strong>${esc(x.keyword)}</strong></td><td>${where(x)}</td><td class="r">${x.orders || "—"}</td><td class="r">${x.sales ? yen(x.sales) : "—"}</td>
-            <td class="note">${esc(x.source)}</td><td style="text-align:right">${st(x)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+            <td class="note">${esc(x.source)}${x.phrases && x.phrases.length ? `<div title="${esc(x.phrases.join("／"))}">${esc(x.phrases.slice(0, 3).join("／"))}${x.phrases.length > 3 ? ` ほか${x.phrases.length - 3}` : ""}</div>` : ""}</td><td style="text-align:right">${st(x)}</td></tr>`).join("")}</tbody></table></div>` : ""}
       </details>`;
     }).join("") : `<p class="note">この案件のこのモールには、商品マスタに商品ページ（Amazon は ASIN、楽天は商品管理番号）がありません。</p>`;
   }
@@ -5025,6 +5065,10 @@
     $("kw-mall").innerHTML = malls.map((m) => `<button data-kwmall="${m}" aria-pressed="${m === kwMall}">${m === "amazon" ? "Amazon" : "楽天"}（${cnt(m)}）</button>`).join("");
     const dec = (kwData.decisions || []).filter((d) => d.mall === kwMall);
     const plans = (kwData.plans || []).filter((p) => p.mall === kwMall);
+    const rk = kwData.rppKw;
+    $("kw-rpp").innerHTML = kwMall !== "rakuten" ? "" : rk && rk.at
+      ? `RPP の登録キーワード一覧：${esc(String(rk.at).slice(0, 10))} 読み込み・${rk.rows}件${rk.items.length ? `（多い商品：${rk.items.slice(0, 3).map((x) => `${esc(x.num)} ${x.count}/${rk.limit}`).join("、")}）` : ""}`
+      : `<span class="tag warn">RPP の登録キーワード一覧が未読み込み</span> 広告タブの一括ファイルの欄から読み込むと、クリック0の語も含めて登録数（上限20）とかぶりを判定します`;
     const grow = (kwData.grow || []).filter((g) => (g.mall || "rakuten") === kwMall);
     document.querySelectorAll("#kw-view [data-view]").forEach((b) => {
       const v = b.dataset.view;
@@ -5046,7 +5090,7 @@
         const gs = p.mall === "amazon" && p.groups ? [...p.groups].sort((a, b) => Number(/manual|手動/i.test(b.campaign)) - Number(/manual|手動/i.test(a.campaign))) : [];
         const where = p.mall === "amazon"
           ? (gs.length ? `${esc(gs[0].campaign)}／${esc(gs[0].adGroup)}${gs.length > 1 ? `<div class="note">ほか ${gs.length - 1} 候補。一括操作ファイルの中の「手動・キーワード」の広告グループを使います</div>` : ""}` : "")
-          : (p.rows && p.rows.length ? `${p.rows.map((r) => esc(r.externalId)).join("・")}` : "");
+          : (p.rows && p.rows.length ? p.rows.map((r) => `<div>${esc(r.externalId)}${r.slots ? ` <span class="note">登録 ${esc(r.slots)}</span>` : ""}${r.remove ? `<div class="note"><span class="tag warn">入れ替え</span> 上限のため「${esc(r.remove.keyword)}」を外す（${esc(r.remove.reason)}）</div>` : ""}</div>`).join("") : "");
         const bid = p.mall === "amazon" ? `${p.bid != null ? `<strong>${yen(p.bid)}</strong>` : "—"}<div class="note">${esc(p.bidBasis || "")}</div>${
             p.recoBid != null ? `<div class="note">参考：Amazon の推奨 ${yen(p.recoBid)}${p.recoNote ? ` <span class="tag warn" title="${esc(p.recoNote)}">単位ずれ？</span>` : ""}</div>` : ""}`
           : (p.rows && p.rows.length ? p.rows.map((r) => `<strong>${yen(r.cpc)}</strong>${p.rows.length > 1 ? `（${esc(r.externalId)}）` : ""}<div class="note">${esc(r.basis)}</div>`).join("") : "—");

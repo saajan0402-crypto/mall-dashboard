@@ -29,7 +29,32 @@ const squash = (s: string) => toHira(s.normalize("NFKC").toLowerCase()).replace(
 const normKw = (s: string) => s.normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " ");
 const stripHtml = (s: string) => s.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
 
-export const seoKey = (mall: string, externalId: string, keyword: string) => `seo:${mall}:${externalId}:${normKw(keyword)}`;
+/**
+ * 語句のうち、文章（squash 済み）に無い部分。スペースで区切った各部分について、
+ * 文章にある部分文字列を長いものから消し、残った2文字以上のかたまりを返す（表示は元の表記）
+ */
+function missingParts(phrase: string, corpus: string): string[] {
+  const out: string[] = [];
+  for (const raw of phrase.normalize("NFKC").toLowerCase().split(/\s+/).filter(Boolean)) {
+    const f = toHira(raw);
+    if (corpus.includes(squash(raw))) continue;
+    const covered = new Array<boolean>(f.length).fill(false);
+    for (let len = f.length; len >= 2; len--) {
+      for (let i = 0; i + len <= f.length; i++) {
+        if (covered.slice(i, i + len).some(Boolean)) continue;
+        const sub = squash(f.slice(i, i + len));
+        if (sub.length >= 2 && corpus.includes(sub)) for (let j = i; j < i + len; j++) covered[j] = true;
+      }
+    }
+    let cur = "";
+    const flush = () => { if (squash(cur).length >= 2) out.push(cur.trim()); cur = ""; };
+    for (let i = 0; i < f.length; i++) { if (covered[i]) flush(); else cur += raw.charAt(i); }
+    flush();
+  }
+  return out;
+}
+
+export const seoKey = (mall: string, externalId: string, keyword: string) => `seo:${mall}:${externalId}:${toHira(normKw(keyword))}`;
 
 export interface ListingContent {
   mall: string; externalId: string; title: string | null; tagline: string | null;
@@ -69,6 +94,13 @@ export async function refreshListingContent(env: SeoEnv, caseId: string, only?: 
     const token = creds?.refresh_token ? await accessToken(env, creds.refresh_token).catch((e) => { errors.push(`Amazon：${String(e).slice(0, 100)}`); return null; }) : null;
     const sellerId = creds?.seller_id?.trim() || null;
     if (token) for (const [asin, sku] of wantAmz.slice(0, 40)) {
+      // ASIN は B0 で始まる10桁（本は ISBN-10）。SKU などが入っていたら Amazon に問い合わせない
+      if (!/^(B0[A-Z0-9]{8}|\d{9}[\dX])$/.test(asin)) {
+        await save(env.DB, caseId, { mall: "amazon", externalId: asin, title: null, tagline: null, bullets: [], description: null, searchTerms: null,
+          error: `商品マスタの ASIN「${asin}」が ASIN の形ではありません（B0 で始まる10桁）。ASIN 欄に SKU が入っていないか確認してください` });
+        errors.push(`Amazon ${asin}：ASIN の形ではありません`);
+        continue;
+      }
       let r = await spapi(token, `/catalog/2022-04-01/items/${asin}?marketplaceIds=${JP_MARKETPLACE}&includedData=attributes,summaries&locale=ja_JP`);
       if (r.status === 429) { await sleep(2000); r = await spapi(token, `/catalog/2022-04-01/items/${asin}?marketplaceIds=${JP_MARKETPLACE}&includedData=attributes,summaries&locale=ja_JP`); }
       if (!r.ok) { errors.push(`Amazon ${asin}：${r.status} ${errorMessage(r.body)}`); await save(env.DB, caseId, { mall: "amazon", externalId: asin, title: null, tagline: null, bullets: [], description: null, searchTerms: null, error: `${r.status} ${errorMessage(r.body)}`.slice(0, 300) }); continue; }
@@ -155,6 +187,8 @@ export interface SeoSuggestion {
   where: "title" | "terms";
   orders: number; sales: number; source: string;
   status: "open" | "done" | "skip" | "other";
+  /** この単語が足りていなかった元の語句（検索語・RPP のキーワード） */
+  phrases: string[];
   /** 反映済みにしたのに、取り直した文章にまだ入っていない */
   notYet: boolean;
 }
@@ -210,34 +244,47 @@ export async function seoOverview(db: D1Database, caseId: string): Promise<{ pag
 
   for (const pg of pages.values()) {
     const c = pg.content;
-    const corpus = squash([c?.title, c?.tagline, ...(c?.bullets ?? []), c?.description, c?.searchTerms].filter(Boolean).join(" "));
-    const titleC = squash(c?.title ?? "");
-    const has = (kw: string, text: string) => kw.split(/\s+/).filter(Boolean).every((part) => text.includes(squash(part)));
-    const cand = new Map<string, { kw: string; orders: number; sales: number; source: string }>();
-    // 表記ゆれ（モールが同じ語とみなすもの）は1つにまとめる
-    const add = (kw: string, orders: number, sales: number, source: string) => {
-      const k = canonKw(pg.mall, kw);
-      if (!k || k.length > 40) return;
-      const prev = cand.get(k);
-      cand.set(k, prev ? { ...prev, orders: prev.orders + orders, sales: prev.sales + sales } : { kw: normKw(kw), orders, sales, source });
-    };
+    // 文章が取れていないページは判定できないので提案しない（全部「入っていない」に見えてしまうため）
+    if (!c || (!c.title && !c.description && !(c.bullets ?? []).length)) continue;
+    const corpus = squash([c.title, c.tagline, ...(c.bullets ?? []), c.description, c.searchTerms].filter(Boolean).join(" "));
+    const titleC = squash(c.title ?? "");
+    // 成果の出ている語句（検索語・RPP のキーワード・推奨）
+    const phrases: Array<{ kw: string; orders: number; sales: number; source: string }> = [];
     if (pg.mall === "amazon") {
-      for (const t of amzTerms) if (pg.pids.includes(t.pid)) add(t.kw, n(t.orders), n(t.sales), "検索語で注文あり");
-      for (const r of reco) if (pg.pids.includes(r.pid)) add(r.kw, 0, 0, "Amazon の推奨");
+      for (const t of amzTerms) if (pg.pids.includes(t.pid)) phrases.push({ kw: t.kw, orders: n(t.orders), sales: n(t.sales), source: "検索語" });
+      for (const r of reco) if (pg.pids.includes(r.pid)) phrases.push({ kw: r.kw, orders: 0, sales: 0, source: "Amazon の推奨" });
     } else {
-      for (const t of rakKw) if (t.num === pg.externalId) add(t.kw, n(t.orders), n(t.sales), "RPP で注文あり");
+      for (const t of rakKw) if (t.num === pg.externalId) phrases.push({ kw: t.kw, orders: n(t.orders), sales: n(t.sales), source: "RPP のキーワード" });
     }
-    const list = [...cand.values()].sort((a, b) => b.orders - a.orders || b.sales - a.sales).slice(0, 30);
-    for (const x of list) {
-      const key = seoKey(pg.mall, pg.externalId, x.kw);
+    // 語句ではなく「文章に無い単語」で提案する。スペース・語順・かな／カナ・全角半角は文章に入っているかには関係ないので無視する
+    // （語句の中で、文章にある部分を長いものから消し、残った2文字以上を「足りない単語」とする）
+    const words = new Map<string, { word: string; orders: number; sales: number; phrases: string[]; sources: Set<string> }>();
+    for (const ph of phrases) {
+      for (const seg of missingParts(ph.kw, corpus)) {
+        const k = squash(seg);
+        const w = words.get(k) ?? { word: seg, orders: 0, sales: 0, phrases: [], sources: new Set<string>() };
+        // 表示はカタカナの表記を優先（商品名に入れるときの形に近いため）
+        if (/[\u30a1-\u30f6]/.test(seg) && !/[\u30a1-\u30f6]/.test(w.word)) w.word = seg;
+        w.orders += ph.orders; w.sales += ph.sales; w.sources.add(ph.source);
+        if (!w.phrases.includes(ph.kw) && w.phrases.length < 8) w.phrases.push(ph.kw);
+        words.set(k, w);
+      }
+    }
+    // 反映済み・今はしないにした単語（入っていれば消える。反映済みで入っていなければ「まだ」）
+    for (const [key, status] of stMap) {
+      const pre = `seo:${pg.mall}:${pg.externalId}:`;
+      if (!key.startsWith(pre) || status === "open") continue;
+      const word = key.slice(pre.length);
+      if (corpus.includes(squash(word))) continue;
+      if (!words.has(squash(word))) words.set(squash(word), { word, orders: 0, sales: 0, phrases: [], sources: new Set(["（記録）"]) });
+    }
+    const list = [...words.values()].sort((a, b) => b.orders - a.orders || b.sales - a.sales).slice(0, 30);
+    for (const w of list) {
+      const key = seoKey(pg.mall, pg.externalId, w.word);
       const status = (stMap.get(key) ?? "open") as SeoSuggestion["status"];
-      const inTitle = has(x.kw, titleC), inAny = has(x.kw, corpus);
-      if (inAny && status === "open") continue;         // すでに入っている
-      if (inTitle && status !== "open") continue;      // 反映済みで、商品名にも入った
-      const where: SeoSuggestion["where"] = x.orders >= 3 && !inTitle ? "title" : "terms";
-      if (inAny && where === "terms") continue;
-      pg.suggestions.push({ key, mall: pg.mall, externalId: pg.externalId, keyword: x.kw, where, orders: x.orders, sales: x.sales, source: x.source,
-        status, notYet: status === "done" && !!c?.fetchedAt && !inAny });
+      const where: SeoSuggestion["where"] = w.orders >= 3 && !titleC.includes(squash(w.word)) ? "title" : "terms";
+      pg.suggestions.push({ key, mall: pg.mall, externalId: pg.externalId, keyword: w.word, where, orders: w.orders, sales: w.sales,
+        source: [...w.sources].join("・"), phrases: w.phrases, status, notYet: status === "done" && !!c.fetchedAt });
     }
   }
   const f = await db.prepare("SELECT value FROM app_flags WHERE key = ?").bind(`seo_at:${caseId}`).first<{ value: string }>().catch(() => null);

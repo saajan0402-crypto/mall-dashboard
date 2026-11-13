@@ -14,6 +14,7 @@
 import { readCreds, type ConnEnv } from "./connections";
 import { kwKey, resolvePlans, growRows } from "./kwPlan";
 import { canonKw } from "./kwNorm";
+import { rppSnapshot, RPP_KW_LIMIT } from "./rppKeywords";
 import { accessToken, adsAccessToken, adsapi, spapi, errorMessage, JP_MARKETPLACE, type LwaEnv } from "./amazon";
 
 export interface KwEnv extends ConnEnv, LwaEnv {
@@ -308,6 +309,9 @@ export async function keywordOverview(db: D1Database, caseId: string) {
   const tset = { amazon: new Set<string>(), rakuten: new Set<string>() } as Record<string, Set<string>>;
   // 表記ゆれはモールのルールでまとめる（kwNorm.ts）：楽天＝かな・語順、Amazon＝かな・単複・全角半角が同じ扱い
   for (const t of targeted) (tset[t.mall] ??= new Set()).add(canonKw(t.mall, t.k));
+  // 楽天：RPP の登録キーワード一覧（クリック0でレポートに出ない語も含む）も入札済みとして扱う
+  const rppSnap = await rppSnapshot(db, caseId);
+  for (const it of rppSnap.items.values()) for (const k of it.keywords) (tset.rakuten ??= new Set()).add(k.canon);
   const watch = await listWatch(db, caseId);
   const wset = new Set(watch.map((w) => w.toLowerCase()));
 
@@ -414,7 +418,9 @@ export async function keywordOverview(db: D1Database, caseId: string) {
 
   const recoAt = JSON.parse((await getFlag(db, `kw_reco_at:${caseId}`)) ?? "null");
   const lastError = JSON.parse((await getFlag(db, `kw_error:${caseId}`)) ?? "null");
-  return { watch, malls, candidates: candidates.slice(0, 300), decisions, plans, grow, recoAt, lastError };
+  const rppKw = { at: rppSnap.at, rows: rppSnap.rows, limit: RPP_KW_LIMIT,
+    items: [...rppSnap.items.values()].map((it) => ({ num: it.num, name: it.name, count: it.keywords.length })).sort((a, b) => b.count - a.count) };
+  return { watch, malls, candidates: candidates.slice(0, 300), decisions, plans, grow, recoAt, lastError, rppKw };
 }
 
 /** 監視キーワード1つの最新の検索結果と、自社の順位の推移 */

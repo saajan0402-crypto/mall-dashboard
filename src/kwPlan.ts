@@ -15,6 +15,7 @@
 
 import { rakutenPages } from "./adProducts";
 import { canonKw } from "./kwNorm";
+import { rppSnapshot, applyRppChanges, RPP_KW_LIMIT } from "./rppKeywords";
 
 const n = (v: unknown) => Number(v ?? 0);
 const jstDay = (d: number) => new Date(Date.now() + 9 * 3600000 - d * 86400000).toISOString().slice(0, 10);
@@ -72,7 +73,11 @@ export interface ResolvedPlan {
   /** Amazon の推奨入札（参考）。今の入札の10倍を超えるなど異常な値は recoNote で注意を出す */
   recoBid?: number | null; recoNote?: string | null;
   /** 楽天：商品ページごとの行 */
-  rows?: Array<{ externalId: string; cpc: number; basis: string }>;
+  rows?: Array<{ externalId: string; cpc: number; basis: string;
+    /** 登録数（RPP の登録キーワード一覧を読み込んであるとき）。例 "17/20" */
+    slots?: string | null;
+    /** 上限のため入れ替える語（一括ファイルで d 行にする） */
+    remove?: { keyword: string; reason: string } }>;
   /** 入れられない理由（楽天の商品ページが分からない など） */
   problem?: string;
 }
@@ -94,7 +99,11 @@ export async function resolvePlans(db: D1Database, caseId: string): Promise<Reso
   const pages = await rakutenPages(db, caseId);
   const numsOf = new Map<string, string[]>();
   for (const [num, pids] of pages) for (const pid of pids) numsOf.set(pid, [...(numsOf.get(pid) ?? []), num]);
-  const startCache = new Map<string, { cpc: number; basis: string; existing: Set<string> }>();
+  type RakStart = { cpc: number; basis: string; existing: Set<string>; count: number; known: boolean;
+    removable: Array<{ keyword: string; canon: string; clicks: number; cpc: number }>; used: number; removed: Set<string> };
+  const startCache = new Map<string, RakStart>();
+  // RPP の登録キーワード一覧（読み込んであれば、クリック0のキーワードも含めた登録数・かぶりの判定・入札の基準に使う）
+  const snap = await rppSnapshot(db, caseId);
   const rakutenStart = async (num: string) => {
     const hit = startCache.get(num);
     if (hit) return hit;
@@ -105,24 +114,48 @@ export async function resolvePlans(db: D1Database, caseId: string): Promise<Reso
     const latest = new Map<string, number>();
     // 楽天は かな・語順の違いを同じ語とみなす（kwNorm.ts）
     for (const r of results) if (!latest.has(canonKw("rakuten", r.keyword))) latest.set(canonKw("rakuten", r.keyword), n(r.bid));
-    const med = median([...latest.values()]);
+    const item = snap.items.get(num);
+    // 一覧があればそのキーワードCPC（クリック0の語も含む）を基準にする
+    const base = item ? new Map(item.keywords.filter((k) => k.cpc != null).map((k) => [k.canon, Number(k.cpc)])) : latest;
+    const med = median([...base.values()]);
     // 育成中（ツールから追加したがクリックが無くレポートに出ていない）キーワードも登録済みとして扱う
-    const { results: gr } = await db.prepare("SELECT keyword FROM kw_grow WHERE case_id = ? AND mall = 'rakuten' AND external_id = ?")
-      .bind(caseId, num).all<{ keyword: string }>().catch(() => ({ results: [] as Array<{ keyword: string }> }));
-    const existing = new Set([...latest.keys(), ...gr.map((g) => canonKw("rakuten", g.keyword))]);
-    let out: { cpc: number; basis: string };
-    if (med != null) {
-      out = { cpc: Math.round(med * RPP_START_RATIO), basis: `既存キーワード ${latest.size}件の入札の中央値 ¥${Math.round(med).toLocaleString("ja-JP")} × ${Math.round(RPP_START_RATIO * 100)}%` };
-    } else {
+    const { results: gr } = await db.prepare("SELECT keyword, added_on FROM kw_grow WHERE case_id = ? AND mall = 'rakuten' AND external_id = ?")
+      .bind(caseId, num).all<{ keyword: string; added_on: string }>().catch(() => ({ results: [] as Array<{ keyword: string; added_on: string }> }));
+    const existing = new Set([...latest.keys(), ...gr.map((g) => canonKw("rakuten", g.keyword)), ...(item?.keywords.map((k) => k.canon) ?? [])]);
+    // 商品CPC（キーワードCPC がこれより低いと登録の意味が薄いので下限にする）
+    let itemCpc = item?.itemCpc ?? null;
+    if (itemCpc == null) {
       const p = await db.prepare(
         `SELECT bid FROM daily_ads WHERE case_id = ? AND mall = 'rakuten' AND level = 'product' AND external_id = ? AND bid IS NOT NULL ORDER BY date DESC LIMIT 1`
       ).bind(caseId, num).first<{ bid: number }>();
-      out = p?.bid != null && n(p.bid) > RPP_MIN_CPC
-        ? { cpc: Math.round(n(p.bid)), basis: `既存キーワードが無いため商品CPC ¥${Math.round(n(p.bid)).toLocaleString("ja-JP")}` }
+      itemCpc = p?.bid != null ? Math.round(n(p.bid)) : null;
+    }
+    let out: { cpc: number; basis: string };
+    if (med != null) {
+      out = { cpc: Math.round(med * RPP_START_RATIO), basis: `${item ? "登録済み" : "既存"}キーワード ${base.size}件の入札の中央値 ¥${Math.round(med).toLocaleString("ja-JP")} × ${Math.round(RPP_START_RATIO * 100)}%` };
+    } else {
+      out = itemCpc != null && itemCpc > RPP_MIN_CPC
+        ? { cpc: itemCpc, basis: `既存キーワードが無いため商品CPC ¥${itemCpc.toLocaleString("ja-JP")}` }
         : { cpc: RPP_MIN_CPC, basis: "既存キーワードが無いため下限の40円" };
     }
+    if (itemCpc != null && out.cpc < itemCpc) { out.cpc = itemCpc; out.basis += `（商品CPC ¥${itemCpc.toLocaleString("ja-JP")} を下回るので商品CPC に）`; }
     out.cpc = Math.min(RPP_MAX_CPC, Math.max(RPP_MIN_CPC, out.cpc));
-    const v = { ...out, existing };
+    // 登録数：一覧の数 ＋ 一覧を読み込んだあとにツールから追加した育成中の語（一覧に無いもの）。一覧が無ければ分かる範囲（レポート＋育成中）
+    const inSnap = new Set(item?.keywords.map((k) => k.canon) ?? []);
+    const after = gr.filter((g) => !inSnap.has(canonKw("rakuten", g.keyword)) && (!snap.at || g.added_on >= snap.at.slice(0, 10))).length;
+    const count = item ? item.keywords.length + after : existing.size;
+    // 外してよい語の候補：登録済みで直近60日に注文0、追加して28日以内の育成中は除く。クリックの少ない順
+    const { results: perf } = await db.prepare(
+      `SELECT LOWER(keyword) AS k, SUM(clicks) AS clicks, SUM(orders) AS orders FROM daily_ads
+        WHERE case_id = ? AND mall = 'rakuten' AND level = 'keyword' AND external_id = ? AND date >= ? GROUP BY LOWER(keyword)`
+    ).bind(caseId, num, since).all<{ k: string; clicks: number; orders: number }>();
+    const pf = new Map(perf.map((r) => [canonKw("rakuten", r.k), r]));
+    const young = new Set(gr.filter((g) => g.added_on >= jstDay(28)).map((g) => canonKw("rakuten", g.keyword)));
+    const removable = (item?.keywords ?? [])
+      .filter((k) => n(pf.get(k.canon)?.orders) === 0 && !young.has(k.canon))
+      .map((k) => ({ keyword: k.keyword, canon: k.canon, clicks: n(pf.get(k.canon)?.clicks), cpc: k.cpc ?? 0 }))
+      .sort((a, b) => a.clicks - b.clicks || b.cpc - a.cpc);
+    const v: RakStart = { ...out, existing, count, known: !!item, removable, used: 0, removed: new Set<string>() };
     startCache.set(num, v);
     return v;
   };
@@ -207,14 +240,27 @@ export async function resolvePlans(db: D1Database, caseId: string): Promise<Reso
       const nums = [...new Set(p.productIds.flatMap((id) => numsOf.get(id) ?? []))];
       const rows: NonNullable<ResolvedPlan["rows"]> = [];
       const already: string[] = [];
+      const full: string[] = [];
       for (const num of nums.slice(0, 10)) {
         const s = await rakutenStart(num);
         if (s.existing.has(canonKw("rakuten", p.keyword))) { already.push(num); continue; }
-        rows.push({ externalId: num, cpc: s.cpc, basis: s.basis });
+        // 登録の上限（1商品20個）。いっぱいなら、外してよい語と入れ替える（d 行＋n 行）
+        const used = s.count + s.used - s.removed.size;
+        let remove: { keyword: string; reason: string } | undefined;
+        if (used >= RPP_KW_LIMIT) {
+          const r = s.removable.find((x) => !s.removed.has(x.canon));
+          if (!r) { full.push(num); continue; }
+          s.removed.add(r.canon);
+          remove = { keyword: r.keyword, reason: `直近60日の注文0・クリック ${r.clicks}` };
+        }
+        s.used++;
+        rows.push({ externalId: num, cpc: s.cpc, basis: s.basis, slots: s.known ? `${Math.min(used, RPP_KW_LIMIT)}/${RPP_KW_LIMIT}` : null, remove });
       }
       base.rows = rows;
       if (!nums.length) base.problem = p.productIds.length ? "関連商品の楽天の商品ページ（商品管理番号）が商品マスタにありません" : "関連商品が分からないため、楽天の商品ページを決められません";
-      else if (!rows.length) base.problem = `すでに登録済みです（${already.join("・")}）`;
+      else if (!rows.length && full.length) base.problem = `登録が上限（${RPP_KW_LIMIT}個）で、外してよい語がありません（どれも直近60日に注文あり、または追加して28日以内）：${full.join("・")}。入れ替える語を手で決めてください`;
+      else if (!rows.length) base.problem = `すでに登録済みです（同じ扱いの表記を含む）：${already.join("・")}`;
+      else if (full.length) base.problem = `${full.join("・")} は登録が上限で、外してよい語が無いため入れません`;
     }
     out.push(base);
   }
@@ -226,10 +272,16 @@ export async function resolvePlans(db: D1Database, caseId: string): Promise<Reso
  *   楽天：rows ＝ 商品ページ（商品管理番号）ごとの行／Amazon：rows ＝ 入れた広告グループ（ID・キャンペーン名・広告グループ名）。育成しない語は rows なし
  */
 export async function finishPlan(db: D1Database, caseId: string, mall: string, keyword: string,
-  rows: Array<{ externalId: string; cpc: number; campaign?: string; adGroup?: string }> | undefined, by: string | null) {
+  rows: Array<{ externalId: string; cpc: number; campaign?: string; adGroup?: string; remove?: string | null }> | undefined, by: string | null) {
   await removePlan(db, caseId, mall, keyword);
   if (!["rakuten", "amazon"].includes(mall) || !rows?.length) return;
   const today = jstDay(0), kw = keyword.normalize("NFKC").trim().replace(/\s+/g, " ");
+  // 楽天：登録キーワード一覧にも反映（追加した語・入れ替えで外した語）。外した語が育成中なら育成もやめる
+  if (mall === "rakuten") for (const r of rows.slice(0, 20)) {
+    await applyRppChanges(db, caseId, String(r.externalId), { keyword: kw, cpc: Number(r.cpc) }, r.remove ?? null);
+    if (r.remove) await db.prepare("DELETE FROM kw_grow WHERE case_id = ? AND mall = 'rakuten' AND external_id = ? AND keyword = ?")
+      .bind(caseId, String(r.externalId), r.remove).run().catch(() => undefined);
+  }
   await db.batch(rows.slice(0, 20).map((r) => db.prepare(
     `INSERT INTO kw_grow (case_id, mall, external_id, keyword, start_bid, bid, changed_on, added_on, added_by, campaign, ad_group)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

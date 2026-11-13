@@ -37,6 +37,7 @@ import { renderAdsMarkdown, adsPrompt } from "./adsReport";
 import { listWatch, addWatch, removeWatch, keywordOverview, keywordDetail, snapshotKeyword, refreshAmazonReco, pumpKeywords, kwKey } from "./kwDiscovery";
 import { addPlan, removePlan, resolvePlans, finishPlan, growBidChanged } from "./kwPlan";
 import { refreshListingContent, pumpListingContent, seoOverview, seoKey } from "./listingSeo";
+import { importRppKeywords, type RppKwRow } from "./rppKeywords";
 import { queueAiReport, listAiReports, aiMode, pumpAi } from "./aiAnalysis";
 import { postSlack, listCaseSlack, saveCaseSlack } from "./slack";
 import { sendDailySummaries } from "./dailySummary";
@@ -49,7 +50,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.31.1";
+const APP_VERSION = "0.32.0";
 
 export interface Env {
   DB: D1Database;
@@ -702,19 +703,34 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
   if (path === "/api/keywords/status" && req.method === "POST") {
     const b = (await req.json()) as { caseId?: string; mall?: string; keyword?: string; status?: "done" | "skip" | "open"; source?: string;
       /** 一括ファイルで書き出したとき：楽天の行（育成中に入れる） */
-      rows?: Array<{ externalId: string; cpc: number; campaign?: string; adGroup?: string }>; bid?: number | null; via?: "bulk" };
+      rows?: Array<{ externalId: string; cpc: number; campaign?: string; adGroup?: string; remove?: string | null }>; bid?: number | null; via?: "bulk" };
     if (!b.caseId || !b.keyword || !b.mall || !["done", "skip", "open"].includes(b.status ?? "")) return json({ error: "案件・モール・キーワード・状態を指定してください" }, 400);
     const mallJa = b.mall === "rakuten" ? "楽天RPP" : "Amazon広告";
     const kw = b.keyword.normalize("NFKC").trim();
     const bidTxt = b.via === "bulk" ? (b.mall === "rakuten" && b.rows?.length ? `（入札 ${[...new Set(b.rows.map((r) => `¥${Math.round(Number(r.cpc)).toLocaleString("ja-JP")}`))].join("・")}${b.rows.length > 1 ? `・${b.rows.length}商品` : ""}）`
       : b.bid ? `（入札 ¥${Math.round(b.bid).toLocaleString("ja-JP")}）` : "") : "";
-    const text = b.status === "skip" ? `${mallJa}のキーワード候補「${kw}」を見送り` : `${mallJa}に新しいキーワード「${kw}」を追加${bidTxt}`;
+    const swapped = [...new Set((b.rows ?? []).map((r) => r.remove).filter((x): x is string => !!x))];
+    const text = b.status === "skip" ? `${mallJa}のキーワード候補「${kw}」を見送り`
+      : `${mallJa}に新しいキーワード「${kw}」を追加${bidTxt}${swapped.length ? `（上限のため「${swapped.join("」「")}」と入れ替え）` : ""}`;
     await setTodoStatus(env.DB, b.caseId, { key: kwKey(b.mall, kw), status: b.status!, text, basis: b.source ? `候補の出どころ：${b.source}` : null,
       area: "広告", priority: "mid" }, viewer(req));
     // 一括待ちから外す。一括ファイルで書き出したキーワードのうち、低めに入れたもの（楽天・Amazon の推奨だけの語）は「育成中」に入れる
     if (b.status === "done") await finishPlan(env.DB, b.caseId, b.mall, kw, b.via === "bulk" ? b.rows : undefined, viewer(req));
     else await removePlan(env.DB, b.caseId, b.mall, kw);
     return json({ ok: true });
+  }
+  // 楽天RPP の登録キーワード一覧（RPP の管理画面の CSV を画面で読んで、行を送ってくる）
+  if (path === "/api/rpp-keywords" && req.method === "POST") {
+    const b = (await req.json()) as { caseId?: string; rows?: RppKwRow[] };
+    if (!b.caseId || !Array.isArray(b.rows)) return json({ error: "案件と行を指定してください" }, 400);
+    try {
+      const r = await importRppKeywords(env.DB, b.caseId, b.rows.slice(0, 5000), viewer(req));
+      await env.DB.prepare(`INSERT INTO ingests (id, case_id, kind, rows, status, source, error) VALUES (?, ?, 'rpp_keywords', ?, 'ok', 'manual', ?)`)
+        .bind(crypto.randomUUID(), b.caseId, r.rows, `RPP の登録キーワード一覧：${r.items}商品・${r.rows}件（${viewer(req) ?? "不明"}）`).run();
+      return json({ ok: true, ...r });
+    } catch (e) {
+      return json({ error: String(e instanceof Error ? e.message : e) }, 400);
+    }
   }
   // 商品ページに入れるキーワード（商品名・説明文・検索キーワード）
   if (path === "/api/seo" && req.method === "GET") {
