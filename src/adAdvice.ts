@@ -212,6 +212,21 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
   // 楽天RPP：1つの商品ページ（商品管理番号）に SKU ごとの別商品があるときは、
   // 楽天の売上の比率で重みをつけた粗利率で目標を決める（1つの商品の粗利率だけで決めない）
   const pages = await rakutenPages(db, caseId);
+  // 楽天RPP：キーワードCPC は商品CPC を1円以上上回る必要がある（RPP の仕様・2026-11 担当者確認）。
+  // 商品CPC は RPP の登録キーワード一覧（読み込んであれば）→ 商品別レポートの最新の入札 の順で引く
+  const itemCpc = new Map<string, number>();
+  {
+    const { results: ic } = await db.prepare(
+      `SELECT external_id, bid FROM daily_ads d WHERE case_id = ? AND mall = 'rakuten' AND level = 'product' AND bid IS NOT NULL
+          AND date = (SELECT MAX(date) FROM daily_ads x WHERE x.case_id = d.case_id AND x.mall = 'rakuten' AND x.level = 'product' AND x.external_id = d.external_id AND x.bid IS NOT NULL)`
+    ).bind(caseId).all<{ external_id: string; bid: number }>();
+    for (const r of ic) itemCpc.set(String(r.external_id), Math.round(n(r.bid)));
+    const { results: rk } = await db.prepare("SELECT external_id, MAX(item_cpc) AS c FROM rpp_keywords WHERE case_id = ? AND item_cpc IS NOT NULL GROUP BY external_id")
+      .bind(caseId).all<{ external_id: string; c: number }>().catch(() => ({ results: [] as Array<{ external_id: string; c: number }> }));
+    for (const r of rk) itemCpc.set(String(r.external_id), Math.round(n(r.c)));
+  }
+  /** 楽天のキーワードCPC の下限（商品CPC＋1円、かつ40円以上） */
+  const rakMin = (num: string | null) => Math.max(MIN_BID.rakuten, num != null && itemCpc.has(num) ? itemCpc.get(num)! + 1 : 0);
   const rakRevenue = await rakutenRevenueByProduct(db, caseId, R.from, R.to);
   const pageTarget = (num: string | null): Target | null => {
     const pids = num ? pages.get(num) : undefined;
@@ -289,7 +304,7 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
     const cpc = cost / clicks;
     const currentBid = r.bid == null ? null : n(r.bid);
     const base = currentBid ?? cpc;
-    const minBid = MIN_BID[mall] ?? 2;
+    const minBid = mall === "rakuten" ? rakMin(r.external_id == null ? null : String(r.external_id)) : MIN_BID[mall] ?? 2;
     const roas = cost > 0 ? sales / cost : null;
     // 1注文あたりに使ってよい広告費。単価は商品の平均販売価格、無ければこの広告の客単価
     const price = (orders > 0 ? sales / orders : null) ?? prod?.price ?? null;
@@ -321,6 +336,9 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
     const clamped = Math.min(UP_MAX, Math.max(action === "pause" ? 0.5 : DOWN_MAX, ratio));
     const suggestedBid = Math.max(minBid, Math.round(base * clamped));
     if (suggestedBid === Math.round(base)) continue;
+    // 下げる提案なのに下限（楽天は商品CPC＋1円）より下げられない → 出さない（下げたいなら商品CPC を下げるか、キーワードを外す）
+    if (action !== "up" && suggestedBid > Math.round(base)) continue;
+    if (mall === "rakuten" && action !== "up" && Math.round(base * clamped) < minBid) reason += `。キーワードCPC は商品CPC より1円以上高くする必要があるので ${yen(minBid)} までにしています`;
     bids.push({
       key: `adv:bid:${mall}:${campaign}:${adGroup}:${lk(keyword)}:${matchType}:${isoWeek()}`,
       mall, adType: r.ad_type == null ? null : String(r.ad_type), campaign, adGroup, keyword, matchType,
@@ -376,9 +394,9 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
         cap = Math.round(g.startBid / RPP_START_RATIO);
         capBasis = `追加したときの既存キーワードの入札の中央値 ${yen(cap)}（損益分岐CPC を出すデータが足りないため）`;
       }
-      cap = Math.min(amz ? 100000 : RPP_MAX_CPC, Math.max(MIN_BID[g.mall] ?? 2, cap));
+      cap = Math.min(amz ? 100000 : RPP_MAX_CPC, Math.max(amz ? MIN_BID.amazon : rakMin(g.externalId), cap));
       if (bid >= cap) continue;
-      const suggestedBid = Math.min(cap, Math.max(bid + 1, Math.round(bid * 1.2)));
+      const suggestedBid = Math.max(amz ? 0 : rakMin(g.externalId), Math.min(cap, Math.max(bid + 1, Math.round(bid * 1.2))));
       const prods = pids.map((x) => products.get(x)).filter((x): x is NonNullable<typeof x> => !!x);
       bids.push({
         key: amz ? `adv:bid:amazon:${campaign}:${adGroup}:${lk(g.keyword)}:exact:${isoWeek()}` : `adv:bid:rakuten:育成中:${g.externalId}:${lk(g.keyword)}::${isoWeek()}`,
@@ -604,6 +622,7 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
     "Amazon のオートターゲティング（close-match・loose-match・substitutes・complements）の入札は、アップロードしても Amazon 側で上書きされるため提案しません（除外キーワード・予算の提案は出します）",
     "Amazon のキャンペーン予算は、1日の予算の合計を変えずに入れ替えます（予算切れで成果の出ているキャンペーンを増やし、赤字・使い切っていないキャンペーンを減らす）。楽天から配分を移すとき・月の広告予算に余裕があるときだけ合計を増やし、予算を超えるペースなら減らします",
     "帰属期間：楽天RPP 30日／Amazon SP 7日／SB 14日。楽天は期間が長くても直近分の売上があとから増えることがあります",
+    "楽天RPP のキーワードCPC は、商品CPC より1円以上高くする必要があります（RPP の仕様）。提案はそれより下げず、下げられないものは出しません（さらに下げたいときは商品CPC を下げるか、キーワードを外してください）",
     `キーワード発見から低い入札で追加したキーワード（楽天・Amazon の推奨だけの語）は「育成中」：既存キーワードの中央値の${Math.round(RPP_START_RATIO * 100)}%で入れ、${SETTLE_DAYS}日たってもクリックが ${MIN_CLICKS} 未満なら +20% を提案します（上限は損益分岐CPC）。クリックがたまったら通常の見直しに移ります`,
   ];
 

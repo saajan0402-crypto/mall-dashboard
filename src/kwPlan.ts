@@ -135,10 +135,11 @@ export async function resolvePlans(db: D1Database, caseId: string): Promise<Reso
       out = { cpc: Math.round(med * RPP_START_RATIO), basis: `${item ? "登録済み" : "既存"}キーワード ${base.size}件の入札の中央値 ¥${Math.round(med).toLocaleString("ja-JP")} × ${Math.round(RPP_START_RATIO * 100)}%` };
     } else {
       out = itemCpc != null && itemCpc > RPP_MIN_CPC
-        ? { cpc: itemCpc, basis: `既存キーワードが無いため商品CPC ¥${itemCpc.toLocaleString("ja-JP")}` }
+        ? { cpc: itemCpc + 1, basis: `既存キーワードが無いため商品CPC ¥${itemCpc.toLocaleString("ja-JP")}＋1円` }
         : { cpc: RPP_MIN_CPC, basis: "既存キーワードが無いため下限の40円" };
     }
-    if (itemCpc != null && out.cpc < itemCpc) { out.cpc = itemCpc; out.basis += `（商品CPC ¥${itemCpc.toLocaleString("ja-JP")} を下回るので商品CPC に）`; }
+    // RPP の仕様：キーワードCPC は商品CPC を1円以上上回る必要がある
+    if (itemCpc != null && out.cpc <= itemCpc) { out.cpc = itemCpc + 1; out.basis += `（キーワードCPC は商品CPC ¥${itemCpc.toLocaleString("ja-JP")} より1円以上高くする必要があるので ¥${(itemCpc + 1).toLocaleString("ja-JP")} に）`; }
     out.cpc = Math.min(RPP_MAX_CPC, Math.max(RPP_MIN_CPC, out.cpc));
     // 登録数：一覧の数 ＋ 一覧を読み込んだあとにツールから追加した育成中の語（一覧に無いもの）。一覧が無ければ分かる範囲（レポート＋育成中）
     const inSnap = new Set(item?.keywords.map((k) => k.canon) ?? []);
