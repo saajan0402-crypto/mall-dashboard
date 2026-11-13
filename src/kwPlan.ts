@@ -14,6 +14,7 @@
  */
 
 import { rakutenPages } from "./adProducts";
+import { canonKw } from "./kwNorm";
 
 const n = (v: unknown) => Number(v ?? 0);
 const jstDay = (d: number) => new Date(Date.now() + 9 * 3600000 - d * 86400000).toISOString().slice(0, 10);
@@ -102,12 +103,13 @@ export async function resolvePlans(db: D1Database, caseId: string): Promise<Reso
           AND bid IS NOT NULL AND date >= ? ORDER BY date DESC`
     ).bind(caseId, num, since).all<{ keyword: string; bid: number }>();
     const latest = new Map<string, number>();
-    for (const r of results) if (!latest.has(normKw(r.keyword))) latest.set(normKw(r.keyword), n(r.bid));
+    // 楽天は かな・語順の違いを同じ語とみなす（kwNorm.ts）
+    for (const r of results) if (!latest.has(canonKw("rakuten", r.keyword))) latest.set(canonKw("rakuten", r.keyword), n(r.bid));
     const med = median([...latest.values()]);
     // 育成中（ツールから追加したがクリックが無くレポートに出ていない）キーワードも登録済みとして扱う
     const { results: gr } = await db.prepare("SELECT keyword FROM kw_grow WHERE case_id = ? AND mall = 'rakuten' AND external_id = ?")
       .bind(caseId, num).all<{ keyword: string }>().catch(() => ({ results: [] as Array<{ keyword: string }> }));
-    const existing = new Set([...latest.keys(), ...gr.map((g) => normKw(g.keyword))]);
+    const existing = new Set([...latest.keys(), ...gr.map((g) => canonKw("rakuten", g.keyword))]);
     let out: { cpc: number; basis: string };
     if (med != null) {
       out = { cpc: Math.round(med * RPP_START_RATIO), basis: `既存キーワード ${latest.size}件の入札の中央値 ¥${Math.round(med).toLocaleString("ja-JP")} × ${Math.round(RPP_START_RATIO * 100)}%` };
@@ -207,7 +209,7 @@ export async function resolvePlans(db: D1Database, caseId: string): Promise<Reso
       const already: string[] = [];
       for (const num of nums.slice(0, 10)) {
         const s = await rakutenStart(num);
-        if (s.existing.has(normKw(p.keyword))) { already.push(num); continue; }
+        if (s.existing.has(canonKw("rakuten", p.keyword))) { already.push(num); continue; }
         rows.push({ externalId: num, cpc: s.cpc, basis: s.basis });
       }
       base.rows = rows;

@@ -135,7 +135,9 @@ export async function renderAdsMarkdown(db: D1Database, caseId: string, caseName
   L.push(table(["検索語", "キャンペーン", "注文", "売上", "ROAS", "提案の入札"], adv.harvest.slice(0, 20).map((x) => [x.searchTerm, x.campaign, x.orders, yen(x.sales), x.roas, x.suggestedBid])));
   if (adv.budgets.length) {
     L.push("### 予算", "");
-    L.push(table(["キャンペーン", "広告費", "ROAS", "予算内の時間", "提案"], adv.budgets.slice(0, 15).map((x) => [x.campaign, yen(x.cost), x.roas, `${x.coverage}%`, x.reason])));
+    if (adv.budgetPlan) L.push(`Amazon の1日の予算の合計：${yen(adv.budgetPlan.totalBefore)} → ${yen(adv.budgetPlan.totalAfter)}（${adv.budgetPlan.note}）`, "");
+    L.push(table(["キャンペーン", "増減", "今の予算", "提案の予算", "広告費", "ROAS", "理由"], adv.budgets.slice(0, 20).map((x) =>
+      [x.campaign, x.action === "up" ? "増やす" : "減らす", x.budget == null ? "—" : yen(x.budget), x.suggestedBudget == null ? "—" : yen(x.suggestedBudget), yen(x.cost), x.roas, x.reason])));
   }
   return L.join("\n");
 }

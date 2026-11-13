@@ -11,10 +11,14 @@
  *   - 帰属期間が違う（楽天RPP 30日／Amazon SP 7日・SB 14日）。楽天の ROAS は Amazon より高く出やすいので、
  *     楽天へ移す提案には必ずその注意を添える
  *   - Amazon でキャンペーンが予算切れ（予算内の時間が100%未満）になっていれば、増やしたときに伸びる余地がある印として使う
+ * 月の広告予算（ダッシュボードで入力・Amazon＋楽天の合計・税別）を上限にする
+ *   - 今月の見込み（今月これまでの広告費＋残りの日数×直近の1日あたり）が予算を超える → 効率の低いモールから減らす（cut）
+ *   - 予算に5%以上の余裕があり、利益の出ているモールがある → そのモールを増やす（add・最大でそのモールの20%）
+ *   - モール間で移す（shift）のは合計が変わらないので、予算の範囲内
  */
 
 import { periodSummary, adTotals } from "./caseSummary";
-import { externalAdCost } from "./externalAds";
+import { externalAdCost, adBudgetOf } from "./externalAds";
 
 export interface MallAdEfficiency {
   mall: string;
@@ -33,13 +37,23 @@ export interface MallAdEfficiency {
   attributionDays: string;
 }
 
+export interface AdBudgetStatus {
+  month: string; amount: number;
+  /** 今月これまで（昨日まで）の広告費（両モール） */
+  spent: number; daysElapsed: number; daysInMonth: number;
+  /** 今月の見込み＝これまで＋残りの日数×直近の1日あたり */
+  projected: number;
+}
+
 export interface Allocation {
   from: string; to: string; days: number;
   malls: MallAdEfficiency[];
+  /** 月の広告予算（未入力なら null） */
+  budget: AdBudgetStatus | null;
   /** 30日あたりに直した提案 */
   proposal: null | {
-    action: "shift" | "cut";
-    fromMall: string; toMall: string | null;
+    action: "shift" | "cut" | "add";
+    fromMall: string | null; toMall: string | null;
     amount30d: number;          // 30日あたりに動かす広告費
     expectedProfit30d: number;  // 平均の効率が続いた場合の利益の増え方（上限の目安）
     reason: string;
@@ -79,17 +93,61 @@ export async function buildAllocation(db: D1Database, caseId: string, from: stri
     };
   });
 
-  return { from, to, days, malls, proposal: propose(malls, days) };
+  // 月の広告予算（今月）
+  const nowJ = new Date(Date.now() + 9 * 3600000);
+  const month = nowJ.toISOString().slice(0, 7);
+  const amount = await adBudgetOf(db, caseId, month);
+  let budget: AdBudgetStatus | null = null;
+  if (amount != null) {
+    const dim = new Date(Date.UTC(nowJ.getUTCFullYear(), nowJ.getUTCMonth() + 1, 0)).getUTCDate();
+    const daysElapsed = nowJ.getUTCDate() - 1;          // 昨日まで
+    const spent = daysElapsed > 0
+      ? (await adTotals(db, caseId, `${month}-01`, new Date(nowJ.getTime() - 86400000).toISOString().slice(0, 10))).reduce((t, x) => t + x.cost, 0) : 0;
+    const perDay = malls.reduce((t, m) => t + m.adCost, 0) / days;
+    budget = { month, amount, spent, daysElapsed, daysInMonth: dim, projected: Math.round(spent + (dim - daysElapsed) * perDay) };
+  }
+
+  return { from, to, days, malls, budget, proposal: propose(malls, days, budget) };
 }
 
-function propose(malls: MallAdEfficiency[], days: number): Allocation["proposal"] {
+function propose(malls: MallAdEfficiency[], days: number, budget: AdBudgetStatus | null): Allocation["proposal"] {
   const ok = malls.filter((m) => m.adCost > 0 && m.profitPerYen != null);
   if (!ok.length) return null;
   const per30 = (v: number) => (v / days) * 30;
   const cautions: string[] = [
     "ROAS は平均の値です。広告費を増やすと効率は下がるので、移すのは一度に20%までにして、2〜4週間ようすを見てください",
   ];
+  // 月の広告予算を超えるペース → 効率の低いモールから減らす
+  if (budget && budget.projected > budget.amount * 1.02) {
+    const worst = [...ok].sort((a, b) => (a.profitPerYen ?? 0) - (b.profitPerYen ?? 0))[0];
+    const over = budget.projected - budget.amount;
+    // 1つのモールで減らせるのはそのモールの広告費まで（足りない分は次の提案で、もう一方のモールから）
+    const amount = Math.min(Math.round((over / budget.daysInMonth) * 30), Math.round(per30(worst.adCost)));
+    return { action: "cut", fromMall: worst.mall, toMall: null, amount30d: amount,
+      expectedProfit30d: Math.round(amount * -(worst.profitPerYen ?? 0)),
+      reason: `今月の広告予算 ${yen(budget.amount)} に対して、このペースだと ${yen(budget.projected)}（${yen(over)} 超える）見込みです。` +
+        `広告1円あたりの利益が低い${MALL_JA[worst.mall]}（${worst.profitPerYen}円）から、30日あたり ${yen(amount)} 減らしてください`,
+      cautions: [...cautions, "予算はダッシュボードの「今月の広告予算」で変えられます"] };
+  }
+  const base = proposeByEfficiency(ok, per30, cautions);
+  // 予算に余裕があり、利益の出ているモールがある → 増やす（モール間で移す提案があるときはそちらを優先）
+  if (budget && budget.projected < budget.amount * 0.95 && (!base || base.action === "add")) {
+    const best = [...ok].sort((a, b) => (b.profitPerYen ?? 0) - (a.profitPerYen ?? 0))[0];
+    if ((best.profitPerYen ?? 0) >= 0.1) {
+      const room = budget.amount - budget.projected;
+      const amount = Math.min(Math.round((room / budget.daysInMonth) * 30), Math.round(per30(best.adCost) * 0.2));
+      if (amount > 0) return { action: "add", fromMall: null, toMall: best.mall, amount30d: amount,
+        expectedProfit30d: Math.round(amount * (best.profitPerYen ?? 0)),
+        reason: `今月の広告予算 ${yen(budget.amount)} に対して、このペースだと ${yen(budget.projected)} で ${yen(room)} 余ります。` +
+          `広告1円あたり ${best.profitPerYen}円の利益が出ている${MALL_JA[best.mall]}を、30日あたり ${yen(amount)}（最大で今の20%）増やせます。` +
+          `${best.budgetLimited ? "予算切れのキャンペーンがあるので、まずそこの予算を上げてください" : "成果の出ているキャンペーンの予算・入札から上げてください"}`,
+        cautions };
+    }
+  }
+  return base;
+}
 
+function proposeByEfficiency(ok: MallAdEfficiency[], per30: (v: number) => number, cautions: string[]): Allocation["proposal"] {
   if (ok.length === 1) {
     const m = ok[0];
     if ((m.profitPerYen ?? 0) >= 0) return null;

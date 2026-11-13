@@ -938,9 +938,26 @@
           手で入札を追加したときは「追加した」を押してください。関係ない語は「見送る」で候補から外せます（どれも元に戻せます）。<br>
           <strong>入札</strong>（1クリックあたりの上限額）：Amazon は、検索語で売れた語は売れたときのクリック単価、それ以外は関連商品の広告グループの既存キーワードの入札の中央値の70%。Amazon の推奨入札は強気なので参考として出すだけです（1万円以上は単位のずれの可能性があるので「要確認」）。楽天は、その商品ページの既存キーワードの入札の中央値の70%（下限40円）。
           低めに入れたキーワードは<strong>育成中</strong>に入り、14日たってもクリックが10未満なら広告タブの入札の見直しに「+20%」が出ます（上限は損益分岐CPC）。<br>
+          <strong>表記ゆれ</strong>：モールが同じ語とみなす表記は1つにまとめ、入札済みの語と同じ扱いの表記は候補に出しません（楽天：ひらがな／カタカナ・語順。Amazon：ひらがな／カタカナ・単数／複数・全角／半角）。スペースの有無は両モールとも別の語、Amazon は語順も別の語として出します。Amazon の略称・類似表現・翻訳（shampoo とシャンプーなど）は機械では判定できないので、似た語は目で確かめてください。<br>
           <strong>Amazon</strong>：「検索語で売上あり」は、自動ターゲティングや部分一致で売れたのに、キーワードとしてはまだ入札していない語です（直近60日）。
           <strong>楽天</strong>：楽天には検索語のレポートが無いので、Amazon で売れた語・Amazon の推奨のうち、楽天RPPでまだ入札していない語を出します（推奨入札は Amazon の値なので出しません）。<br>
           「Amazon の推奨」は、広告 API が自社 ASIN ごとに勧めるキーワードで、週に1回取り直します。推奨入札は太字が中央値、下が範囲です。気になる語は「監視する」で、競合と自社の順位を毎日記録できます。</p>
+      </div>
+    </div>
+
+    <div>
+      <h2>商品ページに入れるキーワード<span class="hint">成果の出ている語のうち、商品名・説明文・検索キーワードに入っていない語</span></h2>
+      <div class="card">
+        <div class="btns" style="margin-top:0">
+          <span class="seg" id="seo-mall"></span>
+          <button class="act" id="btn-seo-refresh">商品ページの文章を取り直す</button>
+          <label class="note" style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="seo-show-all"> 反映済み・今はしないも表示</label>
+          <span class="note" id="seo-msg"></span>
+        </div>
+        <div id="seo-pages" style="margin-top:10px"></div>
+        <p class="note" style="margin-top:8px">商品ページの文章は API から読むだけです（1日1回・「取り直す」でいつでも）。Amazon は商品名・箇条書き・商品説明、楽天は商品名・キャッチコピー・商品説明文。Amazon の「検索キーワード」は、接続タブにセラーIDが入っているときだけ取れます。<br>
+          <strong>提案</strong>：Amazon は検索語で注文のある語と Amazon の推奨、楽天は RPP で注文のある語のうち、文章に入っていない語です。注文が3件以上の語は「商品名に」、それ以外は「検索キーワード（Amazon）／商品説明文（楽天）に」。<br>
+          モールの管理画面で直したら「反映済み」を押してください。その商品ページの文章を取り直して、入ったか確かめます（まだなら「まだ入っていません」と出ます）。対応の記録・レポートにも載ります。</p>
       </div>
     </div>
 
@@ -1294,9 +1311,9 @@
   <div class="guide-box">
     <div class="guide-kicker" id="ext-case"></div>
     <h3 id="ext-title">外部広告費（税別・月ごと）</h3>
-    <p class="guide-lead">SNS広告・インフルエンサーなど、モールの外の広告費の<strong>月の合計を税別で</strong>入れてください。
+    <p class="guide-lead" id="ext-lead">SNS広告・インフルエンサーなど、モールの外の広告費の<strong>月の合計を税別で</strong>入れてください。
       期間の集計では日割りにします（例：30日の月に30万円 → 1日1万円。今月は昨日までの日数ぶん）。空欄にして保存するとその月は消えます。</p>
-    <p class="note" style="margin-bottom:8px">「広告費を引いた利益」から引きます。ROAS・ACoS・TACoS には入れません。</p>
+    <p class="note" style="margin-bottom:8px" id="ext-note">「広告費を引いた利益」から引きます。ROAS・ACoS・TACoS には入れません。</p>
     <div class="tablewrap" style="max-height:46vh;overflow:auto"><table><thead><tr><th>月</th><th>金額（税別・円）</th><th>最終更新</th></tr></thead><tbody id="ext-rows"></tbody></table></div>
     <div class="guide-foot">
       <span class="note" id="ext-msg" style="margin-right:auto"></span>
@@ -1327,7 +1344,7 @@
     // 見出しでモールが分かるので、文の頭のモール名は外す
     return m === "amazon" ? base.replace(/^Amazon\s*/i, "") : m === "rakuten" ? base.replace(/^楽天\s*/, "") : base;
   }
-  const UI_VERSION = "0.29.1";
+  const UI_VERSION = "0.31.1";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -1655,8 +1672,8 @@
       <td>${m.budgetLimited == null ? "—" : m.budgetLimited ? `<span class="tag warn">予算切れあり</span>` : "なし"}</td><td class="note">${esc(m.attributionDays || "—")}</td></tr>`).join("");
     const p = al.proposal;
     const prop = p ? `<div style="margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2)">
-        <strong>${p.action === "shift" ? `提案：${ja(p.fromMall)} → ${ja(p.toMall)} へ 30日あたり ${yen(p.amount30d)}` : `提案：${ja(p.fromMall)} の広告費を 30日あたり ${yen(p.amount30d)} 減らす`}</strong>
-        <span class="note">（利益の増え方の目安 30日あたり ${yen(p.expectedProfit30d)}）</span>
+        <strong>${p.action === "shift" ? `提案：${ja(p.fromMall)} → ${ja(p.toMall)} へ 30日あたり ${yen(p.amount30d)}` : p.action === "add" ? `提案：${ja(p.toMall)} の広告費を 30日あたり ${yen(p.amount30d)} 増やす（月の広告予算の範囲内）` : `提案：${ja(p.fromMall)} の広告費を 30日あたり ${yen(p.amount30d)} 減らす`}</strong>
+        <span class="note">（${p.expectedProfit30d >= 0 ? `利益の増え方の目安 30日あたり ${yen(p.expectedProfit30d)}` : `予算に合わせるため、利益は30日あたり ${yen(-p.expectedProfit30d)} 減る見込み`}）</span>
         <p style="margin:6px 0 0">${esc(p.reason)}</p>
         <ul class="note" style="margin:6px 0 0;padding-left:18px">${p.cautions.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>${allocStatusHtml()}</div>`
       : `<p class="note" style="margin-top:10px">配分を動かす提案はありません（どちらも黒字で、効率の差が小さいか、片方のモールにしか広告がありません）。</p>`;
@@ -1664,7 +1681,8 @@
       <thead><tr><th>モール</th><th class="r">広告費</th><th class="r">広告経由の売上</th><th class="r">ROAS</th><th class="r">粗利率（広告費前）</th>
         <th class="r">損益分岐ROAS</th><th class="r">広告1円あたりの利益</th><th class="r">広告で生んだ利益</th><th>予算切れ</th><th>帰属期間</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
-      <p class="note" style="margin-top:6px">広告1円あたりの利益 ＝ ROAS × 粗利率（広告費前）− 1。プラスなら広告が利益を生み、マイナスなら広告で赤字です。差が大きいときに、低い方から高い方へ最大20%移す提案を出します。</p>${prop}`;
+      <p class="note" style="margin-top:6px">広告1円あたりの利益 ＝ ROAS × 粗利率（広告費前）− 1。プラスなら広告が利益を生み、マイナスなら広告で赤字です。差が大きいときに、低い方から高い方へ最大20%移す提案を出します。月の広告予算（KPI の「今月の広告予算」）を入れると、それを上限にします：超えるペースなら減らし、余裕があれば利益の出ているモールを増やします。</p>
+      ${al.budget ? `<p style="margin:6px 0 0"><strong>今月の広告予算 ${yen(al.budget.amount)}</strong> <span class="note">今月これまで ${yen(al.budget.spent)}（${al.budget.daysElapsed}日分）・このペースだと今月 ${yen(al.budget.projected)}（予算の${Math.round(al.budget.projected / Math.max(1, al.budget.amount) * 100)}%）</span></p>` : ""}${prop}`;
   }
 
   /* ---------- 照合し直し ---------- */
@@ -3482,16 +3500,27 @@
   });
 
   /* ---------- 外部広告費の入力 ---------- */
-  let extRows = [];
-  async function openExtAds() {
+  // 外部広告費と月の広告予算は同じ入力画面（月ごとの金額・税別）を使う
+  const MONTHLY = {
+    ext: { api: "/api/external-ads", title: "外部広告費（税別・月ごと）", label: "外部広告費（税別）",
+      lead: $("ext-lead").innerHTML, note: $("ext-note").innerHTML },
+    budget: { api: "/api/ad-budgets", title: "月の広告予算（Amazon＋楽天の合計・税別）", label: "月の広告予算（税別）",
+      lead: "Amazon と楽天のモール広告に、<strong>その月に使ってよい合計（税別）</strong>を入れてください。空欄にして保存するとその月は消えます。",
+      note: "モール間の広告費の配分の提案はこれを上限にします：今月の見込みが超えるペースなら効率の低いモールから減らし、余裕があれば利益の出ているモールを増やします。Amazon のキャンペーン予算の入れ替えも、この増減の分だけ合計を動かします。外部広告費は含めません。" },
+  };
+  let extRows = [], monthlyKind = "ext";
+  async function openExtAds(kind = "ext") {
     if (!currentCase) return;
-    const d = await get(`/api/external-ads?case_id=${encodeURIComponent(currentCase)}`);
+    monthlyKind = kind;
+    const cfg = MONTHLY[kind];
+    $("ext-title").textContent = cfg.title; $("ext-lead").innerHTML = cfg.lead; $("ext-note").innerHTML = cfg.note;
+    const d = await get(`${cfg.api}?case_id=${encodeURIComponent(currentCase)}`);
     if (d.error) { alertMsg(d.error); return; }
     extRows = d.months || [];
     const name = ($("g-case").selectedOptions[0] || {}).textContent || "";
     $("ext-case").textContent = name;
     $("ext-rows").innerHTML = extRows.map((r) => `<tr><td style="white-space:nowrap">${esc(r.month)}</td>
-      <td><input type="text" inputmode="numeric" class="ext-in" data-month="${esc(r.month)}" value="${r.amount == null ? "" : r.amount}" placeholder="未入力" aria-label="${esc(r.month)} の外部広告費（税別）"></td>
+      <td><input type="text" inputmode="numeric" class="ext-in" data-month="${esc(r.month)}" value="${r.amount == null ? "" : r.amount}" placeholder="未入力" aria-label="${esc(r.month)} の${esc(cfg.label)}"></td>
       <td class="note">${r.updatedAt ? esc(r.updatedAt.slice(0, 16)) + (r.updatedBy ? "・" + esc(r.updatedBy) : "") : ""}</td></tr>`).join("");
     $("ext-msg").textContent = "";
     $("ext-dlg").classList.remove("hidden");
@@ -3499,7 +3528,15 @@
   }
   const closeExt = () => $("ext-dlg").classList.add("hidden");
   function alertMsg(m) { $("dash-asof").textContent = m; }
-  document.addEventListener("click", (e) => { if (e.target.closest && e.target.closest("#btn-ext-open")) openExtAds(); });
+  document.addEventListener("click", (e) => {
+    if (e.target.closest && e.target.closest("#btn-ext-open")) openExtAds("ext");
+    if (e.target.closest && e.target.closest("#btn-budget-open")) openExtAds("budget");
+  });
+  function budgetKpi(b) {
+    return `<div class="kpi kpi-edit"><div class="k">今月の広告予算<button type="button" class="kpi-btn" id="btn-budget-open">入力</button></div>
+      <div class="v">${b ? yen(b.amount) : "—"}</div>
+      <div class="s">${b ? `これまで ${yen(b.spent)}・見込み ${yen(b.projected)}（${Math.round(b.projected / Math.max(1, b.amount) * 100)}%）` : "未入力（Amazon＋楽天の合計・税別）"}</div></div>`;
+  }
   $("ext-cancel").addEventListener("click", closeExt);
   $("ext-dlg").addEventListener("click", (e) => { if (e.target === $("ext-dlg")) closeExt(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("ext-dlg").classList.contains("hidden")) closeExt(); });
@@ -3517,13 +3554,13 @@
     if (!rows.length) { closeExt(); return; }
     $("ext-save").disabled = true;
     try {
-      const r = await fetch("/api/external-ads", { method: "POST", headers: { "content-type": "application/json" },
+      const r = await fetch(MONTHLY[monthlyKind].api, { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ caseId: currentCase, rows }) });
       const d = await r.json();
       if (!r.ok) { $("ext-msg").innerHTML = `<span class="tag ng">保存できません</span> ${esc(d.error || "")}`; return; }
       closeExt();
       await loadDashboard();
-      showGuide("external-saved");
+      if (monthlyKind === "ext") showGuide("external-saved");
     } finally { $("ext-save").disabled = false; }
   });
 
@@ -3559,6 +3596,7 @@
         <div class="v">${extMonths.length ? yen(ext) : "—"}</div>
         <div class="s">${extMonths.length ? `税別・${extMonths.map((m) => `${Number(m.month.slice(5))}月 ${m.days}/${m.daysInMonth}日`).join("・")}で日割り` : "未入力（SNS広告など。税別の月額）"}</div></div>`,
       kpi("広告費を引いた利益", yen(s.ads.profitAfterAds), ext ? "粗利 − 広告費 − 外部広告費" : "粗利 − 広告費（外部広告費は未入力）"),
+      budgetKpi((s.allocation || {}).budget),
       kpi("広告経由の売上", s.ads.totals.length ? yen(adSales) : "—",
         s.ads.totals.length && sl.total.revenue ? `総売上の ${Math.round(adSales / sl.total.revenue * 1000) / 10}%（帰属期間はモールで違う）` : "広告データなし"),
       repeatKpi(s.repeat),
@@ -4324,11 +4362,13 @@
         x.campaign, x.adGroup, x.clicks, x.cost, x.orders, x.sales, x.roas, x.target.roas, x.cpc, x.suggestedBid, x.reason]
     },
     budgets: {
-      head: ["キャンペーン", "モール", "広告費", "売上", "ROAS", "予算内の時間", "今の予算", "提案", "理由"],
-      row: (x) => [esc(x.campaign), mallTag(x.mall), yen(x.cost), yen(x.sales), x.roas, x.coverage + "%",
-        x.budget ? yen(x.budget) : "—", x.suggestedBudget ? `<strong>${yen(x.suggestedBudget)}</strong>` : "引き上げ", esc(x.reason)],
-      csv: ["キャンペーン", "モール", "広告の種類", "広告費", "売上", "ROAS", "予算内の時間(%)", "今の予算", "提案予算", "理由"],
-      csvRow: (x) => [x.campaign, MALL_JA[x.mall] || x.mall, x.adType || "", x.cost, x.sales, x.roas, x.coverage, x.budget ?? "", x.suggestedBudget ?? "", x.reason]
+      head: ["増減", "キャンペーン", "1日の予算（今 → 提案）", "広告費", "売上", "ROAS", "予算内の時間", "理由"],
+      row: (x) => [`<span class="tag ${x.action === "down" ? "warn" : "ok"}">${x.action === "down" ? "減らす" : "増やす"}</span>`,
+        `${mallTag(x.mall)} ${esc(x.campaign)}`,
+        `${x.budget ? yen(x.budget) : "—"} → ${x.suggestedBudget ? `<strong>${yen(x.suggestedBudget)}</strong>` : "引き上げ"}`,
+        yen(x.cost), yen(x.sales), x.roas, x.coverage == null ? "—" : x.coverage + "%", esc(x.reason)],
+      csv: ["増減", "キャンペーン", "モール", "広告の種類", "広告費", "売上", "ROAS", "予算内の時間(%)", "今の予算", "提案予算", "理由"],
+      csvRow: (x) => [x.action === "down" ? "減らす" : "増やす", x.campaign, MALL_JA[x.mall] || x.mall, x.adType || "", x.cost, x.sales, x.roas, x.coverage ?? "", x.budget ?? "", x.suggestedBudget ?? "", x.reason]
     }
   };
   function renderAdvice() {
@@ -4349,7 +4389,8 @@
          ${(d.watching || []).length ? `<span class="tag wait" style="margin-left:6px">様子見 ${d.watching.length}</span>` : ""}`
       : advTab === "negatives"
         ? `<span class="note">注文0の検索語に期間内 ${yen(d.impact.wastedCost)}。除外すると、この分が他のキーワードに回ります</span>`
-        : advTab === "budgets" ? `<span class="note">予算切れの判定は「予算内に収まっていた時間」を使います。APIでは取れないので、Amazonのキャンペーンレポート（CSV）を入れた期間だけ出ます</span>` : "";
+        : advTab === "budgets" ? (d.budgetPlan ? `<div><strong>Amazon の1日の予算の合計：${yen(d.budgetPlan.totalBefore)} → ${yen(d.budgetPlan.totalAfter)}</strong> <span class="note">${esc(d.budgetPlan.note)}</span></div>` : "")
+          + `<span class="note">Amazon は合計を変えずに入れ替えます：予算切れ（予算の9割以上を使った日が3割以上）で ROAS が目標以上のキャンペーンを増やし、赤字・予算を使い切っていないキャンペーンを減らします。楽天から配分を移すとき・月の広告予算に余裕があるときだけ合計を増やします。増減はセットで反映してください</span>` : "";
     const cfg = ADV_COLS[advTab];
     const showAll = $("adv-show-all").checked;
     const st = d.statuses || {};
@@ -4392,7 +4433,7 @@
     if (kind === "bids") return `${m}「${x.keyword}」の入札を ${yen(x.currentBid ?? x.cpc)} → ${yen(x.suggestedBid)} に変更（${ACT[x.action][1]}）`;
     if (kind === "negatives") return `${m}「${x.searchTerm}」を${x.kind === "product" ? "除外商品" : "除外キーワード"}に追加（${x.campaign}）`;
     if (kind === "harvest") return `${m}「${x.searchTerm}」を${x.kind === "product" ? "商品ターゲティング" : "完全一致キーワード"}で追加（入札 ${yen(x.suggestedBid)}）`;
-    return `${m}「${x.campaign}」の1日の予算を${x.suggestedBudget ? ` ${yen(x.suggestedBudget)} に` : ""}見直し`;
+    return `${m}「${x.campaign}」の1日の予算を${x.budget && x.suggestedBudget ? ` ${yen(x.budget)} → ${yen(x.suggestedBudget)} に変更（${x.action === "down" ? "減らす" : "増やす"}）` : x.suggestedBudget ? ` ${yen(x.suggestedBudget)} に` : "見直し"}`;
   }
   function findAdv(key) {
     for (const k of Object.keys(ADV_KIND)) { const x = (advData[k] || []).find((y) => y.key === key); if (x) return [k, x]; }
@@ -4647,7 +4688,7 @@
       const res = d.rows.map((x) => {
         if (x.latestDate == null) return x.ctl === "n"
           ? ["wait", x, "新しく追加したキーワードは、クリックが出るまでレポートに載らないことがあります。RPP の管理画面の商品のキーワード一覧で登録を確認してください"]
-          : ["miss", x, "RPP のレポートにこのキーワードが見つからない"];
+          : ["wait", x, "レポートにありません。RPP のキーワードレポートはクリック0の日は載らないので、ここでは確かめられません（RPP の管理画面で確認）"];
         if (x.latestDate < made) return ["wait", x, `まだ反映後のレポートが届いていない（最新 ${x.latestDate}。翌日12時ごろに届きます）`];
         // アップロードした当日のレポートは、変更前の CPC のことがある。違っていれば翌日分を待つ
         if (x.latestDate === made && Number(x.latestBid) !== Number(x.cpc)) return ["wait", x, "当日のレポートは変更前の値のことがあります。翌日分のレポートで確かめます"];
@@ -4721,6 +4762,9 @@
       const rows = aoa.slice(1);
       const lc = (v) => String(v ?? "").trim().toLowerCase().replace(/\s+/g, " ");
       const campaigns = new Map(), groups = new Map(), kws = new Map(), targets = new Map();
+      // Amazon が同じ語とみなす表記（かな・単複・全角半角）は1つとして扱う。スペースの有無・語順は別（src/kwNorm.ts と同じ）
+      const canonAmz = (v) => String(v ?? "").normalize("NFKC").toLowerCase().replace(/[\u30a1-\u30f6]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60))
+        .trim().split(/\s+/).filter(Boolean).map((w) => !/^[a-z]{4,}$/.test(w) ? w : /ies$/.test(w) ? w.slice(0, -3) + "y" : /(ses|xes|zes|ches|shes)$/.test(w) ? w.slice(0, -2) : /s$/.test(w) && !/ss$/.test(w) ? w.slice(0, -1) : w).join(" ");
       const exactAnywhere = new Map();   // 完全一致のキーワード → 登録されている場所（どの広告グループ・状態）
       const kwGroups = new Set(), ptGroups = new Set();   // キーワードの広告グループ／商品ターゲティングの広告グループ
       for (const r of rows) {
@@ -4730,7 +4774,7 @@
         else if (ent === "keyword") {
           kws.set(`${lc(cn)}\u0000${lc(gn)}\u0000${lc(cell(r, "keyword"))}\u0000${lc(cell(r, "match"))}`, r);
           kwGroups.add(`${lc(cn)}\u0000${lc(gn)}`);
-          if (lc(cell(r, "match")) === "exact" && !exactAnywhere.has(lc(cell(r, "keyword")))) exactAnywhere.set(lc(cell(r, "keyword")), { cn, gn, state: lc(cell(r, "state")) });
+          if (lc(cell(r, "match")) === "exact" && !exactAnywhere.has(canonAmz(cell(r, "keyword")))) exactAnywhere.set(canonAmz(cell(r, "keyword")), { cn, gn, state: lc(cell(r, "state")) });
         }
         else if (ent === "product targeting") { targets.set(`${lc(cn)}\u0000${lc(gn)}\u0000${lc(cell(r, "expr"))}`, r); ptGroups.add(`${lc(cn)}\u0000${lc(gn)}`); }
       }
@@ -4764,18 +4808,18 @@
           const tt = c ? lc(cell(c, "targetingType")) : "";
           if (!g || tt !== "manual") { skipped.push(`${advText(kind, x)}（見つかったキャンペーンがオートのため、入れる先を手で決めてください）`); continue; }
           // すでに完全一致で登録されているキーワードは作らない（Amazon が already exists で断るため）
-          const ex = x.kind !== "product" ? exactAnywhere.get(lc(x.searchTerm)) : null;
+          const ex = x.kind !== "product" ? exactAnywhere.get(canonAmz(x.searchTerm)) : null;
           if (ex) {
             skipped.push(`${advText(kind, x)}（すでに「${ex.cn}／${ex.gn}」に完全一致で登録済み${ex.state && ex.state !== "enabled" ? "・状態：" + ex.state + "。再開するかは手で判断" : ""}）`);
             done.push(x.key);   // 登録済みなので、対応済みに含める
             continue;
           }
-          if (x.kind !== "product" && createdNow.has(lc(x.searchTerm))) { done.push(x.key); continue; }
+          if (x.kind !== "product" && createdNow.has(canonAmz(x.searchTerm))) { done.push(x.key); continue; }
           const a = blank();
           set(a, "product", "Sponsored Products"); set(a, "operation", "Create"); set(a, "state", "enabled");
           set(a, "campaignId", cell(g, "campaignId")); set(a, "adGroupId", cell(g, "adGroupId")); set(a, "bid", x.suggestedBid);
           if (x.kind === "product") { set(a, "entity", "Product Targeting"); set(a, "expr", `asin="${x.searchTerm.toUpperCase()}"`); }
-          else { set(a, "entity", "Keyword"); set(a, "keyword", x.searchTerm); set(a, "match", "exact"); createdNow.add(lc(x.searchTerm)); }
+          else { set(a, "entity", "Keyword"); set(a, "keyword", x.searchTerm); set(a, "match", "exact"); createdNow.add(canonAmz(x.searchTerm)); }
           out.push(a); done.push(x.key);
         } else if (kind === "budgets") {
           const c = campaigns.get(lc(x.campaign));
@@ -4786,13 +4830,13 @@
       // キーワード発見の追加：関連商品の広告グループのうち、手動ターゲティングでキーワードを入れている広告グループに完全一致で作る
       for (const p of plansFor("amazon")) {
         const label = `Amazon「${p.keyword}」を完全一致キーワードで追加${p.bid != null ? `（入札 ${yen(p.bid)}）` : ""}`;
-        const ex = exactAnywhere.get(lc(p.keyword));
+        const ex = exactAnywhere.get(canonAmz(p.keyword));
         if (ex) {
           skipped.push(`${label}（すでに「${ex.cn}／${ex.gn}」に完全一致で登録済み${ex.state && ex.state !== "enabled" ? "・状態：" + ex.state + "。再開するかは手で判断" : ""}）`);
           doneKw.push({ mall: "amazon", keyword: p.keyword, source: p.source, bid: null });
           continue;
         }
-        if (createdNow.has(lc(p.keyword))) { doneKw.push({ mall: "amazon", keyword: p.keyword, source: p.source, bid: p.bid }); continue; }
+        if (createdNow.has(canonAmz(p.keyword))) { doneKw.push({ mall: "amazon", keyword: p.keyword, source: p.source, bid: p.bid }); continue; }
         if (p.bid == null) { skipped.push(`${label}（入札を決められない。手で入れてください）`); continue; }
         const isManual = (c) => { const row = campaigns.get(lc(c)); return row && lc(cell(row, "targetingType")) === "manual"; };
         const cands = (p.groups || []).map((x) => ({ ...x, k: `${lc(x.campaign)}\u0000${lc(x.adGroup)}` }))
@@ -4804,7 +4848,7 @@
         set(a, "product", "Sponsored Products"); set(a, "operation", "Create"); set(a, "state", "enabled");
         set(a, "campaignId", cell(g, "campaignId")); set(a, "adGroupId", cell(g, "adGroupId")); set(a, "bid", p.bid);
         set(a, "entity", "Keyword"); set(a, "keyword", p.keyword); set(a, "match", "exact");
-        createdNow.add(lc(p.keyword));
+        createdNow.add(canonAmz(p.keyword));
         // 低めに入れた語（Amazon の推奨だけの語）は育成中に入れる。広告レポートと突き合わせるため、キャンペーン名・広告グループ名も渡す
         out.push(a); doneKw.push({ mall: "amazon", keyword: p.keyword, source: p.source, bid: p.bid,
           rows: p.grow ? [{ externalId: cell(g, "adGroupId"), campaign: pick.campaign, adGroup: pick.adGroup, cpc: p.bid }] : undefined });
@@ -4912,7 +4956,68 @@
     const rc = d.recoAt;
     $("kw-reco-msg").textContent = rc ? `Amazon の推奨：${String(rc.at).slice(0, 10)} 取得・${rc.rows}件${rc.error ? "（" + rc.error + "）" : ""}` : "Amazon の推奨はまだ取得していません";
     loadAiReports();
+    loadSeo();
   }
+  /* 商品ページに入れるキーワード */
+  let seoData = null, seoMall = "amazon";
+  async function loadSeo() {
+    const d = await get(`/api/seo?case_id=${encodeURIComponent(currentCase)}`, { quiet: true });
+    if (d.error) { $("seo-pages").innerHTML = `<p class="note">${esc(d.error)}</p>`; return; }
+    seoData = d; renderSeo();
+  }
+  function renderSeo() {
+    const d = seoData; if (!d) return;
+    const malls = [...new Set(d.pages.map((p) => p.mall))];
+    if (!malls.includes(seoMall)) seoMall = malls[0] || "amazon";
+    const all = $("seo-show-all").checked;
+    const vis = (x) => all || x.status === "open" || x.notYet;
+    $("seo-mall").innerHTML = malls.map((m) => `<button data-seomall="${m}" aria-pressed="${m === seoMall}">${m === "amazon" ? "Amazon" : "楽天"}（${d.pages.filter((p) => p.mall === m).reduce((t, p) => t + p.suggestions.filter((x) => x.status === "open").length, 0)}）</button>`).join("");
+    const f = d.fetched;
+    $("seo-msg").textContent = f ? `文章の取得：${String(f.at).slice(0, 16).replace("T", " ")}（${f.ok}件）${f.errors && f.errors.length ? "・" + f.errors.join(" ／ ") : ""}` : "商品ページの文章はまだ取得していません（「取り直す」を押すか、明日の朝を待ってください）";
+    const small = "padding:3px 9px;font-size:12px;white-space:nowrap";
+    const pages = d.pages.filter((p) => p.mall === seoMall);
+    $("seo-pages").innerHTML = pages.length ? pages.map((p) => {
+      const c = p.content, sugg = p.suggestions.filter(vis);
+      const where = (x) => x.where === "title" ? `<span class="tag pill-a">商品名に</span>` : `<span class="tag ok">${p.mall === "amazon" ? "検索キーワードに" : "商品説明文に"}</span>`;
+      const st = (x) => x.status === "open" ? `<button class="act primary" style="${small}" data-seo-st="done" data-k="${esc(x.keyword)}" data-id="${esc(p.externalId)}" data-m="${p.mall}" data-w="${x.where}">反映済み</button>
+          <button class="act" style="${small}" data-seo-st="skip" data-k="${esc(x.keyword)}" data-id="${esc(p.externalId)}" data-m="${p.mall}" data-w="${x.where}">今はしない</button>`
+        : `${x.status === "done" ? (x.notYet ? `<span class="tag warn">反映済み・まだ入っていません</span>` : `<span class="tag ok">反映済み</span>`) : `<span class="tag wait">今はしない</span>`}
+          <button class="act" style="${small}" data-seo-st="open" data-k="${esc(x.keyword)}" data-id="${esc(p.externalId)}" data-m="${p.mall}" data-w="${x.where}">元に戻す</button>`;
+      return `<details style="border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin-bottom:8px" ${sugg.length ? "open" : ""}>
+        <summary style="cursor:pointer"><strong>${esc(p.externalId)}</strong> <span class="note">${esc(p.products.join("／"))}</span>
+          ${sugg.length ? `<span class="tag warn" style="margin-left:6px">${sugg.length}件</span>` : `<span class="note" style="margin-left:6px">提案なし</span>`}</summary>
+        <div class="note" style="margin:6px 0">${c ? (c.error ? `<span class="tag ng">取得できません</span> ${esc(c.error)}` : `商品名：${esc(c.title || "—")}（${Array.from(c.title || "").length}文字）${c.tagline ? `<br>キャッチコピー：${esc(c.tagline)}` : ""}`) : "まだ文章を取得していません"}</div>
+        ${c && !c.error ? `<details style="margin:0 0 6px"><summary class="note" style="cursor:pointer">取得した文章を見る（${esc(String(c.fetchedAt || "").slice(0, 16))}）</summary>
+          <div class="note" style="white-space:pre-wrap;max-height:240px;overflow:auto;margin-top:4px">${c.bullets && c.bullets.length ? "【箇条書き】\n" + esc(c.bullets.join("\n")) + "\n" : ""}${c.description ? "【説明文】\n" + esc(c.description.slice(0, 3000)) + "\n" : ""}${c.searchTerms ? "【検索キーワード】\n" + esc(c.searchTerms) : (p.mall === "amazon" ? "【検索キーワード】接続タブにセラーIDが入っていないため取得していません" : "")}</div></details>` : ""}
+        ${sugg.length ? `<div class="tablewrap"><table style="min-width:640px"><thead><tr><th>キーワード</th><th>入れる場所</th><th class="r">注文</th><th class="r">売上</th><th>根拠</th><th></th></tr></thead>
+          <tbody>${sugg.map((x) => `<tr><td><strong>${esc(x.keyword)}</strong></td><td>${where(x)}</td><td class="r">${x.orders || "—"}</td><td class="r">${x.sales ? yen(x.sales) : "—"}</td>
+            <td class="note">${esc(x.source)}</td><td style="text-align:right">${st(x)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      </details>`;
+    }).join("") : `<p class="note">この案件のこのモールには、商品マスタに商品ページ（Amazon は ASIN、楽天は商品管理番号）がありません。</p>`;
+  }
+  document.addEventListener("click", async (e) => {
+    const m = e.target.closest && e.target.closest("[data-seomall]");
+    if (m) { seoMall = m.dataset.seomall; renderSeo(); return; }
+    const b = e.target.closest && e.target.closest("[data-seo-st]");
+    if (!b) return;
+    b.disabled = true;
+    $("seo-msg").textContent = b.dataset.seoSt === "done" ? "商品ページの文章を取り直して確かめています…" : "保存しています…";
+    const r = await fetch("/api/seo/status", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ caseId: currentCase, mall: b.dataset.m, externalId: b.dataset.id, keyword: b.dataset.k, where: b.dataset.w, status: b.dataset.seoSt }) });
+    const d = await r.json();
+    if (!r.ok) { $("seo-msg").innerHTML = `<span class="tag ng">できません</span> ${esc(d.error || "")}`; b.disabled = false; return; }
+    seoData = d; renderSeo();
+  });
+  $("seo-show-all").addEventListener("change", renderSeo);
+  $("btn-seo-refresh").addEventListener("click", async () => {
+    const b = $("btn-seo-refresh"); b.disabled = true; $("seo-msg").textContent = "取り直しています…（商品数によって1分ほど）";
+    try {
+      const r = await fetch("/api/seo/refresh", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ caseId: currentCase }) });
+      const d = await r.json();
+      if (!r.ok) { $("seo-msg").innerHTML = `<span class="tag ng">できません</span> ${esc(d.error || "")}`; return; }
+      seoData = d; renderSeo();
+    } finally { b.disabled = false; }
+  });
   function renderKwCands() {
     const malls = kwData.malls || ["amazon"];
     if (!malls.includes(kwMall)) kwMall = malls[0];
@@ -4988,7 +5093,7 @@
     const list = (kwData.candidates || []).filter((c) => c.mall === kwMall && (!kwSrc || c.source === kwSrc));
     const cols = amz ? 9 : 8;
     $("kw-cands").innerHTML = list.length ? list.slice(0, 150).map((c) => `<tr>
-        <td><strong>${esc(c.keyword)}</strong></td>
+        <td><strong>${esc(c.keyword)}</strong>${c.variants && c.variants.length ? `<div class="note" title="${esc(c.variants.join("／"))}">同じ扱いの表記：${esc(c.variants.slice(0, 3).join("／"))}${c.variants.length > 3 ? ` ほか${c.variants.length - 3}` : ""}</div>` : ""}</td>
         <td>${sourceTag(c.source)}</td>
         <td class="note"><span class="kw-title" title="${esc(c.products || "")}">${esc((c.products || "—").split(",").join("／"))}</span>${
           (c.products || "").split(",").length > 2 ? `<button type="button" class="act copy-btn" data-copy="${esc((c.products || "").split(",").join("\n"))}">コピー</button>` : ""}</td>
@@ -5270,6 +5375,7 @@
       steps: [
         S("<strong>新しいキーワードの候補</strong>：検索語レポートで売れたのに未入札の語と、Amazon が勧める語。良さそうなものは「一括に入れる」→ 広告タブの「一括で反映するファイル」に追加の行として入ります", "t-kw#kw-cands"),
         S("<strong>育成中</strong>：一括から追加した楽天のキーワードと Amazon の推奨だけの語は低めの入札（既存キーワードの中央値の70%）で始め、14日たってもクリックが少なければ広告タブの入札の見直しに「+20%」が出ます（上限は損益分岐CPC）。Amazon の推奨入札は参考だけで、入札には使いません", "t-kw#kw-view"),
+        S("<strong>商品ページに入れるキーワード</strong>：成果の出ている語のうち、商品名・説明文・検索キーワードに入っていない語。モールの管理画面で直したら「反映済み」（文章を取り直して確かめます）", "t-kw#seo-pages"),
         S("<strong>監視キーワード</strong>：毎日、Amazon・楽天の検索結果で競合と自社の順位を記録します。気になる語を追加してください", "t-kw#kw-add"),
         S("<strong>AI の週次分析</strong>：設定でオンにした案件は、毎週月曜に AI が提案を作ります（1回あたり数十円）", "t-kw#btn-ai-run"),
         S("AI チャットに自分で相談するときは、広告タブの「AIに広告を相談する」", "t-ads#btn-adai-make"),
@@ -5555,6 +5661,7 @@
   const REFLECT = [
     ["商品マスタ：原価・目標粗利率・RSL暫定を変える", "すぐ", "自動"],
     ["外部広告費（ダッシュボードで月ごとに入力・税別）", "すぐ（月額を日割りして期間の日数ぶん）", "<strong>要操作</strong>：毎月入力"],
+    ["月の広告予算（ダッシュボードで月ごとに入力・Amazon＋楽天の合計・税別）", "すぐ（配分の提案・Amazon のキャンペーン予算の提案の上限になる）", "<strong>要操作</strong>：毎月入力"],
     ["リピート率（直近13か月で2回以上）", "楽天：注文の取り込みと同時（過去分は保存済みの注文から自動で作成）／Amazon：AMC で週1回集計（1回15分〜数時間）", "自動（Amazon は接続に AMC のIDが必要）"],
     ["商品マスタ：Amazon SKU を変える／商品を追加する", "広告・入金明細はすぐ／日次売上は数分〜1時間", "自動（照合し直し）"],
     ["商品マスタ：楽天の商品管理番号・SKU管理番号を変える", "直近60日は翌朝6時／それより前は取り込み直してから30分〜2時間", "<strong>要操作</strong>：楽天の過去の売上を取り込む"],
@@ -5581,6 +5688,7 @@
       S("広告の<strong>改善提案</strong>は週に一度、広告タブで", "t-ads#adv-tabs"),
       S("週に一度、<strong>キーワード発見</strong>で新しい候補と監視キーワードの順位を見る。AI の週次分析がオンなら、その提案も", "t-kw#kw-cands"),
       S("月に一度、ダッシュボードの<strong>外部広告費</strong>の「入力」から、SNS広告などの月の合計（税別）を入れる。確定したら上書き", "t-dash#dash-kpis"),
+      S("月に一度、ダッシュボードの<strong>今月の広告予算</strong>の「入力」から、Amazon＋楽天の広告に使ってよい月の合計（税別）を入れる。配分の提案の上限になります", "t-dash#dash-kpis"),
       S("同じ内容が毎朝7時に Slack の日次サマリでも届きます"),
     ] },
     { id: "m-new", title: "新しい案件を始める", when: "案件を追加したとき（一度だけ）", steps: [

@@ -37,13 +37,19 @@ export async function externalAdCost(db: D1Database, caseId: string, from: strin
   return { total, months };
 }
 
+/** 月ごとの手入力の金額（外部広告費・月の広告予算）。同じ形のテーブル */
+export type MonthlyTable = "external_ads" | "ad_budgets";
+
 /** 入力画面用：直近 n か月（今月を含む）と、その月の金額 */
 export async function listExternalAds(db: D1Database, caseId: string, months = 13) {
+  return listMonthly(db, "external_ads", caseId, months);
+}
+export async function listMonthly(db: D1Database, table: MonthlyTable, caseId: string, months = 13) {
   const now = new Date(Date.now() + 9 * 3600000);
   const list: string[] = [];
   for (let i = 0; i < months; i++) list.push(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1)).toISOString().slice(0, 7));
   const { results } = await db.prepare(
-    "SELECT month, amount, updated_by, updated_at FROM external_ads WHERE case_id = ? ORDER BY month DESC"
+    `SELECT month, amount, updated_by, updated_at FROM ${table} WHERE case_id = ? ORDER BY month DESC`
   ).bind(caseId).all<{ month: string; amount: number; updated_by: string | null; updated_at: string }>();
   const map = new Map(results.map((r) => [r.month, r]));
   // 入力済みの古い月も消えないように出す
@@ -54,19 +60,29 @@ export async function listExternalAds(db: D1Database, caseId: string, months = 1
 
 /** 保存。amount が null なら消す */
 export async function saveExternalAds(db: D1Database, caseId: string, rows: Array<{ month: string; amount: number | null }>, by: string | null) {
+  return saveMonthly(db, "external_ads", caseId, rows, by);
+}
+export async function saveMonthly(db: D1Database, table: MonthlyTable, caseId: string, rows: Array<{ month: string; amount: number | null }>, by: string | null) {
   const stmts: D1PreparedStatement[] = [];
   for (const r of rows) {
     if (!/^\d{4}-\d{2}$/.test(r.month)) throw new Error(`月の形が正しくありません：${r.month}`);
     if (r.amount == null) {
-      stmts.push(db.prepare("DELETE FROM external_ads WHERE case_id = ? AND month = ?").bind(caseId, r.month));
+      stmts.push(db.prepare(`DELETE FROM ${table} WHERE case_id = ? AND month = ?`).bind(caseId, r.month));
     } else {
       const a = Math.round(Number(r.amount));
       if (!Number.isFinite(a) || a < 0) throw new Error(`${r.month} の金額が正しくありません`);
       stmts.push(db.prepare(
-        `INSERT INTO external_ads (case_id, month, amount, updated_by) VALUES (?, ?, ?, ?)
+        `INSERT INTO ${table} (case_id, month, amount, updated_by) VALUES (?, ?, ?, ?)
          ON CONFLICT(case_id, month) DO UPDATE SET amount = excluded.amount, updated_by = excluded.updated_by, updated_at = datetime('now')`
       ).bind(caseId, r.month, a, by));
     }
   }
   if (stmts.length) await db.batch(stmts);
+}
+
+/** 月の広告予算（Amazon＋楽天の合計・税別）。無ければ null */
+export async function adBudgetOf(db: D1Database, caseId: string, month: string): Promise<number | null> {
+  const r = await db.prepare("SELECT amount FROM ad_budgets WHERE case_id = ? AND month = ?").bind(caseId, month)
+    .first<{ amount: number }>().catch(() => null);
+  return r?.amount == null ? null : Number(r.amount);
 }

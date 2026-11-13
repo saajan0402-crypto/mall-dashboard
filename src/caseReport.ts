@@ -202,6 +202,7 @@ export function renderCaseMarkdown(s: CaseSummary, opts: { url?: string } = {}):
         m.profitPerYen == null ? "—" : `${m.profitPerYen}円`, m.adProfit == null ? "—" : yen(m.adProfit),
         m.budgetLimited == null ? "—" : m.budgetLimited ? "あり" : "なし"])));
     L.push("");
+    if (al.budget) L.push(`月の広告予算（${al.budget.month}・両モール合計・税別）：${yen(al.budget.amount)}／今月これまで ${yen(al.budget.spent)}（${al.budget.daysElapsed}日分）／今月の見込み ${yen(al.budget.projected)}`, "");
     if (al.proposal) {
       L.push(`**提案：** ${al.proposal.reason}（利益の増え方の目安：30日あたり ${yen(al.proposal.expectedProfit30d)}）`);
       for (const c of al.proposal.cautions) L.push(`- ${c}`);

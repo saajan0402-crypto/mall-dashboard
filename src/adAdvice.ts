@@ -19,6 +19,8 @@ import { rakutenPages, rakutenRevenueByProduct, shares } from "./adProducts";
 import { periodSummary } from "./caseSummary";
 import { isoWeek } from "./todos";
 import { growRows, RPP_START_RATIO, RPP_MAX_CPC, normKw } from "./kwPlan";
+import { canonKw } from "./kwNorm";
+import { buildAllocation, type Allocation } from "./adAllocation";
 
 const n = (v: unknown) => Number(v ?? 0);
 const round2 = (v: number) => Math.round(v * 100) / 100;
@@ -29,6 +31,10 @@ const pct = (v: number) => `${Math.round(v * 1000) / 10}%`;
 // 楽天RPP のキーワードCPC は40円から（商品CPC は10円からだが、ここで提案するのはキーワード単位）
 const MIN_BID: Record<string, number> = { amazon: 2, rakuten: 40 };
 const MIN_CLICKS = 10;
+/** Amazon のオートターゲティング（入札は Amazon 側で上書きされるので提案しない） */
+const AUTO_TARGETS = /^(close-match|loose-match|substitutes|complements)$/i;
+/** Amazon のキャンペーンの1日の予算の下限 */
+const AMAZON_MIN_BUDGET = 100;
 const UP_MAX = 1.3, DOWN_MAX = 0.6;
 
 export type Policy = "profit" | "share" | "nurture";
@@ -84,8 +90,19 @@ export interface HarvestAdvice {
 export interface BudgetAdvice {
   key: string;
   mall: string; adType: string | null; campaign: string;
-  cost: number; sales: number; roas: number; coverage: number; budget: number | null;
+  /** up ＝ 増やす／down ＝ 減らす（Amazon は合計を変えずに入れ替える） */
+  action: "up" | "down";
+  cost: number; sales: number; roas: number; coverage: number | null; budget: number | null;
   suggestedBudget: number | null; reason: string;
+}
+
+/** Amazon のキャンペーン予算の入れ替えのまとめ（1日あたり） */
+export interface BudgetPlan {
+  /** 動いているキャンペーンの1日の予算の合計（今／提案どおりにしたあと） */
+  totalBefore: number; totalAfter: number;
+  /** モール間の配分（楽天からの移し・予算の余裕）で増やしてよい額／減らす必要のある額（1日あたり、マイナス＝減らす） */
+  fromAllocation: number;
+  note: string;
 }
 
 /** 提案に使う期間。ヘッダーの期間に関係なく固定する（担当者ごとに提案が変わらないように）
@@ -120,6 +137,7 @@ export interface AdAdvice {
   negatives: NegativeAdvice[];
   harvest: HarvestAdvice[];
   budgets: BudgetAdvice[];
+  budgetPlan: BudgetPlan | null;
   /** 提案どおりにしたとき浮く／増える見込みの広告費（期間あたり） */
   impact: { wastedCost: number; bidDownCost: number };
 }
@@ -128,7 +146,7 @@ export interface AdAdvice {
 const isAsin = (s: string) => /^b0[0-9a-z]{8}$/i.test(s.trim());
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
 
-export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct: number): Promise<AdAdvice> {
+export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct: number, opts: { allocation?: Allocation } = {}): Promise<AdAdvice> {
   const tm = adMarginPct / 100;
   const W = adviceWindows();
   // 粗利率など商品の数字は長いほう（楽天の60日）で見る。広告の実績はモールごとの期間で見る
@@ -244,12 +262,14 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
     const { results: ex } = await db.prepare(
       `SELECT DISTINCT mall, keyword FROM daily_ads WHERE case_id = ? AND level = 'keyword' AND keyword <> '' AND LOWER(match_type) LIKE '%exact%' AND date >= ?`
     ).bind(caseId, jstDay(180)).all<{ mall: string; keyword: string }>();
-    for (const e of ex) exactKeywords.add(`${e.mall}\u0000${norm(e.keyword)}`);
+    for (const e of ex) exactKeywords.add(`${e.mall}\u0000${canonKw(e.mall, e.keyword)}`);
   }
   for (const r of kwRows) {
     const mall = String(r.mall), campaign = String(r.campaign), adGroup = String(r.ad_group);
     const keyword = String(r.keyword), matchType = String(r.match_type);
-    if (/exact/i.test(matchType)) exactKeywords.add(`${mall}\u0000${norm(keyword)}`);
+    if (/exact/i.test(matchType)) exactKeywords.add(`${mall}\u0000${canonKw(mall, keyword)}`);
+    // Amazon のオートターゲティングの入札は、アップロードしても Amazon 側で上書きされる（2026-11 本番で確認）→ 提案しない
+    if (mall === "amazon" && AUTO_TARGETS.test(keyword.trim())) continue;
     const clicks = n(r.clicks), cost = n(r.cost), orders = n(r.orders), sales = n(r.sales);
     if (cost <= 0) continue;
     // 入札を変えてから14日たっていなければ様子見（変更前の実績が混ざっていて、同じ提案を重ねてしまうため）
@@ -397,10 +417,10 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
     const roas = cost > 0 ? sales / cost : null;
     const kind = isAsin(term) ? "product" : "keyword";
     // 完全一致で狙っている語そのものなら、除外ではなく入札で調整する（上の入札の見直しに出る）
-    const isOwnExact = /exact/i.test(matchType) && norm(term) === norm(targeting);
+    const isOwnExact = /exact/i.test(matchType) && canonKw(mall, term) === canonKw(mall, targeting);
 
-    if (orders >= 2 && roas != null && roas >= target.roas && !isOwnExact && !exactKeywords.has(`${mall}\u0000${norm(term)}`)) {
-      const key = `${mall}\u0000${norm(term)}`;
+    if (orders >= 2 && roas != null && roas >= target.roas && !isOwnExact && !exactKeywords.has(`${mall}\u0000${canonKw(mall, term)}`)) {
+      const key = `${mall}\u0000${canonKw(mall, term)}`;   // 表記ゆれ（かな・単複・全角半角）は1つにまとめる
       if (!harvested.has(key)) {
         harvested.add(key);
         const cpc = cost / Math.max(1, clicks);
@@ -451,7 +471,7 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
   }).sort((a, b) => b.cost - a.cost);
   const budgets: BudgetAdvice[] = [];
   for (const c of campRows) {
-    if (c.coverage == null) continue;
+    if (c.coverage == null || c.mall === "amazon") continue;      // Amazon は下で合計を変えずに入れ替える
     const mall = String(c.mall), campaign = String(c.campaign);
     const cost = n(c.cost), sales = n(c.sales), coverage = n(c.coverage);
     const pid = productFor(mall, campaign, "", null);
@@ -461,11 +481,106 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
       const budget = c.budget == null ? null : n(c.budget);
       budgets.push({
         key: `adv:bud:${mall}:${campaign}:${isoWeek()}`,
-        mall, adType: c.ad_type == null ? null : String(c.ad_type), campaign, cost, sales, roas: round2(roas),
+        mall, adType: c.ad_type == null ? null : String(c.ad_type), campaign, action: "up", cost, sales, roas: round2(roas),
         coverage: Math.round(coverage), budget,
         suggestedBudget: budget ? Math.round(budget * Math.min(1.5, 100 / Math.max(coverage, 1))) : null,
         reason: `1日のうち予算内に収まっていたのは平均 ${Math.round(coverage)}%。ROAS ${round2(roas)} で目標（${target.roas}）を上回っているので、予算切れで売上を逃しています`,
       });
+    }
+  }
+
+  /* ───── Amazon：キャンペーンの1日の予算を、合計を変えずに入れ替える ───── */
+  // 増やす：予算切れ（予算の9割以上を使った日が3割以上、または予算内の時間が90%未満）で ROAS が目標以上
+  // 減らす（増やす分の出どころ）：① ROAS が損益分岐を下回る（予算の30%）② 予算を使い切っていない（1日平均が予算の半分未満 → 平均の1.5倍まで）
+  // 例外：モール間の配分で楽天から移す・月の広告予算に余裕がある → その分は合計を増やしてよい。予算を超えるペースなら合計を減らす
+  const alloc = opts.allocation ?? await buildAllocation(db, caseId, R.from, R.to).catch(() => null);
+  let budgetPlan: BudgetPlan | null = null;
+  {
+    const { results: ac } = await db.prepare(
+      `SELECT campaign, MAX(ad_type) AS ad_type, SUM(cost) AS cost, SUM(sales) AS sales, COUNT(DISTINCT date) AS days, MAX(date) AS last,
+              SUM(CASE WHEN budget > 0 AND cost >= budget * 0.9 THEN 1 ELSE 0 END) AS cap_days, AVG(budget_coverage) AS coverage,
+              (SELECT b.budget FROM daily_ads b WHERE b.case_id = a.case_id AND b.mall = 'amazon' AND b.level = 'campaign'
+                 AND b.campaign = a.campaign AND b.budget IS NOT NULL ORDER BY b.date DESC LIMIT 1) AS budget
+         FROM daily_ads a WHERE a.case_id = ? AND a.mall = 'amazon' AND a.level = 'campaign' AND a.date BETWEEN ? AND ?
+        GROUP BY campaign`
+    ).bind(caseId, A.from, A.to).all<Record<string, string | number | null>>();
+    type Camp = { campaign: string; adType: string | null; cost: number; sales: number; roas: number; budget: number; avgDaily: number;
+      limited: boolean; capDays: number; days: number; coverage: number | null; target: Target; be: number };
+    const live: Camp[] = [];
+    for (const r of ac) {
+      if (r.budget == null || n(r.budget) <= 0 || String(r.last) < jstDay(10)) continue;     // 予算が分からない・止まっている
+      const cost = n(r.cost), sales = n(r.sales), budget = n(r.budget), days = n(r.days), capDays = n(r.cap_days);
+      const coverage = r.coverage == null ? null : n(r.coverage);
+      const target = targetOf("amazon", productFor("amazon", String(r.campaign), "", null));
+      live.push({ campaign: String(r.campaign), adType: r.ad_type == null ? null : String(r.ad_type), cost, sales,
+        roas: cost > 0 ? sales / cost : 0, budget, avgDaily: cost / A.days, capDays, days, coverage,
+        limited: (coverage != null && coverage < 90) || (days > 0 && capDays / days >= 0.3), target, be: 1 / target.gm });
+    }
+    const ups = live.filter((c) => c.limited && c.cost > 0 && c.roas >= c.target.roas)
+      .map((c) => ({ c, delta: Math.round(c.budget * (c.coverage != null ? Math.min(1.5, 100 / Math.max(c.coverage, 1)) : 1.3)) - c.budget }))
+      .filter((u) => u.delta > 0).sort((a, b) => b.c.roas - a.c.roas);
+    // モール間の配分からの増減（1日あたり）
+    const p = alloc?.proposal;
+    const fromAllocation = p && p.toMall === "amazon" && (p.action === "shift" || p.action === "add") ? Math.round(p.amount30d / 30)
+      : p && p.fromMall === "amazon" && p.action === "cut" ? -Math.round(p.amount30d / 30) : 0;
+    const allocWhy = p && fromAllocation > 0 ? (p.action === "shift" ? "楽天からの配分" : "月の広告予算の余裕") : "";
+    const sources = [
+      ...live.filter((c) => c.cost > 0 && c.roas < c.be).sort((a, b) => a.roas - b.roas)
+        .map((c) => ({ c, max: Math.max(0, Math.min(Math.round(c.budget * 0.3), c.budget - AMAZON_MIN_BUDGET)), why: "loss" as const })),
+      ...live.filter((c) => !c.limited && c.avgDaily < c.budget * 0.5 && !(c.cost > 0 && c.roas < c.be))
+        .map((c) => ({ c, max: Math.max(0, c.budget - Math.max(AMAZON_MIN_BUDGET, Math.round(c.avgDaily * 1.5))), why: "unused" as const }))
+        .sort((a, b) => b.max - a.max),
+    ].filter((x) => x.max > 0);
+    const need = ups.reduce((t, u) => t + u.delta, 0);
+    const requiredCut = Math.max(0, -fromAllocation);
+    const free = Math.max(0, fromAllocation);
+    let toCut = Math.max(0, need - free) + requiredCut;
+    const cuts: Array<{ c: Camp; cut: number; why: "loss" | "unused" }> = [];
+    for (const s0 of sources) {
+      if (toCut <= 0) break;
+      const cut = Math.min(s0.max, toCut);
+      cuts.push({ c: s0.c, cut, why: s0.why });
+      toCut -= cut;
+    }
+    const cutTotal = cuts.reduce((t, x) => t + x.cut, 0);
+    let pool = Math.max(0, cutTotal - requiredCut) + free;      // 増やすのに使える額
+    const fund = free > 0 && cutTotal > requiredCut ? `ほかのキャンペーンの減額と、${allocWhy}（1日 ${yen(free)}）でまかないます`
+      : free > 0 ? `${allocWhy}（1日 ${yen(free)}）を使います` : "ほかのキャンペーンの減額でまかない、合計は変えません";
+    for (const u of ups) {
+      const give = Math.min(u.delta, pool);
+      if (give <= 0) break;
+      pool -= give;
+      const c = u.c, nb = c.budget + give;
+      budgets.push({
+        key: `adv:bud:amazon:${c.campaign}:${isoWeek()}`, mall: "amazon", adType: c.adType, campaign: c.campaign, action: "up",
+        cost: c.cost, sales: c.sales, roas: round2(c.roas), coverage: c.coverage == null ? null : Math.round(c.coverage), budget: c.budget, suggestedBudget: nb,
+        reason: `予算切れ（${c.coverage != null ? `予算内の時間 平均 ${Math.round(c.coverage)}%` : `予算の9割以上を使った日が ${c.capDays}/${c.days}日`}）で ROAS ${round2(c.roas)}（目標 ${c.target.roas}）。` +
+          `${give < u.delta ? `本来は ${yen(c.budget + u.delta)} まで上げたいところ、出どころの範囲で ${yen(nb)} に。` : ""}増額分は${fund}`,
+      });
+    }
+    const upTotal = budgets.filter((b) => b.mall === "amazon" && b.action === "up").reduce((t, b) => t + (n(b.suggestedBudget) - n(b.budget)), 0);
+    // 増やす先が無いのに減らすのは、予算を超えるペースのときだけ（requiredCut）。増やす分を超えて減らさない
+    let cutBudget = upTotal - free + requiredCut;
+    for (const x of cuts) {
+      if (cutBudget <= 0) break;
+      const cut = Math.min(x.cut, cutBudget);
+      cutBudget -= cut;
+      const c = x.c, nb = c.budget - cut;
+      budgets.push({
+        key: `adv:bud:amazon:${c.campaign}:${isoWeek()}`, mall: "amazon", adType: c.adType, campaign: c.campaign, action: "down",
+        cost: c.cost, sales: c.sales, roas: round2(c.roas), coverage: c.coverage == null ? null : Math.round(c.coverage), budget: c.budget, suggestedBudget: nb,
+        reason: (x.why === "loss" ? `ROAS ${round2(c.roas)} で損益分岐（${round2(c.be)}）を下回っています。`
+          : `直近${A.days}日の1日平均の広告費は ${yen(c.avgDaily)} で、予算 ${yen(c.budget)} の${Math.round((c.avgDaily / c.budget) * 100)}%しか使っていません。`) +
+          (requiredCut > 0 && upTotal === 0 ? "月の広告予算を超えるペースなので減らします" : "減らした分を、予算切れで成果の出ているキャンペーンに回します"),
+      });
+    }
+    if (live.length) {
+      const before = live.reduce((t, c) => t + c.budget, 0);
+      const delta = budgets.filter((b) => b.mall === "amazon").reduce((t, b) => t + (n(b.suggestedBudget) - n(b.budget)), 0);
+      budgetPlan = { totalBefore: before, totalAfter: before + delta, fromAllocation,
+        note: delta === 0 ? "1日の予算の合計は変わりません（増やした分をほかのキャンペーンから減らします）"
+          : delta > 0 ? `1日の予算の合計が ${yen(delta)} 増えます（${allocWhy || "配分"}の分）`
+          : `1日の予算の合計が ${yen(-delta)} 減ります（月の広告予算を超えるペースのため）` };
     }
   }
 
@@ -486,6 +601,8 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
     "入札がわからないもの（CSVで入れた期間など）は、平均クリック単価を基準に提案しています",
     `提案はヘッダーの期間に関係なく、Amazon は直近${A.days}日（${A.from}〜${A.to}）、楽天は直近${R.days}日（${R.from}〜${R.to}）の実績から出しています。直近3日は、遅れて入る広告経由の売上を待つため除いています`,
     `入札を変えてから${SETTLE_DAYS}日たっていないキーワードは、変更前の実績が混ざるため提案を出さず「様子見」にしています`,
+    "Amazon のオートターゲティング（close-match・loose-match・substitutes・complements）の入札は、アップロードしても Amazon 側で上書きされるため提案しません（除外キーワード・予算の提案は出します）",
+    "Amazon のキャンペーン予算は、1日の予算の合計を変えずに入れ替えます（予算切れで成果の出ているキャンペーンを増やし、赤字・使い切っていないキャンペーンを減らす）。楽天から配分を移すとき・月の広告予算に余裕があるときだけ合計を増やし、予算を超えるペースなら減らします",
     "帰属期間：楽天RPP 30日／Amazon SP 7日／SB 14日。楽天は期間が長くても直近分の売上があとから増えることがあります",
     `キーワード発見から低い入札で追加したキーワード（楽天・Amazon の推奨だけの語）は「育成中」：既存キーワードの中央値の${Math.round(RPP_START_RATIO * 100)}%で入れ、${SETTLE_DAYS}日たってもクリックが ${MIN_CLICKS} 未満なら +20% を提案します（上限は損益分岐CPC）。クリックがたまったら通常の見直しに移ります`,
   ];
@@ -493,7 +610,7 @@ export async function buildAdAdvice(db: D1Database, caseId: string, adMarginPct:
   watching.sort((a, b) => b.changedOn.localeCompare(a.changedOn));
   return {
     from, to, windows: W, watching, campaigns, assumptions, targets,
-    bids: bids.slice(0, 150), negatives: negatives.slice(0, 150), harvest: harvest.slice(0, 100), budgets,
+    bids: bids.slice(0, 150), negatives: negatives.slice(0, 150), harvest: harvest.slice(0, 100), budgets, budgetPlan,
     impact: {
       wastedCost: negatives.filter((x) => x.orders === 0).reduce((t, x) => t + x.cost, 0),
       bidDownCost: bids.filter((b) => b.action !== "up").reduce((t, b) => t + b.cost, 0),

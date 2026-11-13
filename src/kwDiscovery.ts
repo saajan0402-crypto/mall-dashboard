@@ -13,6 +13,7 @@
 
 import { readCreds, type ConnEnv } from "./connections";
 import { kwKey, resolvePlans, growRows } from "./kwPlan";
+import { canonKw } from "./kwNorm";
 import { accessToken, adsAccessToken, adsapi, spapi, errorMessage, JP_MARKETPLACE, type LwaEnv } from "./amazon";
 
 export interface KwEnv extends ConnEnv, LwaEnv {
@@ -289,6 +290,8 @@ export interface KwCandidate {
   keyword: string; source: string; products: string | null;
   /** 関連商品の ID（一括に入れるとき、入れる先の広告グループ・楽天の商品ページを決めるのに使う） */
   pids: string[];
+  /** モールが同じ語とみなす別の表記（まとめたもの） */
+  variants: string[];
   rank: number | null; bid: number | null; bidRange: string | null; impShare: number | null;
   orders: number; sales: number; cost: number; roas: number | null; watched: boolean;
 }
@@ -303,7 +306,8 @@ export async function keywordOverview(db: D1Database, caseId: string) {
     "SELECT DISTINCT mall, LOWER(keyword) AS k FROM daily_ads WHERE case_id = ? AND level = 'keyword' AND keyword <> '' AND date >= ?"
   ).bind(caseId, since).all<{ mall: string; k: string }>();
   const tset = { amazon: new Set<string>(), rakuten: new Set<string>() } as Record<string, Set<string>>;
-  for (const t of targeted) (tset[t.mall] ??= new Set()).add(t.k.trim());
+  // 表記ゆれはモールのルールでまとめる（kwNorm.ts）：楽天＝かな・語順、Amazon＝かな・単複・全角半角が同じ扱い
+  for (const t of targeted) (tset[t.mall] ??= new Set()).add(canonKw(t.mall, t.k));
   const watch = await listWatch(db, caseId);
   const wset = new Set(watch.map((w) => w.toLowerCase()));
 
@@ -367,14 +371,14 @@ export async function keywordOverview(db: D1Database, caseId: string) {
     const tp = termProducts.get(String(t.keyword).toLowerCase().trim()) ?? [];
     return {
     mall, keyword: String(t.keyword), source: mall === "amazon" ? "検索語で売上あり" : "Amazon で売れた語",
-    products: tp.length ? tp.map((x) => x.name).join(",") : null, pids: tp.map((x) => x.id),
+    products: tp.length ? tp.map((x) => x.name).join(",") : null, pids: tp.map((x) => x.id), variants: [],
     rank: null, bid: null, bidRange: null, impShare: null,
     orders: n(t.orders), sales: n(t.sales), cost: n(t.cost), roas: n(t.cost) ? Math.round((n(t.sales) / n(t.cost)) * 100) / 100 : null,
     watched: wset.has(String(t.keyword).toLowerCase()) };
   };
   const fromReco = (mall: "amazon" | "rakuten", r: Record<string, string | number | null>): KwCandidate => ({
     mall, keyword: String(r.keyword), source: "Amazon の推奨", products: r.products == null ? null : String(r.products),
-    pids: r.pids == null ? [] : String(r.pids).split(",").filter(Boolean).slice(0, 10),
+    pids: r.pids == null ? [] : String(r.pids).split(",").filter(Boolean).slice(0, 10), variants: [],
     rank: r.rank == null ? null : n(r.rank),
     // 推奨入札は Amazon の値なので、楽天RPPの候補には出さない
     bid: mall === "amazon" && r.bid != null ? n(r.bid) : null,
@@ -385,13 +389,25 @@ export async function keywordOverview(db: D1Database, caseId: string) {
   const candidates: KwCandidate[] = [];
   for (const mall of malls) {
     const tg = tset[mall] ?? new Set<string>();
-    const open = (k: string) => !tg.has(k.toLowerCase().trim()) && !decided.has(kwKey(mall, k)) && !planned.has(kwKey(mall, k));
-    const seen = new Set<string>();
+    // 入札済み・追加した／見送った・一括待ちのものは、表記ゆれも含めて候補から外す
+    const done = new Set([...decided.keys()].filter((k) => k.startsWith(`kw_added:${mall}:`)).map((k) => canonKw(mall, k.slice(`kw_added:${mall}:`.length))));
+    for (const p of plans) if (p.mall === mall) done.add(canonKw(mall, p.keyword));
+    const open = (k: string) => !tg.has(canonKw(mall, k)) && !done.has(canonKw(mall, k));
+    // 同じとみなされる表記は1つにまとめ、検索語の成績は合計する（先に出た＝売上の多い表記を残す）
+    const seen = new Map<string, KwCandidate>();
     for (const c of [...terms.filter((t) => open(String(t.keyword))).map((t) => fromTerm(mall, t)),
                      ...reco.filter((r) => open(String(r.keyword))).map((r) => fromReco(mall, r))]) {
-      const k = c.keyword.toLowerCase();
-      if (seen.has(k)) continue;
-      seen.add(k);
+      const k = canonKw(mall, c.keyword);
+      const prev = seen.get(k);
+      if (prev) {
+        if (prev.keyword.toLowerCase() !== c.keyword.toLowerCase() && !prev.variants.includes(c.keyword)) prev.variants.push(c.keyword);
+        prev.orders += c.orders; prev.sales += c.sales; prev.cost += c.cost;
+        prev.roas = prev.cost ? Math.round((prev.sales / prev.cost) * 100) / 100 : prev.roas;
+        for (const id of c.pids) if (!prev.pids.includes(id)) prev.pids.push(id);
+        if (prev.bid == null && c.bid != null) { prev.bid = c.bid; prev.bidRange = c.bidRange; prev.rank = c.rank; }
+        continue;
+      }
+      seen.set(k, c);
       candidates.push(c);
     }
   }

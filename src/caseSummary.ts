@@ -417,7 +417,7 @@ function buildTodo(s: Omit<CaseSummary, "todo" | "doneThisMonth">): Todo[] {
       text: `監視キーワードで自社の順位が1週間で大きく落ちています（${kw.drops.length}件）。競合の価格・セール・広告の強化を確認する`, basis: d.join("／") });
   }
   if (ac.budgets)
-    out.push({ key: `ad_budget:${wk}`, priority: "mid", area: "広告", text: `予算切れで売上を逃しているキャンペーンが ${ac.budgets} 件あります（広告タブの「改善提案」）` });
+    out.push({ key: `ad_budget:${wk}`, priority: "mid", area: "広告", text: `予算切れで売上を逃しているキャンペーンが ${ac.budgets} 件あります（広告タブの「改善提案」の予算。Amazon はほかのキャンペーンの減額とセットで合計を変えずに入れ替え）` });
 
   for (const r of s.inventory.filter((x) => x.level === "watch").slice(0, 5))
     out.push({ key: `stock:${r.mall}:${r.sku}`, priority: "mid", area: "在庫", text: `${MALL_JA[r.mall] ?? r.mall}「${r.name}」（${r.sku}）の在庫に注意`, basis: r.reason });
@@ -438,7 +438,9 @@ function buildTodo(s: Omit<CaseSummary, "todo" | "doneThisMonth">): Todo[] {
     out.push({ key: `alloc:${wk}`, priority: "mid", area: "広告",
       text: ap.action === "shift"
         ? `広告費の配分：${ja(ap.fromMall)}から${ja(ap.toMall)}へ30日あたり ¥${ap.amount30d.toLocaleString("ja-JP")} 移す（ダッシュボードの「モール間の広告費の配分」に根拠）`
-        : `広告費の配分：${ja(ap.fromMall)}の広告費を30日あたり ¥${ap.amount30d.toLocaleString("ja-JP")} 減らす（赤字のため）`,
+        : ap.action === "add"
+        ? `広告費の配分：月の広告予算に余裕があるので、${ja(ap.toMall)}を30日あたり ¥${ap.amount30d.toLocaleString("ja-JP")} 増やす`
+        : `広告費の配分：${ja(ap.fromMall)}の広告費を30日あたり ¥${ap.amount30d.toLocaleString("ja-JP")} 減らす（${s.allocation?.budget && s.allocation.budget.projected > s.allocation.budget.amount ? "月の広告予算を超えるペースのため" : "赤字のため"}）`,
       basis: `利益の増え方の目安 30日あたり ¥${ap.expectedProfit30d.toLocaleString("ja-JP")}` });
   }
 
@@ -597,7 +599,11 @@ export async function buildCaseSummary(
   const adMargin = val(sAmz.case, "ad_profit_margin", 10);
 
   /* 広告の改善提案 */
-  const adv = await buildAdAdvice(db, caseId, adMargin);
+  // モール間の配分は、両方のモールを同じ期間で比べる必要があるので楽天に合わせて直近60日（直近3日を除く）で固定。
+  // Amazon のキャンペーン予算の入れ替えが配分（楽天からの移し・月の広告予算）を使うので先に作る
+  const aw = adviceWindows();
+  const allocation = await buildAllocation(db, caseId, aw.rakuten.from, aw.rakuten.to);
+  const adv = await buildAdAdvice(db, caseId, adMargin, { allocation });
 
   /* 気をつけること */
   const warnings: string[] = [];
@@ -636,9 +642,6 @@ export async function buildCaseSummary(
     warnings.push(`比べる直前の期間（${prevFrom}〜${prevTo}）の売上データが${n(prevAgg?.n) ? "一部しか無い" : "無い"}ため、前期間比は出していません`);
 
   const events = await listEvents(db, caseId, from, to);
-  // モール間の配分は、両方のモールを同じ期間で比べる必要があるので楽天に合わせて直近60日（直近3日を除く）で固定
-  const aw = adviceWindows();
-  const allocation = await buildAllocation(db, caseId, aw.rakuten.from, aw.rakuten.to);
   const [external, repeat, keywords] = await Promise.all([externalAdCost(db, caseId, from, to), repeatSummary(db, caseId, from, to), keywordTodoData(db, caseId)]);
   const base: Omit<CaseSummary, "todo" | "doneThisMonth"> = {
     allocation, repeat, keywords,
@@ -684,7 +687,7 @@ export async function buildCaseSummary(
         up: adv.bids.filter((b) => b.action === "up").length,
         down: adv.bids.filter((b) => b.action === "down").length,
         pause: adv.bids.filter((b) => b.action === "pause").length,
-        negatives: adv.negatives.length, harvest: adv.harvest.length, budgets: adv.budgets.length, watching: adv.watching.length,
+        negatives: adv.negatives.length, harvest: adv.harvest.length, budgets: adv.budgets.filter((b) => b.action === "up").length, watching: adv.watching.length,
       },
       impact: adv.impact,
       windows: adv.windows,

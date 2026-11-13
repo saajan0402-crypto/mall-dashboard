@@ -15,7 +15,7 @@ import { advance, pump, jstDate } from "./ingestSales";
 import { ingestFinances, pumpFinances, reparseFinances } from "./ingestFinances";
 import { monthlyStatement, feeBasis, postedDaily } from "./amazonFin";
 import { pumpTransactions, ingestTransactionsDay, reparseTransactions } from "./ingestTransactions";
-import { listExternalAds, saveExternalAds } from "./externalAds";
+import { listExternalAds, saveExternalAds, listMonthly, saveMonthly } from "./externalAds";
 import { pumpRepeatAmazon, reparseRakutenCustomers, readAmc } from "./repeat";
 import { startRakutenBackfill, rakutenBackfillStatus, runRakutenBackfill } from "./rakutenBackfill";
 import { startRematch, rematchStatus, runRematch } from "./rematch";
@@ -36,6 +36,7 @@ import { renderCaseMarkdown } from "./caseReport";
 import { renderAdsMarkdown, adsPrompt } from "./adsReport";
 import { listWatch, addWatch, removeWatch, keywordOverview, keywordDetail, snapshotKeyword, refreshAmazonReco, pumpKeywords, kwKey } from "./kwDiscovery";
 import { addPlan, removePlan, resolvePlans, finishPlan, growBidChanged } from "./kwPlan";
+import { refreshListingContent, pumpListingContent, seoOverview, seoKey } from "./listingSeo";
 import { queueAiReport, listAiReports, aiMode, pumpAi } from "./aiAnalysis";
 import { postSlack, listCaseSlack, saveCaseSlack } from "./slack";
 import { sendDailySummaries } from "./dailySummary";
@@ -48,7 +49,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.29.1";
+const APP_VERSION = "0.31.1";
 
 export interface Env {
   DB: D1Database;
@@ -627,6 +628,25 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
       .bind(crypto.randomUUID(), b.caseId, b.rows.length, `外部広告費（税別）：${changed}（${viewer(req) ?? "不明"}）`.slice(0, 500)).run();
     return json({ ok: true, months: await listExternalAds(env.DB, b.caseId) });
   }
+  // 月の広告予算（Amazon＋楽天の合計・税別・案件×月の手入力）。モール間の配分の提案の上限
+  if (path === "/api/ad-budgets" && req.method === "GET") {
+    const caseId = new URL(req.url).searchParams.get("case_id");
+    if (!caseId) return json({ error: "案件を指定してください" }, 400);
+    return json({ months: await listMonthly(env.DB, "ad_budgets", caseId) });
+  }
+  if (path === "/api/ad-budgets" && req.method === "POST") {
+    const b = (await req.json()) as { caseId?: string; rows?: Array<{ month: string; amount: number | null }> };
+    if (!b.caseId || !Array.isArray(b.rows)) return json({ error: "案件と金額を指定してください" }, 400);
+    try {
+      await saveMonthly(env.DB, "ad_budgets", b.caseId, b.rows, viewer(req));
+    } catch (e) {
+      return json({ error: String(e instanceof Error ? e.message : e) }, 400);
+    }
+    const changed = b.rows.map((r) => `${r.month} ${r.amount == null ? "削除" : `¥${Number(r.amount).toLocaleString("ja-JP")}`}`).join("、");
+    await env.DB.prepare(`INSERT INTO ingests (id, case_id, kind, rows, status, source, error) VALUES (?, ?, 'ad_budget', ?, 'ok', 'manual', ?)`)
+      .bind(crypto.randomUUID(), b.caseId, b.rows.length, `月の広告予算（両モール合計・税別）：${changed}（${viewer(req) ?? "不明"}）`.slice(0, 500)).run();
+    return json({ ok: true, months: await listMonthly(env.DB, "ad_budgets", b.caseId) });
+  }
   // リピート率（Amazon のブランド分析レポート）を今すぐ依頼・取り込み
   if (path === "/api/repeat/refresh" && req.method === "POST") {
     const b = (await req.json()) as { caseId?: string };
@@ -695,6 +715,30 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     if (b.status === "done") await finishPlan(env.DB, b.caseId, b.mall, kw, b.via === "bulk" ? b.rows : undefined, viewer(req));
     else await removePlan(env.DB, b.caseId, b.mall, kw);
     return json({ ok: true });
+  }
+  // 商品ページに入れるキーワード（商品名・説明文・検索キーワード）
+  if (path === "/api/seo" && req.method === "GET") {
+    const caseId = new URL(req.url).searchParams.get("case_id");
+    if (!caseId) return json({ error: "案件を指定してください" }, 400);
+    return json(await seoOverview(env.DB, caseId));
+  }
+  if (path === "/api/seo/refresh" && req.method === "POST") {
+    const b = (await req.json()) as { caseId?: string };
+    if (!b.caseId) return json({ error: "案件を指定してください" }, 400);
+    const r = await refreshListingContent(env, b.caseId);
+    return json({ ...r, ...(await seoOverview(env.DB, b.caseId)) });
+  }
+  // 「反映済み」「今はしない」「元に戻す」。反映済みはその商品ページの文章を取り直して、入ったか確かめる
+  if (path === "/api/seo/status" && req.method === "POST") {
+    const b = (await req.json()) as { caseId?: string; mall?: string; externalId?: string; keyword?: string; where?: string; status?: "done" | "skip" | "open" };
+    if (!b.caseId || !b.mall || !b.externalId || !b.keyword || !["done", "skip", "open"].includes(b.status ?? "")) return json({ error: "案件・商品ページ・キーワード・状態を指定してください" }, 400);
+    const m = b.mall === "rakuten" ? "楽天" : "Amazon";
+    const place = b.where === "title" ? "商品名" : b.mall === "rakuten" ? "商品説明文" : "検索キーワード";
+    await setTodoStatus(env.DB, b.caseId, { key: seoKey(b.mall, b.externalId, b.keyword), status: b.status!,
+      text: b.status === "skip" ? `${m}「${b.externalId}」の商品ページに「${b.keyword}」を入れる提案を見送り` : `${m}「${b.externalId}」の商品ページの${place}に「${b.keyword}」を追加`,
+      area: "商品ページ", priority: "mid" }, viewer(req));
+    if (b.status === "done") await refreshListingContent(env, b.caseId, { mall: b.mall, externalId: b.externalId }).catch(() => undefined);
+    return json({ ok: true, ...(await seoOverview(env.DB, b.caseId)) });
   }
   // 候補を「一括に入れる」／外す（広告タブの一括ファイルに追加の行として入る）
   if (path === "/api/keywords/plan" && req.method === "POST") {
@@ -1241,6 +1285,7 @@ export default {
           await pumpKeywords(env, { budgetMs: 30000 }).catch(() => 0);
           // AI の週次分析（設定でオンの案件だけ・1回に1件）
           await pumpAi(env).catch(() => 0);
+          await pumpListingContent(env).catch(() => 0);
           // 新しい入金明細（出荷日ベース）。直近14日は毎日取り直し、古い日は少しずつ埋める
           await pumpTransactions(env, { budgetMs: 60000 }).catch(() => 0);
           // 楽天の過去の売上（始めた案件だけ）
