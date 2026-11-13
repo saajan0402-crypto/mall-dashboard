@@ -33,16 +33,19 @@ const median = (xs: number[]) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
-export interface PlanRow { mall: string; keyword: string; source: string | null; productIds: string[]; by: string | null; at: string }
+export interface PlanRow { mall: string; keyword: string; source: string | null; productIds: string[]; by: string | null; at: string;
+  /** 楽天：入れる商品ページを担当者が選んだとき（無ければ一番売れている1ページだけ） */
+  pages: string[] | null }
 
 export async function listPlans(db: D1Database, caseId: string): Promise<PlanRow[]> {
   try {
     const { results } = await db.prepare(
-      "SELECT mall, keyword, source, product_ids, planned_by, planned_at FROM kw_plan WHERE case_id = ? ORDER BY planned_at"
+      "SELECT mall, keyword, source, product_ids, planned_by, planned_at, pages FROM kw_plan WHERE case_id = ? ORDER BY planned_at"
     ).bind(caseId).all<Record<string, string | null>>();
     return results.map((r) => ({ mall: String(r.mall), keyword: String(r.keyword), source: r.source,
       productIds: (() => { try { return (JSON.parse(String(r.product_ids ?? "[]")) as unknown[]).map(String); } catch { return []; } })(),
-      by: r.planned_by, at: String(r.planned_at) }));
+      by: r.planned_by, at: String(r.planned_at),
+      pages: r.pages ? (() => { try { return (JSON.parse(String(r.pages)) as unknown[]).map(String); } catch { return null; } })() : null }));
   } catch {
     return [];    // テーブルがまだ無いとき
   }
@@ -55,6 +58,12 @@ export async function addPlan(db: D1Database, caseId: string, p: { mall: string;
        planned_by = excluded.planned_by, planned_at = datetime('now')`
   ).bind(caseId, p.mall, p.keyword.normalize("NFKC").trim().replace(/\s+/g, " "), p.source ?? null,
     JSON.stringify((p.productIds ?? []).slice(0, 10)), by).run();
+}
+
+/** 楽天：入れる商品ページを選び直す（空なら既定＝一番売れている1ページに戻す） */
+export async function setPlanPages(db: D1Database, caseId: string, mall: string, keyword: string, pages: string[]) {
+  await db.prepare("UPDATE kw_plan SET pages = ? WHERE case_id = ? AND mall = ? AND keyword = ?")
+    .bind(pages.length ? JSON.stringify(pages.slice(0, 10).map(String)) : null, caseId, mall, keyword.normalize("NFKC").trim().replace(/\s+/g, " ")).run();
 }
 
 export async function removePlan(db: D1Database, caseId: string, mall: string, keyword: string) {
@@ -78,6 +87,8 @@ export interface ResolvedPlan {
     slots?: string | null;
     /** 上限のため入れ替える語（一括ファイルで d 行にする） */
     remove?: { keyword: string; reason: string } }>;
+  /** 楽天：関連する商品ページ（選んで追加できる）。registered ＝ すでに登録済み（同じ扱いの表記を含む） */
+  pageOptions?: Array<{ num: string; registered: boolean; slots: string | null; selected: boolean }>;
   /** 入れられない理由（楽天の商品ページが分からない など） */
   problem?: string;
 }
@@ -104,6 +115,15 @@ export async function resolvePlans(db: D1Database, caseId: string): Promise<Reso
   const startCache = new Map<string, RakStart>();
   // RPP の登録キーワード一覧（読み込んであれば、クリック0のキーワードも含めた登録数・かぶりの判定・入札の基準に使う）
   const snap = await rppSnapshot(db, caseId);
+  // 楽天の商品ページごとの売上（直近60日）。入れるページを選ぶ順に使う
+  const pageRev = new Map<string, number>();
+  {
+    const { results: rv } = await db.prepare(
+      `SELECT product_id, SUM(revenue) AS rev FROM daily_sales WHERE case_id = ? AND mall = 'rakuten' AND date >= ? AND product_id IS NOT NULL GROUP BY product_id`
+    ).bind(caseId, since).all<{ product_id: string; rev: number }>();
+    const byPid = new Map(rv.map((r) => [String(r.product_id), n(r.rev)]));
+    for (const [num, pids] of pages) pageRev.set(num, pids.reduce((t, id) => t + (byPid.get(id) ?? 0), 0));
+  }
   const rakutenStart = async (num: string) => {
     const hit = startCache.get(num);
     if (hit) return hit;
@@ -238,11 +258,26 @@ export async function resolvePlans(db: D1Database, caseId: string): Promise<Reso
         ? "今の入札より桁違いに高いため、単位がずれている可能性があります（「Amazon の推奨を取り直す」で取り直してください）" : null;
       if (!groups.length) base.problem = "関連商品の広告グループが見つかりません（入れる先を手で決めてください）";
     } else {
-      const nums = [...new Set(p.productIds.flatMap((id) => numsOf.get(id) ?? []))];
+      // 関連する商品ページ。検索語で売れた語は売れた商品の順（キーワードとの関係が強い順）、推奨などは楽天の売上の順
+      let nums = [...new Set(p.productIds.flatMap((id) => numsOf.get(id) ?? []))];
+      // 売上が同じなら、登録に空きのあるページを先に（入れ替えを減らす）
+      const kwCount = (num: string) => snap.items.get(num)?.keywords.length ?? 0;
+      if (!/売れた語|売上あり/.test(p.source ?? "")) nums = [...nums].sort((a, b) => (pageRev.get(b) ?? 0) - (pageRev.get(a) ?? 0) || kwCount(a) - kwCount(b));
+      // 自社の複数の商品ページに同じ語を登録すると、枠（1商品20個）を使い成績も分かれるので、既定は一番売れている1ページだけ。
+      // RPP は登録していない語にも商品CPC で表示されるので、全ページに登録する必要は薄い。担当者が選べば複数ページにも入れる
+      const chosen = p.pages ? p.pages.filter((x) => nums.includes(x)) : null;
       const rows: NonNullable<ResolvedPlan["rows"]> = [];
       const already: string[] = [];
       const full: string[] = [];
+      const options: NonNullable<ResolvedPlan["pageOptions"]> = [];
       for (const num of nums.slice(0, 10)) {
+        const s0 = await rakutenStart(num);
+        options.push({ num, registered: s0.existing.has(canonKw("rakuten", p.keyword)), slots: s0.known ? `${s0.count}/${RPP_KW_LIMIT}` : null, selected: false });
+      }
+      // 既定：どこかのページに登録済みなら追加しない。まだなら、上から1ページ（枠がいっぱいで入れ替えもできないページは飛ばす）
+      const anyRegistered = options.some((o) => o.registered);
+      for (const num of nums.slice(0, 10)) {
+        if (chosen ? !chosen.includes(num) : (anyRegistered || rows.length >= 1)) { if (options.find((o) => o.num === num)?.registered) already.push(num); continue; }
         const s = await rakutenStart(num);
         if (s.existing.has(canonKw("rakuten", p.keyword))) { already.push(num); continue; }
         // 登録の上限（1商品20個）。いっぱいなら、外してよい語と入れ替える（d 行＋n 行）
@@ -257,7 +292,9 @@ export async function resolvePlans(db: D1Database, caseId: string): Promise<Reso
         s.used++;
         rows.push({ externalId: num, cpc: s.cpc, basis: s.basis, slots: s.known ? `${Math.min(used, RPP_KW_LIMIT)}/${RPP_KW_LIMIT}` : null, remove });
       }
+      for (const o of options) o.selected = rows.some((r) => r.externalId === o.num);
       base.rows = rows;
+      base.pageOptions = options;
       if (!nums.length) base.problem = p.productIds.length ? "関連商品の楽天の商品ページ（商品管理番号）が商品マスタにありません" : "関連商品が分からないため、楽天の商品ページを決められません";
       else if (!rows.length && full.length) base.problem = `登録が上限（${RPP_KW_LIMIT}個）で、外してよい語がありません（どれも直近60日に注文あり、または追加して28日以内）：${full.join("・")}。入れ替える語を手で決めてください`;
       else if (!rows.length) base.problem = `すでに登録済みです（同じ扱いの表記を含む）：${already.join("・")}`;

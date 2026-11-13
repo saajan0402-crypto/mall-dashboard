@@ -35,7 +35,7 @@ import { buildAdAdvice } from "./adAdvice";
 import { renderCaseMarkdown } from "./caseReport";
 import { renderAdsMarkdown, adsPrompt } from "./adsReport";
 import { listWatch, addWatch, removeWatch, keywordOverview, keywordDetail, snapshotKeyword, refreshAmazonReco, pumpKeywords, kwKey } from "./kwDiscovery";
-import { addPlan, removePlan, resolvePlans, finishPlan, growBidChanged } from "./kwPlan";
+import { addPlan, removePlan, resolvePlans, finishPlan, growBidChanged, setPlanPages } from "./kwPlan";
 import { refreshListingContent, pumpListingContent, seoOverview, seoKey } from "./listingSeo";
 import { importRppKeywords, type RppKwRow } from "./rppKeywords";
 import { queueAiReport, listAiReports, aiMode, pumpAi } from "./aiAnalysis";
@@ -50,7 +50,7 @@ import { queueAdsReports, queueDailyAds, pumpAdsReports, adsJobStatus } from "./
  * 画面とサーバーの版。画面（public/index.html の UI_VERSION）と食い違っていたら、
  * どちらかが古いままデプロイされている。変更のたびに両方を同じ値に上げる
  */
-const APP_VERSION = "0.32.1";
+const APP_VERSION = "0.32.2";
 
 export interface Env {
   DB: D1Database;
@@ -758,9 +758,10 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
   }
   // 候補を「一括に入れる」／外す（広告タブの一括ファイルに追加の行として入る）
   if (path === "/api/keywords/plan" && req.method === "POST") {
-    const b = (await req.json()) as { caseId?: string; mall?: string; keyword?: string; source?: string; pids?: string[]; action?: "add" | "remove" };
+    const b = (await req.json()) as { caseId?: string; mall?: string; keyword?: string; source?: string; pids?: string[]; action?: "add" | "remove" | "pages"; pages?: string[] };
     if (!b.caseId || !b.keyword || !["amazon", "rakuten"].includes(b.mall ?? "")) return json({ error: "案件・モール・キーワードを指定してください" }, 400);
     if (b.action === "remove") await removePlan(env.DB, b.caseId, b.mall!, b.keyword);
+    else if (b.action === "pages") await setPlanPages(env.DB, b.caseId, b.mall!, b.keyword, Array.isArray(b.pages) ? b.pages.map(String) : []);
     else await addPlan(env.DB, b.caseId, { mall: b.mall!, keyword: b.keyword, source: b.source ?? null, productIds: Array.isArray(b.pids) ? b.pids.map(String) : [] }, viewer(req));
     return json({ ok: true, plans: await resolvePlans(env.DB, b.caseId) });
   }
