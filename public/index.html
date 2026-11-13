@@ -1352,7 +1352,7 @@
     // 見出しでモールが分かるので、文の頭のモール名は外す
     return m === "amazon" ? base.replace(/^Amazon\s*/i, "") : m === "rakuten" ? base.replace(/^楽天\s*/, "") : base;
   }
-  const UI_VERSION = "0.32.2";
+  const UI_VERSION = "0.32.3";
   // 見出しの版の表示も、この値に合わせる（以前は手で書いていて古いままになっていた）
   try { document.getElementById("ver").textContent = "ver " + UI_VERSION; } catch (e) { /* 無くても動く */ }
   const $ = (id) => document.getElementById(id);
@@ -4556,16 +4556,34 @@
       $("bulk-msg").innerHTML = `<span class="tag warn">一括登録できる行がありません</span>${manual.length ? `<br>${manual.slice(0, 8).map(esc).join("<br>")}` : ""}`;
       return;
     }
+    // RPP の仕様：1回のアップロードで、1つの商品管理番号は1行まで（2026-11 担当者確認）。
+    // 同じ商品の2行目以降は次のファイルへ回す（1回目＝各商品の1行目、2回目＝2行目…）。入れ替えの削除（d）は追加（n）より前の回になる
+    const files = [];
+    const nth = new Map();
+    for (const l of lines) {
+      const i = nth.get(l[1]) || 0;
+      nth.set(l[1], i + 1);
+      (files[i] = files[i] || []).push(l);
+    }
+    const blobs = [];
     try {
       const Encoding = await loadEncoding();
-      const text = [["コントロールカラム", "商品管理番号", "キーワード", "キーワードCPC"], ...lines].map((r) => r.map(csvCell).join(",")).join("\n") + "\n";
-      const sjis = Encoding.convert(Encoding.stringToCode(text), { to: "SJIS", from: "UNICODE" });
-      download(`RPPキーワード一括_${caseName()}_${jstDay(0)}.csv`, new Blob([new Uint8Array(sjis)], { type: "text/csv;charset=shift_jis" }));
+      for (const f of files) {
+        const text = [["コントロールカラム", "商品管理番号", "キーワード", "キーワードCPC"], ...f].map((r) => r.map(csvCell).join(",")).join("\n") + "\n";
+        const sjis = Encoding.convert(Encoding.stringToCode(text), { to: "SJIS", from: "UNICODE" });
+        blobs.push(new Blob([new Uint8Array(sjis)], { type: "text/csv;charset=shift_jis" }));
+      }
     } catch (err) {
       $("bulk-msg").innerHTML = `<span class="tag ng">失敗しました</span> ${esc(String(err && err.message || err))}`;
       return;
     }
-    $("bulk-msg").innerHTML = `<span class="tag ok">作りました</span> 楽天 ${lines.length}行（${[nNew ? `新しいキーワード ${nNew}行` : "", nDel ? `上限のための入れ替え（削除）${nDel}行` : "", lines.length - nNew - nDel ? `キーワードCPC の変更 ${lines.length - nNew - nDel}行` : ""].filter(Boolean).join("・")}）。RPP の管理画面の「キーワード一括登録」でアップロードしてください。`
+    const base = `RPPキーワード一括_${caseName()}_${jstDay(0)}`;
+    if (blobs.length === 1) download(`${base}.csv`, blobs[0]);
+    const links = blobs.length > 1 ? `<div class="btns" style="margin-top:6px">${blobs.map((b, i) =>
+      `<a class="act${i === 0 ? " primary" : ""}" href="${URL.createObjectURL(b)}" download="${esc(`${base}_${i + 1}回目.csv`)}">${i + 1}回目（${files[i].length}行）をダウンロード</a>`).join("")}</div>
+      <span class="note">RPP は1回のアップロードで1つの商品管理番号を1行までしか受け付けないので、同じ商品の2行目以降を次の回に分けました。<strong>1回目から順に</strong>、前の回の反映を確かめてから次をアップロードしてください（入れ替えの削除は、追加より前の回に入っています）。</span>` : "";
+    $("bulk-msg").innerHTML = `<span class="tag ok">作りました</span> 楽天 ${lines.length}行（${[nNew ? `新しいキーワード ${nNew}行` : "", nDel ? `上限のための入れ替え（削除）${nDel}行` : "", lines.length - nNew - nDel ? `キーワードCPC の変更 ${lines.length - nNew - nDel}行` : ""].filter(Boolean).join("・")}）${blobs.length > 1 ? `・${blobs.length}回に分けています` : ""}。RPP の管理画面の「キーワード一括登録」でアップロードしてください。`
+      + links
       + `<br><span class="note">キーワードCPC は ${RPP_MIN_CPC}円〜${RPP_MAX_CPC.toLocaleString("ja-JP")}円の範囲にそろえています。</span>`
       + (manual.length ? `<details style="margin-top:4px"><summary style="cursor:pointer">一括登録に入れられなかった提案（${manual.length}件・手で反映）</summary>${manual.map(esc).join("<br>")}</details>` : "");
     showBulkDone(done, doneKw);
